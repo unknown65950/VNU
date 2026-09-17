@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# vld — VNU linker (wraps ld.bfd for i386 + vlibc + crt0)
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+USER_LD="${USER_LD:-$SCRIPT_DIR/user.ld}"
+PREFIX="${VNU_PREFIX:-$ROOT/sysroot}"
+LD="${VNU_LD:-ld}"
+
+usage() {
+    cat <<'USAGE'
+vld — VNU linker
+
+Usage:
+  vld file.o... [-o outfile]
+  vld --help
+
+Links i386 freestanding objects with crt0 and libvlibc.a into a VNU ELF binary.
+USAGE
+}
+
+if [[ $# -eq 0 || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+fi
+
+outfile="a.out"
+objs=()
+verbose=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o) outfile="$2"; shift 2 ;;
+        -v) verbose=1; shift ;;
+        --help|-h) usage; exit 0 ;;
+        --sysroot) PREFIX="$2"; shift 2 ;;
+        -*) echo "vld: unknown option: $1" >&2; exit 1 ;;
+        *) objs+=("$1"); shift ;;
+    esac
+done
+
+if [[ ${#objs[@]} -eq 0 ]]; then
+    echo "vld: no object files" >&2
+    exit 1
+fi
+
+if [[ ! -f "$PREFIX/lib/libvlibc.a" || ! -f "$PREFIX/lib/crt0.o" ]]; then
+    echo "vld: missing $PREFIX/lib/libvlibc.a or crt0.o — run vcc once to build the sysroot" >&2
+    exit 1
+fi
+
+if [[ ! -f "$USER_LD" ]]; then
+    echo "vld: linker script not found: $USER_LD" >&2
+    exit 1
+fi
+
+cmd=("$LD" -m elf_i386 -static -nostdlib -T "$USER_LD"
+     "$PREFIX/lib/crt0.o"
+     "${objs[@]}"
+     "$PREFIX/lib/libvlibc.a"
+     -o "$outfile")
+
+if [[ $verbose -eq 1 ]]; then
+    echo "+ ${cmd[*]}"
+fi
+"${cmd[@]}"
+echo "vld: wrote $outfile"

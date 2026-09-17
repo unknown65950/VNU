@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# vcc — VNU C compiler frontend (wraps host gcc -m32 + vlibc)
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+VLIBC_DIR="${VLIBC_DIR:-$ROOT/vlibc}"
+USER_LD="${USER_LD:-$SCRIPT_DIR/user.ld}"
+PREFIX="${VNU_PREFIX:-$ROOT/sysroot}"
+
+CC="${VNU_CC:-gcc}"
+CFLAGS_DEFAULT=(-m32 -std=c99 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -mno-sse -mno-sse2 -mno-avx -Wall -Wextra -DVLIBC_TARGET_VNU=1)
+INCLUDES=(-I"$VLIBC_DIR/include")
+
+usage() {
+    cat <<'USAGE'
+vcc — VNU C compiler (host frontend for vlibc)
+
+Usage:
+  vcc [options] file.c... [-o outfile]
+  vcc -c file.c [-o file.o]
+  vcc --help
+
+Options:
+  -c              Compile only (do not link)
+  -o FILE         Output file (default: a.out or file.o)
+  -I DIR          Extra include directory
+  -D NAME[=VAL]   Define macro
+  -O0|-O1|-O2|-Os Optimization level
+  -g              Debug info
+  -v              Verbose
+  --sysroot DIR   Sysroot with libvlibc.a (default: $ROOT/sysroot)
+
+Environment:
+  VNU_CC          C compiler (default: gcc)
+  VLIBC_DIR       Path to vlibc sources
+  VNU_PREFIX      Sysroot (libvlibc.a, crt0)
+
+Examples:
+  vcc hello.c -o hello
+  vcc -c foo.c -o foo.o && vld foo.o -o foo
+USAGE
+}
+
+if [[ $# -eq 0 || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+fi
+
+compile_only=0
+verbose=0
+outfile=""
+srcs=()
+objs=()
+extra_cflags=()
+extra_incs=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -c) compile_only=1; shift ;;
+        -o) outfile="$2"; shift 2 ;;
+        -I) extra_incs+=(-I"$2"); shift 2 ;;
+        -D?*|-O?*|-g) extra_cflags+=("$1"); shift ;;
+        -D|-O) extra_cflags+=("$1" "$2"); shift 2 ;;
+        -v) verbose=1; shift ;;
+        --sysroot) PREFIX="$2"; shift 2 ;;
+        --help|-h) usage; exit 0 ;;
+        -*) echo "vcc: unknown option: $1" >&2; exit 1 ;;
+        *.c) srcs+=("$1"); shift ;;
+        *.o|*.a) objs+=("$1"); shift ;;
+        *) echo "vcc: unexpected argument: $1" >&2; exit 1 ;;
+    esac
+done
+
+if [[ ${#srcs[@]} -eq 0 && ${#objs[@]} -eq 0 ]]; then
+    echo "vcc: no input files" >&2
+    exit 1
+fi
+
+run() {
+    if [[ $verbose -eq 1 ]]; then
+        echo "+ $*"
+    fi
+    "$@"
+}
+
+# Build vlibc + crt0 into sysroot without relying on CMake compiler tests
+# (works even when 32-bit host CRT is incomplete — we only need -m32 -c).
+build_vlibc() {
+    mkdir -p "$PREFIX/lib" "$PREFIX/include" "$PREFIX/tmp-obj"
+    local stamp="$PREFIX/lib/.vlibc.stamp"
+    local need=0
+    local sources=(
+        src/sys/syscall.c src/sys/uname.c
+        src/unistd/write.c src/unistd/read.c src/unistd/open.c src/unistd/close.c
+        src/unistd/lseek.c src/unistd/exit.c src/unistd/getpid.c
+        src/unistd/getuid.c src/unistd/getgid.c src/unistd/chdir.c src/unistd/getcwd.c
+        src/unistd/fork.c src/unistd/execve.c
+        src/unistd/waitpid.c src/unistd/pipe.c src/unistd/dup.c src/unistd/kill.c
+        src/unistd/mkdir.c src/unistd/stat.c
+        src/unistd/getppid.c src/unistd/isatty.c
+        src/unistd/spawn.c
+        src/dirent/dirent.c
+        src/gui/vgfx.c
+        src/stdio/putchar.c src/stdio/puts.c src/stdio/printf.c
+        src/string/strlen.c src/string/strcpy.c src/string/strncpy.c
+        src/string/strcmp.c src/string/strncmp.c src/string/memcpy.c src/string/memset.c
+        src/stdlib/malloc.c src/stdlib/atoi.c src/stdlib/atol.c
+    )
+    if [[ ! -f "$PREFIX/lib/libvlibc.a" || ! -f "$PREFIX/lib/crt0.o" ]]; then
+        need=1
+    elif [[ "$VLIBC_DIR/include/vnu/abi.h" -nt "$stamp" ]]; then
+        need=1
+    elif [[ ! -f "$stamp" ]]; then
+        need=1
+    else
+        # Rebuild if any library source or public header is newer than
+        # the stamp — so adding a new .c to sources/ actually triggers
+        # a rebuild instead of silently linking a stale archive.
+        for s in "${sources[@]}"; do
+            if [[ "$VLIBC_DIR/$s" -nt "$stamp" ]]; then
+                need=1
+                break
+            fi
+        done
+        if [[ $need -eq 0 ]] && [[ "$VLIBC_DIR/include/vlibc" -nt "$stamp" ]]; then
+            need=1
+        fi
+    fi
+    if [[ $need -eq 0 ]]; then
+        return 0
+    fi
+
+    echo "vcc: building vlibc (i386 freestanding) → $PREFIX/lib/libvlibc.a"
+
+    local objs_lib=()
+    for s in "${sources[@]}"; do
+        local base
+        base="$(basename "$s" .c)"
+        local o="$PREFIX/tmp-obj/${base}.o"
+        run "$CC" "${CFLAGS_DEFAULT[@]}" "${INCLUDES[@]}" -c "$VLIBC_DIR/$s" -o "$o"
+        objs_lib+=("$o")
+    done
+    run ar rcs "$PREFIX/lib/libvlibc.a" "${objs_lib[@]}"
+
+    run "$CC" "${CFLAGS_DEFAULT[@]}" "${INCLUDES[@]}" \
+        -c "$VLIBC_DIR/src/crt/crt0_vnu.c" -o "$PREFIX/tmp-obj/crt0_vnu_c.o"
+    run "$CC" -m32 -c "$VLIBC_DIR/src/crt/crt0_vnu.S" -o "$PREFIX/tmp-obj/crt0_vnu_S.o"
+    run ld -m elf_i386 -r "$PREFIX/tmp-obj/crt0_vnu_S.o" "$PREFIX/tmp-obj/crt0_vnu_c.o" \
+        -o "$PREFIX/lib/crt0.o"
+
+    cp -a "$VLIBC_DIR/include/." "$PREFIX/include/"
+    date > "$stamp"
+    rm -rf "$PREFIX/tmp-obj"
+    echo "vcc: sysroot ready at $PREFIX"
+}
+
+build_vlibc
+
+tmp_objs=()
+cleanup() {
+    for o in "${tmp_objs[@]:-}"; do rm -f "$o"; done
+}
+trap cleanup EXIT
+
+for src in "${srcs[@]:-}"; do
+    base="$(basename "$src" .c)"
+    if [[ $compile_only -eq 1 ]]; then
+        out="${outfile:-$base.o}"
+        run "$CC" "${CFLAGS_DEFAULT[@]}" "${extra_cflags[@]}" "${INCLUDES[@]}" "${extra_incs[@]}" \
+            -c "$src" -o "$out"
+    else
+        o="$(mktemp /tmp/vcc-XXXXXX.o)"
+        tmp_objs+=("$o")
+        run "$CC" "${CFLAGS_DEFAULT[@]}" "${extra_cflags[@]}" "${INCLUDES[@]}" "${extra_incs[@]}" \
+            -c "$src" -o "$o"
+        objs+=("$o")
+    fi
+done
+
+if [[ $compile_only -eq 1 ]]; then
+    exit 0
+fi
+
+out="${outfile:-a.out}"
+VLD="${SCRIPT_DIR}/vld"
+chmod +x "$VLD" 2>/dev/null || true
+run "$VLD" "${objs[@]}" -o "$out"
+echo "vcc: wrote $out"

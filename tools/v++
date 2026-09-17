@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# v++ — VNU C++ compiler frontend (g++ -m32 freestanding + vlibc)
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+VLIBC_DIR="${VLIBC_DIR:-$ROOT/vlibc}"
+PREFIX="${VNU_PREFIX:-$ROOT/sysroot}"
+CXX="${VNU_CXX:-g++}"
+CFLAGS_DEFAULT=(-m32 -std=c++17 -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+                -fno-stack-protector -fno-pic -Wall -Wextra -DVLIBC_TARGET_VNU=1)
+INCLUDES=(-I"$VLIBC_DIR/include")
+
+usage() {
+    cat <<'USAGE'
+v++ — VNU C++ compiler (no exceptions/RTTI, links with vlibc)
+
+Usage:
+  v++ [options] file.cpp... [-o outfile]
+  v++ -c file.cpp [-o file.o]
+
+Same model as vcc. STL is NOT available — use vlibc C API from C++.
+USAGE
+}
+
+if [[ $# -eq 0 || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage; exit 0
+fi
+
+# Reuse vcc to ensure sysroot exists
+"$SCRIPT_DIR/vcc" -c -o /tmp/vnu_vxx_probe.o -x c - <<'C' 2>/dev/null || true
+int x;
+C
+rm -f /tmp/vnu_vxx_probe.o
+# Force sysroot via empty rebuild trigger
+if [[ ! -f "$PREFIX/lib/libvlibc.a" ]]; then
+    echo 'int main(){return 0;}' | "$SCRIPT_DIR/vcc" -x c - -o /tmp/vnu_vxx_dummy 2>/dev/null || \
+    (cd "$ROOT" && echo 'int main(){return 0;}' > /tmp/t.c && "$SCRIPT_DIR/vcc" /tmp/t.c -o /tmp/vnu_vxx_dummy)
+    rm -f /tmp/vnu_vxx_dummy /tmp/t.c
+fi
+
+compile_only=0; verbose=0; outfile=""; srcs=(); objs=(); extra=(); extra_incs=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -c) compile_only=1; shift ;;
+        -o) outfile="$2"; shift 2 ;;
+        -I) extra_incs+=(-I"$2"); shift 2 ;;
+        -D?*|-O?*|-g|-std=*) extra+=("$1"); shift ;;
+        -v) verbose=1; shift ;;
+        --help|-h) usage; exit 0 ;;
+        -*) echo "v++: unknown $1" >&2; exit 1 ;;
+        *.cpp|*.cc|*.cxx) srcs+=("$1"); shift ;;
+        *.o|*.a) objs+=("$1"); shift ;;
+        *) echo "v++: unexpected $1" >&2; exit 1 ;;
+    esac
+done
+
+run() { [[ $verbose -eq 1 ]] && echo "+ $*"; "$@"; }
+
+tmp=(); trap 'rm -f "${tmp[@]:-}"' EXIT
+for src in "${srcs[@]:-}"; do
+    base="$(basename "$src" | sed 's/\.[^.]*$//')"
+    if [[ $compile_only -eq 1 ]]; then
+        out="${outfile:-$base.o}"
+        run "$CXX" "${CFLAGS_DEFAULT[@]}" "${extra[@]}" "${INCLUDES[@]}" "${extra_incs[@]}" -c "$src" -o "$out"
+    else
+        o="$(mktemp /tmp/vxx-XXXXXX.o)"; tmp+=("$o")
+        run "$CXX" "${CFLAGS_DEFAULT[@]}" "${extra[@]}" "${INCLUDES[@]}" "${extra_incs[@]}" -c "$src" -o "$o"
+        objs+=("$o")
+    fi
+done
+[[ $compile_only -eq 1 ]] && exit 0
+out="${outfile:-a.out}"
+run "$SCRIPT_DIR/vld" "${objs[@]}" -o "$out"
+echo "v++: wrote $out"
