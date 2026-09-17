@@ -1,16 +1,37 @@
 CMakeFiles/kernel.elf.dir/proc/process.cpp.o: \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/proc/process.cpp \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/process.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/process.cpp \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/process.h \
  /usr/lib/gcc/x86_64-pc-linux-gnu/16/include/stdint.h \
  /usr/lib/gcc/x86_64-pc-linux-gnu/16/include/stdint-gcc.h \
  /usr/lib/gcc/x86_64-pc-linux-gnu/16/include/stddef.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/elf.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/abi.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/paging.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/proc/embedded_vash.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/proc/embedded_hello.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/proc/embedded_echo.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/proc/embedded_true.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/proc/embedded_coreutils.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/proc/embedded_vedit.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/proc/embedded_ttytest.h
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/elf.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/abi.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/paging.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/vfs.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/posix.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_vash.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_hello.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_vedit.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_ttytest.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_man.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_echo.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_true.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_false.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_pwd.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_cat.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_ls.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_mkdir.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_rm.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_touch.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_uname.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_clear.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_wc.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_head.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_tail.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_grep.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_sort.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_cp.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_mv.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_basename.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_dirname.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_seq.h

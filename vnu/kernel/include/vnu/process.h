@@ -23,6 +23,9 @@ struct Process {
     uint32_t user_stack_top;
     int exit_code;
     uint32_t pgdir_phys; // 0 = none yet (shared/identity space)
+    uint32_t uid;       // POSIX user id (0 = root); inherited through
+                        // spawn/fork, kept across execve
+    uint32_t gid;       // primary group id
     /* Coroutine-scheduler bookkeeping. Processes started via vnu::proc::
      * spawn() (scheduler-managed) live as coroutines in their own
      * private address space: while "running" they execute until they
@@ -49,6 +52,12 @@ void sys_exit(int status);
 int sys_getpid();
 int sys_waitpid(int pid, int* status, int options);
 int sys_kill(int pid, int sig);
+/* User identity. uid 0 (root) bypasses VFS permission checks. setuid/
+ * setgid are only allowed for root or to keep your own ids. */
+uint32_t sys_getuid();
+uint32_t sys_getgid();
+int sys_setuid(uint32_t uid);
+int sys_setgid(uint32_t gid);
 int run_program(const char* path);
 /* Coroutine-scheduler API (parallel services). spawn() builds a
  * brand-new coro process in its own private address space (ELF image

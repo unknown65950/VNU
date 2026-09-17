@@ -5,13 +5,13 @@
 # compile CXX with /usr/bin/c++
 ASM_NASM_DEFINES = 
 
-ASM_NASM_INCLUDES = -I/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include -I/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/install_blobs
+ASM_NASM_INCLUDES = -I/home/unknown/Документы/vnu_git/vnu/kernel/include -I/home/unknown/Документы/vnu_git/vnu/kernel/build/install_blobs
 
 ASM_NASM_FLAGS = 
 
 CXX_DEFINES = 
 
-CXX_INCLUDES = -I/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include -I/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/install_blobs
+CXX_INCLUDES = -I/home/unknown/Документы/vnu_git/vnu/kernel/include -I/home/unknown/Документы/vnu_git/vnu/kernel/build/install_blobs
 
 CXX_FLAGS = -std=c++20 -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pic -mno-sse -mno-sse2 -mno-mmx -mno-80387 -mgeneral-regs-only -Wall -Wextra
 

@@ -32,6 +32,10 @@
 #define VNU_SYS_spawn    28
 #define VNU_SYS_blkcount 29
 #define VNU_SYS_install  30
+#define VNU_SYS_setuid   31
+#define VNU_SYS_setgid   32
+#define VNU_SYS_chmod    33
+#define VNU_SYS_chown    34
 
 #define VNU_EPERM 1
 #define VNU_ENOENT 2

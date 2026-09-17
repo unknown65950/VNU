@@ -54,10 +54,10 @@ RM = /usr/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel
+CMAKE_SOURCE_DIR = /home/unknown/Документы/vnu_git/vnu/kernel
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build
+CMAKE_BINARY_DIR = /home/unknown/Документы/vnu_git/vnu/kernel/build
 
 #=============================================================================
 # Directory level rules for the build root directory
@@ -86,14 +86,14 @@ clean: CMakeFiles/kernel.elf.dir/clean
 CMakeFiles/install_blobs.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/install_blobs.dir/build.make CMakeFiles/install_blobs.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/install_blobs.dir/build.make CMakeFiles/install_blobs.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/CMakeFiles --progress-num=1 "Built target install_blobs"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles --progress-num=1 "Built target install_blobs"
 .PHONY : CMakeFiles/install_blobs.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/install_blobs.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/CMakeFiles 1
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles 1
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/install_blobs.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles 0
 .PHONY : CMakeFiles/install_blobs.dir/rule
 
 # Convenience name for target.
@@ -103,7 +103,7 @@ install_blobs: CMakeFiles/install_blobs.dir/rule
 # codegen rule for target.
 CMakeFiles/install_blobs.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/install_blobs.dir/build.make CMakeFiles/install_blobs.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/CMakeFiles --progress-num=1 "Finished codegen for target install_blobs"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles --progress-num=1 "Finished codegen for target install_blobs"
 .PHONY : CMakeFiles/install_blobs.dir/codegen
 
 # clean rule for target.
@@ -118,14 +118,14 @@ CMakeFiles/install_blobs.dir/clean:
 CMakeFiles/kernel.elf.dir/all: CMakeFiles/install_blobs.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kernel.elf.dir/build.make CMakeFiles/kernel.elf.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kernel.elf.dir/build.make CMakeFiles/kernel.elf.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/CMakeFiles --progress-num=2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30 "Built target kernel.elf"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles --progress-num=2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30 "Built target kernel.elf"
 .PHONY : CMakeFiles/kernel.elf.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/kernel.elf.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/CMakeFiles 30
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles 30
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/kernel.elf.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles 0
 .PHONY : CMakeFiles/kernel.elf.dir/rule
 
 # Convenience name for target.
@@ -135,7 +135,7 @@ kernel.elf: CMakeFiles/kernel.elf.dir/rule
 # codegen rule for target.
 CMakeFiles/kernel.elf.dir/codegen: CMakeFiles/install_blobs.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kernel.elf.dir/build.make CMakeFiles/kernel.elf.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/CMakeFiles --progress-num=2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30 "Finished codegen for target kernel.elf"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles --progress-num=2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30 "Finished codegen for target kernel.elf"
 .PHONY : CMakeFiles/kernel.elf.dir/codegen
 
 # clean rule for target.

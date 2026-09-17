@@ -46,6 +46,10 @@ void list(char* buf, uint32_t count);
 int getdents(int fd, void* buf, uint32_t count);
 int chdir(const char* path);
 int getcwd(char* buf, uint32_t size);
+/* Multiuser: change permission bits (owner or root only) and owner /
+ * group id (root only). `uid`/`gid` of -1 leave that field unchanged. */
+int chmod(const char* path, uint32_t mode);
+int chown(const char* path, uint32_t uid, uint32_t gid);
 
 /* DevKind::None for anything that isn't an open fd on a /dev
  * character device. */

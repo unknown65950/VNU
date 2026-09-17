@@ -19,11 +19,11 @@ cd vnu && rm -rf kernel/build && ./build_iso.sh
 
 ## Programs
 
-| Path        | Source                         |
-|-------------|--------------------------------|
-| `/bin/vash` | `userspace/vash/vash.c`        |
-| `/bin/hello`| `userspace/examples/hello/`    |
-| `/bin/echo` | `userspace/coreutils/echo.c`   |
-| `/bin/true` | `userspace/coreutils/true.c`   |
+| Path        | Source                            |
+|-------------|-----------------------------------|
+| `/bin/vash` | `userspace/vash/vash.c`           |
+| `/bin/hello`| `userspace/examples/hello/`       |
+| `/bin/man`  | `userspace/man/man.c`             |
+| `/bin/*`    | `userspace/vibecoreutils/<name>.c` (one binary per command) |
 
 Native kernel console remains as fallback if init fails.

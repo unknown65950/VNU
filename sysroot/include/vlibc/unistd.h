@@ -19,6 +19,13 @@ void exit(int status);
 unsigned long getpid(void);
 unsigned long getuid(void);
 unsigned long getgid(void);
+/* Change effective/real user or group id. Root may set any value; a
+ * non-root process may only keep its own ids (see kernel VFS checks). */
+int setuid(unsigned long uid);
+int setgid(unsigned long gid);
+/* Change ownership of a file; pass (unsigned long)-1 to leave a field
+ * untouched. Only root may change ownership. */
+int chown(const char* path, unsigned long uid, unsigned long gid);
 int chdir(const char* path);
 char* getcwd(char* buffer, unsigned long size);
 int pipe(int fds[2]);

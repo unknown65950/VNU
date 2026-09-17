@@ -1,6 +1,6 @@
 CMakeFiles/kernel.elf.dir/arch/i386/syscall/idt.cpp.o: \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/arch/i386/syscall/idt.cpp \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/syscall.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/arch/i386/syscall/idt.cpp \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/syscall.h \
  /usr/include/c++/16/cstdint \
  /usr/include/c++/16/x86_64-pc-linux-gnu/32/bits/c++config.h \
  /usr/include/c++/16/x86_64-pc-linux-gnu/32/bits/os_defines.h \

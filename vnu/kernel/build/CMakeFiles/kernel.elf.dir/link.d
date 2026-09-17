@@ -1,5 +1,5 @@
 kernel.elf: \
-  /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/linker.ld \
+  /home/unknown/Документы/vnu_git/vnu/kernel/linker.ld \
   /usr/lib/gcc/x86_64-pc-linux-gnu/16/32/libgcc.a \
   CMakeFiles/kernel.elf.dir/arch/i386/boot/boot.s.o \
   CMakeFiles/kernel.elf.dir/arch/i386/boot/gdt.cpp.o \
@@ -30,7 +30,7 @@ kernel.elf: \
   CMakeFiles/kernel.elf.dir/proc/switch.s.o \
   CMakeFiles/kernel.elf.dir/proc/ctxswitch.s.o
 
-/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/linker.ld:
+/home/unknown/Документы/vnu_git/vnu/kernel/linker.ld:
 
 /usr/lib/gcc/x86_64-pc-linux-gnu/16/32/libgcc.a:
 

@@ -25,24 +25,29 @@ PY
 
 echo "==> userspace"
 "$VCC" "$ROOT/vnu/userspace/vash/vash.c" -o "$ROOT/sysroot/bin/vash"
-"$VCC" "$ROOT/vnu/userspace/vibecoreutils/coreutils.c" -o "$ROOT/sysroot/bin/coreutils"
 "$VCC" "$ROOT/vnu/userspace/editors/vedit.c" -o "$ROOT/sysroot/bin/vedit"
 "$VCC" "$ROOT/vnu/userspace/gui/calc.c" -o "$ROOT/sysroot/bin/calc"
 "$VCC" "$ROOT/vnu/userspace/gui/files.c" -o "$ROOT/sysroot/bin/files"
 "$VCC" "$ROOT/vnu/userspace/gui/prefs.c" -o "$ROOT/sysroot/bin/prefs"
 "$VCC" "$ROOT/vnu/userspace/examples/hello/hello.c" -o "$ROOT/sysroot/bin/hello"
-"$VCC" "$ROOT/vnu/userspace/coreutils/echo.c" -o "$ROOT/sysroot/bin/echo"
-"$VCC" "$ROOT/vnu/userspace/coreutils/true.c" -o "$ROOT/sysroot/bin/true"
 "$VCC" "$ROOT/vnu/userspace/examples/ttytest.c" -o "$ROOT/sysroot/bin/ttytest"
+"$VCC" "$ROOT/vnu/userspace/man/man.c" -o "$ROOT/sysroot/bin/man"
+# coreutils: one separate binary per command (no multi-call applet).
+for c in echo true false pwd cat ls mkdir rm touch uname clear \
+         wc head tail grep sort cp mv basename dirname seq; do
+  "$VCC" "$ROOT/vnu/userspace/vibecoreutils/$c.c" -o "$ROOT/sysroot/bin/$c"
+done
 
 embed "$ROOT/sysroot/bin/vash" vash
-embed "$ROOT/sysroot/bin/coreutils" coreutils
 embed "$ROOT/sysroot/bin/vedit" vedit
 embed "$ROOT/sysroot/bin/calc" calc
 embed "$ROOT/sysroot/bin/files" files
 embed "$ROOT/sysroot/bin/prefs" prefs
 embed "$ROOT/sysroot/bin/hello" hello
-embed "$ROOT/sysroot/bin/echo" echo
-embed "$ROOT/sysroot/bin/true" true
 embed "$ROOT/sysroot/bin/ttytest" ttytest
+embed "$ROOT/sysroot/bin/man" man
+for c in echo true false pwd cat ls mkdir rm touch uname clear \
+         wc head tail grep sort cp mv basename dirname seq; do
+  embed "$ROOT/sysroot/bin/$c" "$c"
+done
 echo "==> done"

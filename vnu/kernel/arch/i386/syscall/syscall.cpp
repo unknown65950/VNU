@@ -319,9 +319,19 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
         return static_cast<std::uint32_t>(vnu::vfs::getcwd(
             reinterpret_cast<char*>(tf->ebx), tf->ecx));
     case VNU_SYS_getuid:
-        return 0;
+        return vnu::proc::sys_getuid();
     case VNU_SYS_getgid:
-        return 0;
+        return vnu::proc::sys_getgid();
+    case VNU_SYS_setuid:
+        return static_cast<std::uint32_t>(vnu::proc::sys_setuid(tf->ebx));
+    case VNU_SYS_setgid:
+        return static_cast<std::uint32_t>(vnu::proc::sys_setgid(tf->ebx));
+    case VNU_SYS_chmod:
+        return static_cast<std::uint32_t>(
+            vnu::vfs::chmod(reinterpret_cast<const char*>(tf->ebx), tf->ecx));
+    case VNU_SYS_chown:
+        return static_cast<std::uint32_t>(
+            vnu::vfs::chown(reinterpret_cast<const char*>(tf->ebx), tf->ecx, tf->edx));
     case VNU_SYS_brk: {
         std::uint32_t req = tf->ebx;
         /* Windowed tasks get their own pre-mapped heap slice

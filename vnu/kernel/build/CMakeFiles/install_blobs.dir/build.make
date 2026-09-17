@@ -53,10 +53,10 @@ RM = /usr/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel
+CMAKE_SOURCE_DIR = /home/unknown/Документы/vnu_git/vnu/kernel
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build
+CMAKE_BINARY_DIR = /home/unknown/Документы/vnu_git/vnu/kernel/build
 
 # Utility rule file for install_blobs.
 
@@ -68,10 +68,10 @@ include CMakeFiles/install_blobs.dir/progress.make
 
 CMakeFiles/install_blobs: install_blobs/vnu_install_blobs.inc
 
-install_blobs/vnu_install_blobs.inc: /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/tools/gen_install_blobs.sh
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Generating GRUB blobs for the disk installer"
-	/usr/bin/cmake -E make_directory /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/install_blobs
-	bash /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/tools/gen_install_blobs.sh /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/install_blobs
+install_blobs/vnu_install_blobs.inc: /home/unknown/Документы/vnu_git/vnu/kernel/tools/gen_install_blobs.sh
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Generating GRUB blobs for the disk installer"
+	/usr/bin/cmake -E make_directory /home/unknown/Документы/vnu_git/vnu/kernel/build/install_blobs
+	bash /home/unknown/Документы/vnu_git/vnu/kernel/tools/gen_install_blobs.sh /home/unknown/Документы/vnu_git/vnu/kernel/build/install_blobs
 
 CMakeFiles/install_blobs.dir/codegen:
 .PHONY : CMakeFiles/install_blobs.dir/codegen
@@ -90,6 +90,6 @@ CMakeFiles/install_blobs.dir/clean:
 .PHONY : CMakeFiles/install_blobs.dir/clean
 
 CMakeFiles/install_blobs.dir/depend:
-	cd /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/CMakeFiles/install_blobs.dir/DependInfo.cmake "--color=$(COLOR)" install_blobs
+	cd /home/unknown/Документы/vnu_git/vnu/kernel/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/unknown/Документы/vnu_git/vnu/kernel /home/unknown/Документы/vnu_git/vnu/kernel /home/unknown/Документы/vnu_git/vnu/kernel/build /home/unknown/Документы/vnu_git/vnu/kernel/build /home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles/install_blobs.dir/DependInfo.cmake "--color=$(COLOR)" install_blobs
 .PHONY : CMakeFiles/install_blobs.dir/depend
 

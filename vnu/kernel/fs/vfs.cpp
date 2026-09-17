@@ -29,6 +29,11 @@ struct Node {
     char path[PATH_CAP];
     char data[DATA_CAP];
     uint32_t size;
+    /* Multiuser metadata: 9 rwx bits + owner/group. Layout mirrors
+     * POSIX: uid 0 (root) bypasses all checks. */
+    uint16_t perm;
+    uint32_t uid;
+    uint32_t gid;
 };
 
 Node nodes[MAX_N];
@@ -156,10 +161,49 @@ Node* add(const char* p, bool d)
             nodes[i].used = true;
             nodes[i].dir = d;
             copy(nodes[i].path, p, PATH_CAP);
+            /* New inodes belong to whoever created them, with classic
+             * umask-like defaults. Kernel init runs as root (uid 0). */
+            nodes[i].perm = d ? 0755u : 0644u;
+            nodes[i].uid = vnu::proc::current() ? vnu::proc::current()->uid : 0;
+            nodes[i].gid = vnu::proc::current() ? vnu::proc::current()->gid : 0;
             return &nodes[i];
         }
     }
     return nullptr;
+}
+
+/* --- multiuser permission helpers --- */
+
+enum Acc { A_R = 4, A_W = 2, A_X = 1 };
+
+bool have_access(const Node& n, uint32_t want)
+{
+    uint32_t uid = vnu::proc::current() ? vnu::proc::current()->uid : 0;
+    if (uid == 0) /* root can do anything */
+        return true;
+    if (uid == n.uid)
+        return (n.perm & static_cast<uint16_t>(want << 6)) == (want << 6);
+    uint32_t gid = vnu::proc::current() ? vnu::proc::current()->gid : 0;
+    if (gid == n.gid)
+        return (n.perm & static_cast<uint16_t>(want << 3)) == (want << 3);
+    return (n.perm & static_cast<uint16_t>(want)) == want;
+}
+
+/* Parent directory node of an absolute path, or nullptr if its dir
+ * doesn't exist (open/mkdir/unlink should then fail with ENOENT). */
+Node* parent_dir(const char* abs)
+{
+    char parent[PATH_CAP];
+    int i = strlen_local(abs) - 1;
+    while (i > 0 && abs[i] != '/')
+        --i;
+    if (i <= 0)
+        copy(parent, "/", PATH_CAP);
+    else {
+        copy(parent, abs, PATH_CAP);
+        parent[i] = 0;
+    }
+    return find(parent);
 }
 
 bool is_prefix_child(const char* parent, const char* child)
@@ -336,7 +380,11 @@ void regen_synth(Node& n)
         a.num(p ? static_cast<uint32_t>(p->pid) : 0);
         a.str("\nPPid:\t");
         a.num(p ? static_cast<uint32_t>(p->ppid) : 0);
-        a.str("\nUid:\t0\nGid:\t0\n");
+        a.str("\nUid:\t");
+        a.num(p ? p->uid : 0);
+        a.str("\nGid:\t");
+        a.num(p ? p->gid : 0);
+        a.str("\n");
         break;
     }
     case SynthKind::Mounts:
@@ -378,6 +426,33 @@ void init()
     copy(m->data, "Welcome to VNU\n", DATA_CAP);
     m->size = 15;
     add("/etc/initialD", true);
+
+    /* --- multiuser account database ---
+     * /etc/passwd: one line per user, `name:hash:uid:gid:gecos:home:shell`.
+     * The hash is djb2 (see vash's pw_hash) — this is a hobby OS with a
+     * RAM-backed VFS, not a security boundary. File is root-owned and
+     * 0644, so only root may add/change accounts: that's what makes
+     * `useradd`/`passwd` visibly "root-only". */
+    auto* pw = add("/etc/passwd", false);
+    if (pw) {
+        const char* accounts =
+            "root:7c9d79a9:0:0:root:/root:/bin/vash\n"
+            "guest:0f88c14d:1000:100:guest:/home/guest:/bin/vash\n";
+        int i = 0;
+        for (; accounts[i] && i < DATA_CAP - 1; ++i)
+            pw->data[i] = accounts[i];
+        pw->size = static_cast<uint32_t>(i);
+        pw->perm = 0644u;
+    }
+    auto* grp = add("/etc/group", false);
+    if (grp) {
+        const char* groups = "root:x:0:\nusers:x:100:\n";
+        int i = 0;
+        for (; groups[i] && i < DATA_CAP - 1; ++i)
+            grp->data[i] = groups[i];
+        grp->size = static_cast<uint32_t>(i);
+        grp->perm = 0644u;
+    }
     add("/sbin", true);
     add("/bin", true);
     add("/bin/vash", false);
@@ -394,7 +469,6 @@ void init()
     add("/bin/touch", false);
     add("/bin/uname", false);
     add("/bin/clear", false);
-    add("/bin/coreutils", false);
     add("/bin/vedit", false);
     add("/bin/ttytest", false);
     add("/bin/wc", false);
@@ -407,7 +481,11 @@ void init()
     add("/bin/basename", false);
     add("/bin/dirname", false);
     add("/bin/seq", false);
+    add("/bin/man", false);
     add("/tmp", true);
+    auto* tmp = find_index("/tmp") >= 0 ? &nodes[find_index("/tmp")] : nullptr;
+    if (tmp)
+        tmp->perm = 0777u; /* world-writable scratch space */
     auto* notes = add("/tmp/notes.txt", false);
     if (notes) {
         const char* msg = "Hello from VEDIT\nEdit me!\n";
@@ -430,6 +508,10 @@ void init()
     add_dev("/dev/urandom", DevKind::Random);
     add_dev("/dev/tty", DevKind::Tty);
     add_dev("/dev/console", DevKind::Tty);
+    /* /dev nodes are world-accessible char devices. */
+    for (int i = 0; i < MAX_N; ++i)
+        if (nodes[i].used && nodes[i].dev != DevKind::None)
+            nodes[i].perm = 0666u;
 
     /* --- FHS: /proc, regenerated per open() (see regen_synth) --- */
     g_boot_seconds = rtc_seconds_of_day();
@@ -457,7 +539,17 @@ void init()
     add("/var", true);
     add("/var/log", true);
     add("/home", true);
-    add("/root", true);
+    auto* root_home = add("/root", true);
+    if (root_home)
+        root_home->perm = 0700u; /* nobody walks into /root but root */
+    /* Seed the demo user's home right away so `guest` (uid 1000/gid 100)
+     * can log in and actually land somewhere private. */
+    auto* guest_home = add("/home/guest", true);
+    if (guest_home) {
+        guest_home->perm = 0700u;
+        guest_home->uid = 1000u;
+        guest_home->gid = 100u;
+    }
     add("/mnt", true);
 }
 
@@ -467,20 +559,32 @@ int open(const char* path, uint32_t flags)
     normalize(path, abs, PATH_CAP);
     int ni = find_index(abs);
     if (ni < 0) {
-        if (flags & vnu::posix::O_CREAT) {
-            Node* n = add(abs, false);
-            if (!n)
-                return -VNU_ENOSPC;
-            ni = find_index(abs);
-            if (flags & vnu::posix::O_TRUNC) {
-                n->size = 0;
-            }
-        } else {
+        if (!(flags & vnu::posix::O_CREAT))
             return -VNU_ENOENT;
+        /* Creating a file needs write permission on the parent dir. */
+        Node* par = parent_dir(abs);
+        if (!par)
+            return -VNU_ENOENT;
+        if (!have_access(*par, A_W))
+            return -VNU_EACCES;
+        Node* n = add(abs, false);
+        if (!n)
+            return -VNU_ENOSPC;
+        ni = find_index(abs);
+        if (flags & vnu::posix::O_TRUNC) {
+            n->size = 0;
         }
     }
     if (nodes[ni].dir && (flags & vnu::posix::O_WRONLY))
         return -VNU_EACCES;
+    /* Permission check on the node itself: derive the r/w access the
+     * caller asked for from the low two bits of the flags. */
+    {
+        uint32_t om = flags & 3u;
+        uint32_t acc = (om == 1) ? A_W : ((om == 2) ? (A_R | A_W) : A_R);
+        if (!have_access(nodes[ni], acc))
+            return -VNU_EACCES;
+    }
     /* /proc files are generated fresh per open, so each reader sees
      * current values rather than whatever the last reader saw. */
     if (nodes[ni].synth != SynthKind::None)
@@ -527,6 +631,8 @@ int read(int fd, void* buf, uint32_t count)
     Node& n = nodes[files[fd].node];
     if (n.dir)
         return -VNU_EISDIR;
+    if (!have_access(n, A_R))
+        return -VNU_EACCES;
     auto* out = static_cast<char*>(buf);
 
     if (n.dev != DevKind::None) {
@@ -570,6 +676,8 @@ int write(int fd, const void* buf, uint32_t count)
     Node& n = nodes[files[fd].node];
     if (n.dir)
         return -VNU_EISDIR;
+    if (!have_access(n, A_W))
+        return -VNU_EACCES;
     const auto* in = static_cast<const char*>(buf);
 
     if (n.dev != DevKind::None) {
@@ -636,11 +744,15 @@ int stat(const char* path, vnu::posix::Stat* st)
         st->mode = vnu::posix::S_IFCHR | 0666;
         st->size = 0;
         st->type = 2; /* DT_CHR */
+        st->uid = 0;
+        st->gid = 0;
         return 0;
     }
-    st->mode = n->dir ? (vnu::posix::S_IFDIR | 0755) : (vnu::posix::S_IFREG | 0644);
+    st->mode = (n->dir ? vnu::posix::S_IFDIR : vnu::posix::S_IFREG) | n->perm;
     st->size = n->size;
     st->type = n->dir ? 4 : 8;
+    st->uid = n->uid;
+    st->gid = n->gid;
     return 0;
 }
 
@@ -656,6 +768,8 @@ int fstat(int fd, vnu::posix::Stat* st)
         st->mode = vnu::posix::S_IFCHR | 0666;
         st->size = 0;
         st->type = 2;
+        st->uid = 0;
+        st->gid = 0;
         return 0;
     }
     Node& n = nodes[files[fd].node];
@@ -663,11 +777,15 @@ int fstat(int fd, vnu::posix::Stat* st)
         st->mode = vnu::posix::S_IFCHR | 0666;
         st->size = 0;
         st->type = 2;
+        st->uid = 0;
+        st->gid = 0;
         return 0;
     }
-    st->mode = n.dir ? (vnu::posix::S_IFDIR | 0755) : (vnu::posix::S_IFREG | 0644);
+    st->mode = (n.dir ? vnu::posix::S_IFDIR : vnu::posix::S_IFREG) | n.perm;
     st->size = n.size;
     st->type = n.dir ? 4 : 8;
+    st->uid = n.uid;
+    st->gid = n.gid;
     return 0;
 }
 
@@ -729,8 +847,16 @@ int touch(const char* path)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
-    if (find(abs))
+    if (Node* n = find(abs)) {
+        if (!have_access(*n, A_W))
+            return -VNU_EACCES;
         return 0;
+    }
+    Node* par = parent_dir(abs);
+    if (!par)
+        return -VNU_ENOENT;
+    if (!have_access(*par, A_W))
+        return -VNU_EACCES;
     return add(abs, false) ? 0 : -VNU_ENOSPC;
 }
 
@@ -740,6 +866,11 @@ int mkdir(const char* path)
     normalize(path, abs, PATH_CAP);
     if (find(abs))
         return -VNU_EEXIST;
+    Node* par = parent_dir(abs);
+    if (!par)
+        return -VNU_ENOENT;
+    if (!have_access(*par, A_W))
+        return -VNU_EACCES;
     return add(abs, true) ? 0 : -VNU_ENOSPC;
 }
 
@@ -754,6 +885,11 @@ int rmdir(const char* path)
         return -VNU_ENOTDIR;
     if (same(abs, "/"))
         return -VNU_EPERM;
+    Node* par = parent_dir(abs);
+    if (!par)
+        return -VNU_ENOENT;
+    if (!have_access(*par, A_W))
+        return -VNU_EACCES;
     /* non-empty? */
     for (int i = 0; i < MAX_N; ++i)
         if (nodes[i].used && is_prefix_child(abs, nodes[i].path))
@@ -771,6 +907,11 @@ int unlink(const char* path)
         return -VNU_ENOENT;
     if (n->dir)
         return -VNU_EISDIR;
+    Node* par = parent_dir(abs);
+    if (!par)
+        return -VNU_ENOENT;
+    if (!have_access(*par, A_W))
+        return -VNU_EACCES;
     n->used = false;
     return 0;
 }
@@ -824,6 +965,8 @@ int getdents(int fd, void* buf, uint32_t count)
     Node& dir = nodes[files[fd].node];
     if (!dir.dir)
         return -VNU_ENOTDIR;
+    if (!have_access(dir, A_R))
+        return -VNU_EACCES;
 
     auto* out = static_cast<uint8_t*>(buf);
     uint32_t written = 0;
@@ -864,6 +1007,8 @@ int chdir(const char* path)
         return -VNU_ENOENT;
     if (!n->dir)
         return -VNU_ENOTDIR;
+    if (!have_access(*n, A_X))
+        return -VNU_EACCES;
     copy(cwd, abs, PATH_CAP);
     return 0;
 }
@@ -881,6 +1026,37 @@ int getcwd(char* buf, uint32_t size)
         return -VNU_ERANGE;
     buf[n] = 0;
     return static_cast<int>(n);
+}
+
+int chmod(const char* path, uint32_t mode)
+{
+    char abs[PATH_CAP];
+    normalize(path, abs, PATH_CAP);
+    Node* n = find(abs);
+    if (!n)
+        return -VNU_ENOENT;
+    uint32_t uid = vnu::proc::current() ? vnu::proc::current()->uid : 0;
+    if (uid != 0 && uid != n->uid)
+        return -VNU_EPERM;
+    n->perm = static_cast<uint16_t>(mode & 0777u);
+    return 0;
+}
+
+int chown(const char* path, uint32_t uid, uint32_t gid)
+{
+    char abs[PATH_CAP];
+    normalize(path, abs, PATH_CAP);
+    Node* n = find(abs);
+    if (!n)
+        return -VNU_ENOENT;
+    uint32_t cur = vnu::proc::current() ? vnu::proc::current()->uid : 0;
+    if (cur != 0)
+        return -VNU_EPERM;
+    if (uid != UINT32_MAX)
+        n->uid = uid;
+    if (gid != UINT32_MAX)
+        n->gid = gid;
+    return 0;
 }
 
 } // namespace vnu::vfs

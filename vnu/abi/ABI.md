@@ -24,11 +24,6 @@ must never be renumbered.
 | 9  | getpid |
 | 10 | chdir  |
 | 11 | getcwd |
-
-### Future (append-only, start at 12)
-
-| #  | Name   |
-|----|--------|
 | 12 | fork   |
 | 13 | execve |
 | 14 | getuid |
@@ -36,6 +31,28 @@ must never be renumbered.
 | 16 | mkdir  |
 | 17 | rmdir  |
 | 18 | unlink |
+| 19 | getdents |
+| 20 | waitpid |
+| 21 | pipe   |
+| 22 | dup    |
+| 23 | dup2   |
+| 24 | kill   |
+| 25 | uname  |
+| 26 | getppid |
+| 27 | isatty |
+| 28 | spawn  |
+| 29 | blkcount |
+| 30 | install |
+| 31 | setuid |
+| 32 | setgid |
+| 33 | chmod  |
+| 34 | chown  |
+
+`stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
+and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
+with `-1` leaves a field unchanged; only root may chown.
+
+### Future (append-only, start at 35)
 
 Unsupported calls return `-VNU_ENOSYS`.
 

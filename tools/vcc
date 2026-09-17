@@ -95,6 +95,7 @@ build_vlibc() {
         src/unistd/write.c src/unistd/read.c src/unistd/open.c src/unistd/close.c
         src/unistd/lseek.c src/unistd/exit.c src/unistd/getpid.c
         src/unistd/getuid.c src/unistd/getgid.c src/unistd/chdir.c src/unistd/getcwd.c
+        src/unistd/setuid.c src/unistd/setgid.c src/unistd/chmod.c src/unistd/chown.c
         src/unistd/fork.c src/unistd/execve.c
         src/unistd/waitpid.c src/unistd/pipe.c src/unistd/dup.c src/unistd/kill.c
         src/unistd/mkdir.c src/unistd/stat.c

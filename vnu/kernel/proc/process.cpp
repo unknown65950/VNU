@@ -2,13 +2,33 @@
 #include <vnu/elf.h>
 #include <vnu/abi.h>
 #include <vnu/paging.h>
+#include <vnu/vfs.h>
 #include "embedded_vash.h"
 #include "embedded_hello.h"
-#include "embedded_echo.h"
-#include "embedded_true.h"
-#include "embedded_coreutils.h"
 #include "embedded_vedit.h"
 #include "embedded_ttytest.h"
+#include "embedded_man.h"
+#include "embedded_echo.h"
+#include "embedded_true.h"
+#include "embedded_false.h"
+#include "embedded_pwd.h"
+#include "embedded_cat.h"
+#include "embedded_ls.h"
+#include "embedded_mkdir.h"
+#include "embedded_rm.h"
+#include "embedded_touch.h"
+#include "embedded_uname.h"
+#include "embedded_clear.h"
+#include "embedded_wc.h"
+#include "embedded_head.h"
+#include "embedded_tail.h"
+#include "embedded_grep.h"
+#include "embedded_sort.h"
+#include "embedded_cp.h"
+#include "embedded_mv.h"
+#include "embedded_basename.h"
+#include "embedded_dirname.h"
+#include "embedded_seq.h"
 
 extern "C" void vnu_proc_switch(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_proc_trampoline();
@@ -28,36 +48,38 @@ struct EmbeddedProg {
     uint32_t size;
 };
 
-/* Same ELF can appear under many /bin names (busybox-style multi-call). */
+/* Each command is its own embedded ELF. Only vash is re-used under
+ * several names (/bin/vash, /sbin/init, /bin/sh) — a login shell by
+ * any other name. */
 const EmbeddedProg embedded[] = {
     {"/bin/vash", embedded_vash_elf, embedded_vash_elf_size},
     {"/sbin/init", embedded_vash_elf, embedded_vash_elf_size},
     {"/bin/sh", embedded_vash_elf, embedded_vash_elf_size},
     {"/bin/hello", embedded_hello_elf, embedded_hello_elf_size},
-    {"/bin/echo", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/true", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/false", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/pwd", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/cat", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/ls", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/mkdir", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/rm", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/touch", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/uname", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/clear", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/coreutils", embedded_coreutils_elf, embedded_coreutils_elf_size},
+    {"/bin/echo", embedded_echo_elf, embedded_echo_elf_size},
+    {"/bin/true", embedded_true_elf, embedded_true_elf_size},
+    {"/bin/false", embedded_false_elf, embedded_false_elf_size},
+    {"/bin/pwd", embedded_pwd_elf, embedded_pwd_elf_size},
+    {"/bin/cat", embedded_cat_elf, embedded_cat_elf_size},
+    {"/bin/ls", embedded_ls_elf, embedded_ls_elf_size},
+    {"/bin/mkdir", embedded_mkdir_elf, embedded_mkdir_elf_size},
+    {"/bin/rm", embedded_rm_elf, embedded_rm_elf_size},
+    {"/bin/touch", embedded_touch_elf, embedded_touch_elf_size},
+    {"/bin/uname", embedded_uname_elf, embedded_uname_elf_size},
+    {"/bin/clear", embedded_clear_elf, embedded_clear_elf_size},
     {"/bin/vedit", embedded_vedit_elf, embedded_vedit_elf_size},
     {"/bin/ttytest", embedded_ttytest_elf, embedded_ttytest_elf_size},
-    {"/bin/wc", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/head", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/tail", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/grep", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/sort", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/cp", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/mv", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/basename", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/dirname", embedded_coreutils_elf, embedded_coreutils_elf_size},
-    {"/bin/seq", embedded_coreutils_elf, embedded_coreutils_elf_size},
+    {"/bin/wc", embedded_wc_elf, embedded_wc_elf_size},
+    {"/bin/head", embedded_head_elf, embedded_head_elf_size},
+    {"/bin/tail", embedded_tail_elf, embedded_tail_elf_size},
+    {"/bin/grep", embedded_grep_elf, embedded_grep_elf_size},
+    {"/bin/sort", embedded_sort_elf, embedded_sort_elf_size},
+    {"/bin/cp", embedded_cp_elf, embedded_cp_elf_size},
+    {"/bin/mv", embedded_mv_elf, embedded_mv_elf_size},
+    {"/bin/basename", embedded_basename_elf, embedded_basename_elf_size},
+    {"/bin/dirname", embedded_dirname_elf, embedded_dirname_elf_size},
+    {"/bin/seq", embedded_seq_elf, embedded_seq_elf_size},
+    {"/bin/man", embedded_man_elf, embedded_man_elf_size},
     /* short names for convenience */
     {"hello", embedded_hello_elf, embedded_hello_elf_size},
     {"echo", embedded_echo_elf, embedded_echo_elf_size},
@@ -281,6 +303,10 @@ void init()
     }
     table[0].pid = 0;
     table[0].state = State::Running;
+    /* The scheduler/console pseudo-process (pid 0) is the identity
+     * parent of every boot-spawned init: uid 0 → init comes up as root. */
+    table[0].uid = 0;
+    table[0].gid = 0;
     current_idx = 0;
     next_pid = 1;
     console_session = false;
@@ -289,6 +315,27 @@ void init()
 int current_pid() { return table[current_idx].pid; }
 Process* current() { return &table[current_idx]; }
 int sys_getpid() { return table[current_idx].pid; }
+
+uint32_t sys_getuid() { return table[current_idx].uid; }
+uint32_t sys_getgid() { return table[current_idx].gid; }
+
+int sys_setuid(uint32_t uid)
+{
+    Process& p = table[current_idx];
+    if (p.uid != 0 && uid != p.uid)
+        return -VNU_EPERM;
+    p.uid = uid;
+    return 0;
+}
+
+int sys_setgid(uint32_t gid)
+{
+    Process& p = table[current_idx];
+    if (p.uid != 0 && gid != p.gid)
+        return -VNU_EPERM;
+    p.gid = gid;
+    return 0;
+}
 
 int sys_fork(Registers* trap)
 {
@@ -301,6 +348,8 @@ int sys_fork(Registers* trap)
     child.pid = next_pid++;
     child.ppid = parent.pid;
     child.state = State::Runnable;
+    child.uid = parent.uid;
+    child.gid = parent.gid;
     child.user_stack_top =
         USER_STACK_BASE + static_cast<uint32_t>((slot + 1) * USER_STACK_SIZE);
     child.regs = *trap;
@@ -691,6 +740,8 @@ int run_program_from_memory(const char* argv0_path, const uint8_t* data, uint32_
     p.pid = next_pid++;
     p.ppid = 0;
     p.state = State::Running;
+    p.uid = table[current_idx].uid;
+    p.gid = table[current_idx].gid;
     p.pgdir_phys = pgdir;
     p.user_stack_top = stack_base + USER_STACK_SIZE;
 
@@ -807,6 +858,8 @@ int sys_spawn(const char* path)
     p.pid = next_pid++;
     p.ppid = table[current_idx].pid; /* 0 during the kernel boot spawn */
     p.state = State::Runnable;
+    p.uid = table[current_idx].uid;
+    p.gid = table[current_idx].gid;
     p.pgdir_phys = pgdir;
     p.user_stack_top = stack_top;
     p.coro = true;
@@ -873,6 +926,10 @@ int run_scheduler(const char* primary, const char* fallback)
         current_idx = 0;
 
         if (init_slot < 0 || table[init_slot].state == State::Unused) {
+            /* A previous session may have left a redirection (> file) on
+             * fd 0/1/2 — the VFS fd table is global, so make sure the
+             * respawned shell talks to the real console again. */
+            vnu::vfs::reset_stdio();
             int rc = sys_spawn(next);
             if (rc < 0 && next == primary) {
                 next = fallback;

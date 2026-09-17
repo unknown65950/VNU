@@ -7,7 +7,7 @@ set(CMAKE_DEPENDS_GENERATOR "Unix Makefiles")
 # The top level Makefile was generated from the following files:
 set(CMAKE_MAKEFILE_DEPENDS
   "CMakeCache.txt"
-  "/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/CMakeLists.txt"
+  "/home/unknown/Документы/vnu_git/vnu/kernel/CMakeLists.txt"
   "CMakeFiles/4.4.3-dirty/CMakeASM_NASMCompiler.cmake"
   "CMakeFiles/4.4.3-dirty/CMakeCXXCompiler.cmake"
   "CMakeFiles/4.4.3-dirty/CMakeSystem.cmake"

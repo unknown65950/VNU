@@ -1,5 +1,5 @@
 CMakeFiles/kernel.elf.dir/kernel/kernel.cpp.o: \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/kernel/kernel.cpp \
+ /home/unknown/Документы/vnu_git/vnu/kernel/kernel/kernel.cpp \
  /usr/include/c++/16/cstddef \
  /usr/include/c++/16/x86_64-pc-linux-gnu/32/bits/c++config.h \
  /usr/include/c++/16/x86_64-pc-linux-gnu/32/bits/os_defines.h \
@@ -13,16 +13,16 @@ CMakeFiles/kernel.elf.dir/kernel/kernel.cpp.o: \
  /usr/lib/gcc/x86_64-pc-linux-gnu/16/include/stddef.h \
  /usr/include/c++/16/bits/version.h /usr/include/c++/16/cstdint \
  /usr/lib/gcc/x86_64-pc-linux-gnu/16/include/stdint-gcc.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/vfs.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/posix.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/vfs.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/posix.h \
  /usr/lib/gcc/x86_64-pc-linux-gnu/16/include/stdint.h \
  /usr/lib/gcc/x86_64-pc-linux-gnu/16/include/stdint-gcc.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/process.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/syscall.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/tty.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/pipe.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/apps.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/pmm.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/paging.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/ata.h \
- /home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/include/vnu/mboot.h
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/process.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/syscall.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/tty.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/pipe.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/apps.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/pmm.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/paging.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/ata.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/include/vnu/mboot.h

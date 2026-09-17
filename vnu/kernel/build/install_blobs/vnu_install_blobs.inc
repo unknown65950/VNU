@@ -4,11 +4,11 @@ align 4
 global vnu_install_boot_img
 global vnu_install_boot_img_end
 vnu_install_boot_img:
-    incbin "/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/install_blobs/boot.img"
+    incbin "/home/unknown/Документы/vnu_git/vnu/kernel/build/install_blobs/boot.img"
 vnu_install_boot_img_end:
 align 4
 global vnu_install_core_img
 global vnu_install_core_img_end
 vnu_install_core_img:
-    incbin "/home/unknown/Документы/vnu_coreutils_branch/vnu/kernel/build/install_blobs/core.img"
+    incbin "/home/unknown/Документы/vnu_git/vnu/kernel/build/install_blobs/core.img"
 vnu_install_core_img_end:

@@ -6,6 +6,8 @@ struct stat {
     unsigned int st_mode;
     unsigned int st_size;
     unsigned int st_type;
+    unsigned int st_uid;
+    unsigned int st_gid;
 };
 
 /* POSIX file-type bits and classification macros. The kernel now
@@ -21,6 +23,7 @@ struct stat {
 
 int stat(const char* path, struct stat* st);
 int fstat(int fd, struct stat* st);
+int chmod(const char* path, unsigned int mode);
 int mkdir(const char* path, int mode);
 int rmdir(const char* path);
 int unlink(const char* path);
