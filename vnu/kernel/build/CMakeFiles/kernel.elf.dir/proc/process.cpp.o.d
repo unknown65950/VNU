@@ -34,4 +34,11 @@ CMakeFiles/kernel.elf.dir/proc/process.cpp.o: \
  /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_mv.h \
  /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_basename.h \
  /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_dirname.h \
- /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_seq.h
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_seq.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_id.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_whoami.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_groups.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_useradd.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_passwd.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_su.h \
+ /home/unknown/Документы/vnu_git/vnu/kernel/proc/embedded_install.h

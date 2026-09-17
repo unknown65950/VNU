@@ -29,6 +29,14 @@
 #include "embedded_basename.h"
 #include "embedded_dirname.h"
 #include "embedded_seq.h"
+#include "embedded_man.h"
+#include "embedded_id.h"
+#include "embedded_whoami.h"
+#include "embedded_groups.h"
+#include "embedded_useradd.h"
+#include "embedded_passwd.h"
+#include "embedded_su.h"
+#include "embedded_install.h"
 
 extern "C" void vnu_proc_switch(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_proc_trampoline();
@@ -80,6 +88,13 @@ const EmbeddedProg embedded[] = {
     {"/bin/dirname", embedded_dirname_elf, embedded_dirname_elf_size},
     {"/bin/seq", embedded_seq_elf, embedded_seq_elf_size},
     {"/bin/man", embedded_man_elf, embedded_man_elf_size},
+    {"/bin/id", embedded_id_elf, embedded_id_elf_size},
+    {"/bin/whoami", embedded_whoami_elf, embedded_whoami_elf_size},
+    {"/bin/groups", embedded_groups_elf, embedded_groups_elf_size},
+    {"/bin/useradd", embedded_useradd_elf, embedded_useradd_elf_size},
+    {"/bin/passwd", embedded_passwd_elf, embedded_passwd_elf_size},
+    {"/bin/su", embedded_su_elf, embedded_su_elf_size},
+    {"/bin/install", embedded_install_elf, embedded_install_elf_size},
     /* short names for convenience */
     {"hello", embedded_hello_elf, embedded_hello_elf_size},
     {"echo", embedded_echo_elf, embedded_echo_elf_size},

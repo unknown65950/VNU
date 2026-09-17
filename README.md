@@ -44,8 +44,7 @@ root@vnu:~$ man ls
 
 ## Commands
 
-vash builtins: `cd`, `export`, `unset`, `exit`, `help`, `type`, `which`,
-`install`, `id`, `whoami`, `groups`, `useradd`, `passwd`, `su`
+vash builtins: `cd`, `export`, `unset`, `exit`, `help`, `type`, `which`
 (history, Ctrl+C, Shift-symbols).
 
 External `/bin/*` (each a standalone binary):
@@ -56,6 +55,8 @@ External `/bin/*` (each a standalone binary):
 | `wc` `head` `tail` `grep` `sort` | text processing |
 | `cp` `mv` `basename` `dirname` | file operations |
 | `seq` `man` `vedit` `ttytest` | number generation, docs, editor, terminal test |
+| `id` `whoami` `groups` `useradd` `passwd` `su` | accounts/identity tools (`su` starts a fresh shell as the user) |
+| `install` | write the VNU image to an ATA disk (root) |
 | `hello` (and `hello_cxx`) | userspace program examples |
 | `gui` | virtual command → VibeGraphics windowed environment (intercepted by the kernel in `execve`) |
 
@@ -73,7 +74,8 @@ vnu/
 │   ├── console/ fs/ drv/ mm/ proc/ gui/ install/
 │   └── proc/embedded_*.h       userspace ELFs embedded into kernel.elf
 ├── userspace/                  vash, vibecoreutils (one .c per command),
-│                               man, vedit, GUI apps, examples, rootfs
+│                               usertools (accounts/install), man, vedit,
+│                               GUI apps, examples, rootfs
 ├── abi/ABI.md                  ABI v1 description
 ├── build_iso.sh                cmake + grub-mkrescue -> vnu/vnu.iso
 └── run.sh                      launch in QEMU (--headless via serial)
@@ -121,6 +123,10 @@ that is the serial log the assertions read.
 
 The full ruleset is in `AGENTS.md`. GUI/window history and known
 limitations are in `vnu/VIBEGRAPHICS_CHANGES.md`.
+
+## License
+
+MIT — see `LICENSE`.
 
 ## Roadmap
 

@@ -31,7 +31,6 @@ static int hist_count = 0;
  * username and home directory across the shell's death). At a plain
  * boot there is no session file yet, and the login prompt creates one. */
 #define PASSWD_F   "/etc/passwd"
-#define GROUP_F    "/etc/group"
 #define SESSION_F  "/tmp/.session"
 #define MAX_USERS  8
 
@@ -50,38 +49,6 @@ static void we(const char* s)
 {
     if (s)
         write(2, s, strlen(s));
-}
-
-static void wnum(int v)
-{
-    char b[16];
-    int i = 0;
-    if (v < 0) {
-        write(1, "-", 1);
-        v = -v;
-    }
-    if (v == 0)
-        b[i++] = '0';
-    while (v > 0) {
-        b[i++] = (char)('0' + v % 10);
-        v /= 10;
-    }
-    while (i > 0)
-        write(1, &b[--i], 1);
-}
-
-static void wnumu(unsigned long v)
-{
-    char b[24];
-    int i = 0;
-    if (v == 0)
-        b[i++] = '0';
-    while (v > 0) {
-        b[i++] = (char)('0' + v % 10);
-        v /= 10;
-    }
-    while (i > 0)
-        write(1, &b[--i], 1);
 }
 
 /* djb2 hash of a password -> 8 hex chars. This is what /etc/passwd
@@ -172,46 +139,6 @@ static int pw_lookup(const char* name, struct PwEntry* out)
             *out = all[i];
             return 1;
         }
-    return 0;
-}
-
-/* Group name for a gid from /etc/group, or NULL if none. */
-static const char* group_name(unsigned long gid)
-{
-    static char gname[32];
-    int fd = open(GROUP_F, O_RDONLY);
-    if (fd < 0)
-        return 0;
-    char gb[512];
-    long gn = read(fd, gb, sizeof(gb) - 1);
-    close(fd);
-    if (gn <= 0)
-        return 0;
-    gb[gn] = 0;
-    char* line = gb;
-    while (line && *line) {
-        char* nl = line;
-        while (*nl && *nl != '\n')
-            ++nl;
-        if (*nl)
-            *nl = 0;
-        char* f[3] = {line, 0, 0};
-        int fi = 0;
-        char* p = line;
-        while (*p && fi < 2) {
-            if (*p == ':') {
-                *p = 0;
-                f[++fi] = p + 1;
-            }
-            ++p;
-        }
-        if (fi >= 2 && (unsigned long)atoi(f[2]) == gid) {
-            strncpy(gname, f[0], sizeof(gname) - 1);
-            gname[sizeof(gname) - 1] = 0;
-            return gname;
-        }
-        line = nl + 1;
-    }
     return 0;
 }
 
@@ -466,202 +393,7 @@ static int is_builtin(const char* cmd)
     return strcmp(cmd, "cd") == 0 || strcmp(cmd, "export") == 0 ||
            strcmp(cmd, "unset") == 0 || strcmp(cmd, "exit") == 0 ||
            strcmp(cmd, "help") == 0 || strcmp(cmd, "type") == 0 ||
-           strcmp(cmd, "which") == 0 || strcmp(cmd, "install") == 0 ||
-           strcmp(cmd, "id") == 0 || strcmp(cmd, "whoami") == 0 ||
-           strcmp(cmd, "groups") == 0 || strcmp(cmd, "useradd") == 0 ||
-           strcmp(cmd, "passwd") == 0 || strcmp(cmd, "su") == 0;
-}
-
-/* Format one /etc/passwd entry back into `line` (canonical order). */
-static int format_pwline(const struct PwEntry* e, char* line, int cap)
-{
-    int n = 0;
-    n = nappend(line, n, cap, e->name);
-    line[n++] = ':';
-    n = nappend(line, n, cap, e->hash);
-    line[n++] = ':';
-    n = uappend(line, n, cap, e->uid);
-    line[n++] = ':';
-    n = uappend(line, n, cap, e->gid);
-    line[n++] = ':';
-    n = nappend(line, n, cap, e->name);
-    line[n++] = ':';
-    n = nappend(line, n, cap, e->home);
-    line[n++] = ':';
-    n = nappend(line, n, cap, "/bin/vash");
-    line[n++] = '\n';
-    line[n] = 0;
-    return n;
-}
-
-static int cmd_useradd(int ac, char** av)
-{
-    if (getuid() != 0) {
-        we("useradd: only root may add users\n");
-        return 1;
-    }
-    if (ac != 2) {
-        we("usage: useradd <name>\n");
-        return 1;
-    }
-    const char* name = av[1];
-    if (!name[0] || strlen(name) > 24) {
-        we("useradd: bad name\n");
-        return 1;
-    }
-    for (const char* p = name; *p; ++p)
-        if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') ||
-              *p == '_' || *p == '-')) {
-            we("useradd: name must be [a-z0-9_-]\n");
-            return 1;
-        }
-    struct PwEntry all[MAX_USERS];
-    int n = read_passwd(all);
-    for (int i = 0; i < n; ++i)
-        if (strcmp(all[i].name, name) == 0) {
-            we("useradd: user already exists\n");
-            return 1;
-        }
-
-    char p1[96], p2[96];
-    w("New password: ");
-    if (read_secret(p1, sizeof(p1)) < 0)
-        return 1;
-    w("Retype password: ");
-    if (read_secret(p2, sizeof(p2)) < 0)
-        return 1;
-    if (strcmp(p1, p2) != 0) {
-        we("useradd: passwords do not match\n");
-        return 1;
-    }
-
-    unsigned long next_uid = 1000;
-    for (int i = 0; i < n; ++i)
-        if (all[i].uid >= next_uid)
-            next_uid = all[i].uid + 1;
-
-    struct PwEntry e;
-    memset(&e, 0, sizeof(e));
-    strncpy(e.name, name, sizeof(e.name) - 1);
-    pw_hash(p1, e.hash);
-    e.uid = next_uid;
-    e.gid = 100; /* users */
-    join_path(e.home, sizeof(e.home), "/home", name);
-
-    int fd = open(PASSWD_F, O_WRONLY | O_CREAT | O_APPEND);
-    if (fd < 0) {
-        we("useradd: cannot write /etc/passwd\n");
-        return 1;
-    }
-    char line[256];
-    int li = format_pwline(&e, line, sizeof(line));
-    long rc = write(fd, line, (unsigned long)li);
-    close(fd);
-    if (rc <= 0) {
-        we("useradd: write failed\n");
-        return 1;
-    }
-
-    /* Home directory: create, then hand it to the new owner with a
-     * private 0700, exactly like a real useradd. */
-    if (mkdir(e.home, 0755) < 0) {
-        we("useradd: warning: home dir exists\n");
-    }
-    chown(e.home, e.uid, e.gid);
-    chmod(e.home, 0700);
-
-    w("user ");
-    w(name);
-    w(" added (uid ");
-    wnumu(next_uid);
-    w(")\n");
-    return 0;
-}
-
-static int cmd_passwd(int ac, char** av)
-{
-    if (getuid() != 0) {
-        we("passwd: only root can change passwords\n");
-        return 1;
-    }
-    const char* target = ac > 1 ? av[1] : cur_user;
-    struct PwEntry all[MAX_USERS];
-    int n = read_passwd(all);
-    int idx = -1;
-    for (int i = 0; i < n; ++i)
-        if (strcmp(all[i].name, target) == 0) {
-            idx = i;
-            break;
-        }
-    if (idx < 0) {
-        we("passwd: no such user\n");
-        return 1;
-    }
-
-    char p1[96], p2[96];
-    w("New password: ");
-    if (read_secret(p1, sizeof(p1)) < 0)
-        return 1;
-    w("Retype password: ");
-    if (read_secret(p2, sizeof(p2)) < 0)
-        return 1;
-    if (strcmp(p1, p2) != 0) {
-        we("passwd: passwords do not match\n");
-        return 1;
-    }
-    pw_hash(p1, all[idx].hash);
-
-    int fd = open(PASSWD_F, O_WRONLY | O_TRUNC);
-    if (fd < 0) {
-        we("passwd: cannot write /etc/passwd\n");
-        return 1;
-    }
-    for (int i = 0; i < n; ++i) {
-        char line[256];
-        int li = format_pwline(&all[i], line, sizeof(line));
-        write(fd, line, (unsigned long)li);
-    }
-    close(fd);
-    w("passwd: password updated for ");
-    w(target);
-    w("\n");
-    return 0;
-}
-
-static int cmd_su(int ac, char** av)
-{
-    const char* target = ac > 1 ? av[1] : "root";
-    struct PwEntry e;
-    if (!pw_lookup(target, &e)) {
-        we("su: unknown user\n");
-        return 1;
-    }
-    w("Password: ");
-    char pass[96];
-    if (read_secret(pass, sizeof(pass)) < 0)
-        return 1;
-    char hash[17];
-    pw_hash(pass, hash);
-    if (strcmp(hash, e.hash) != 0) {
-        we("su: authentication failure\n");
-        return 1;
-    }
-    if (setgid(e.gid) < 0 || setuid(e.uid) < 0) {
-        we("su: cannot change identity (need root)\n");
-        return 1;
-    }
-    strncpy(cur_user, e.name, sizeof(cur_user) - 1);
-    cur_user[sizeof(cur_user) - 1] = 0;
-    cur_uid = e.uid;
-    cur_gid = e.gid;
-    strncpy(home_dir, e.home, sizeof(home_dir) - 1);
-    home_dir[sizeof(home_dir) - 1] = 0;
-    chdir(e.home);
-    save_session();
-    w("su: switched to ");
-    w(cur_user);
-    w("\n");
-    return 0;
+           strcmp(cmd, "which") == 0;
 }
 
 static int run_builtin(int ac, char** av)
@@ -673,73 +405,8 @@ static int run_builtin(int ac, char** av)
         drop_session();
         exit(ac > 1 ? atoi(av[1]) : 0);
     }
-    if (strcmp(cmd, "id") == 0) {
-        w("uid=");
-        wnumu(cur_uid);
-        w("(");
-        w(cur_user);
-        w(") gid=");
-        wnumu(cur_gid);
-        w("(");
-        const char* gn = group_name(cur_gid);
-        if (gn)
-            w(gn);
-        else
-            wnumu(cur_gid);
-        w(")\n");
-        return 0;
-    }
-    if (strcmp(cmd, "whoami") == 0) {
-        w(cur_user);
-        w("\n");
-        return 0;
-    }
-    if (strcmp(cmd, "groups") == 0) {
-        const char* gn = group_name(cur_gid);
-        if (gn)
-            w(gn);
-        else
-            wnumu(cur_gid);
-        w("\n");
-        return 0;
-    }
-    if (strcmp(cmd, "useradd") == 0)
-        return cmd_useradd(ac, av);
-    if (strcmp(cmd, "passwd") == 0)
-        return cmd_passwd(ac, av);
-    if (strcmp(cmd, "su") == 0)
-        return cmd_su(ac, av);
-    if (strcmp(cmd, "install") == 0) {
-        long n = syscall(VNU_SYS_blkcount);
-        if (n <= 0) {
-            we("install: no disks detected\n");
-            return 1;
-        }
-        int drive = ac > 1 ? atoi(av[1]) : 0;
-        if (drive < 0 || drive >= (int)n) {
-            w("install: drive out of range (available: 0..");
-            wnum((int)n - 1);
-            w(")\n");
-            return 1;
-        }
-        w("install: target disk ");
-        wnum(drive);
-        w(" of ");
-        wnum((int)n);
-        w(" — writing VNU...\n");
-        long rc = syscall(VNU_SYS_install, drive);
-        if (rc == 0) {
-            w("install: complete. Reboot from this disk to use it.\n");
-            return 0;
-        }
-        we("install: failed (error ");
-        wnum((int)rc);
-        we(")\n");
-        return 1;
-    }
     if (strcmp(cmd, "help") == 0) {
-        w("vash builtins: cd export unset exit help type which install\n");
-        w("               id whoami groups useradd passwd su\n");
+        w("vash builtins: cd export unset exit help type which\n");
         w("PATH=");
         w(path_var);
         w("\nExternal: /bin/* via PATH (ls echo cat ...)\n");

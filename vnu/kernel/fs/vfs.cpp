@@ -482,6 +482,13 @@ void init()
     add("/bin/dirname", false);
     add("/bin/seq", false);
     add("/bin/man", false);
+    add("/bin/id", false);
+    add("/bin/whoami", false);
+    add("/bin/groups", false);
+    add("/bin/useradd", false);
+    add("/bin/passwd", false);
+    add("/bin/su", false);
+    add("/bin/install", false);
     add("/tmp", true);
     auto* tmp = find_index("/tmp") >= 0 ? &nodes[find_index("/tmp")] : nullptr;
     if (tmp)

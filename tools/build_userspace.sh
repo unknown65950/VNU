@@ -37,6 +37,10 @@ for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wc head tail grep sort cp mv basename dirname seq; do
   "$VCC" "$ROOT/vnu/userspace/vibecoreutils/$c.c" -o "$ROOT/sysroot/bin/$c"
 done
+# account/install tools: one separate binary per command.
+for c in id whoami groups useradd passwd su install; do
+  "$VCC" "$ROOT/vnu/userspace/usertools/$c.c" -o "$ROOT/sysroot/bin/$c"
+done
 
 embed "$ROOT/sysroot/bin/vash" vash
 embed "$ROOT/sysroot/bin/vedit" vedit
@@ -48,6 +52,9 @@ embed "$ROOT/sysroot/bin/ttytest" ttytest
 embed "$ROOT/sysroot/bin/man" man
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wc head tail grep sort cp mv basename dirname seq; do
+  embed "$ROOT/sysroot/bin/$c" "$c"
+done
+for c in id whoami groups useradd passwd su install; do
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
 echo "==> done"

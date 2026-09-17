@@ -25,5 +25,6 @@ cd vnu && rm -rf kernel/build && ./build_iso.sh
 | `/bin/hello`| `userspace/examples/hello/`       |
 | `/bin/man`  | `userspace/man/man.c`             |
 | `/bin/*`    | `userspace/vibecoreutils/<name>.c` (one binary per command) |
+| `id` `whoami` `groups` `useradd` `passwd` `su` `install` | `userspace/usertools/<name>.c` |
 
 Native kernel console remains as fallback if init fails.

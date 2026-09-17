@@ -188,7 +188,7 @@ DESCRIPTION\n\
     what a distro 'sysinst' would be. Requires root. After a\n\
     successful write, reboot from the target disk.\n\
 \n\
-    Shell builtin (no external binary exists).\n"
+    Standalone binary /bin/install.\n"
 
 #define ID_PAGE "NAME\n\
     id - print the current identity\n\
@@ -198,7 +198,8 @@ SYNOPSIS\n\
 \n\
 DESCRIPTION\n\
     Prints the effective user and group as uid and gid with\n\
-    names, e.g. uid=1000(guest) gid=100(users). Shell builtin.\n"
+    names, e.g. uid=1000(guest) gid=100(users). Standalone\n\
+    binary in /bin.\n"
 
 #define WHOAMI_PAGE "NAME\n\
     whoami - print the current user name\n\
@@ -207,7 +208,8 @@ SYNOPSIS\n\
     whoami\n\
 \n\
 DESCRIPTION\n\
-    Prints the login name of the current user. Shell builtin.\n"
+    Prints the login name of the current user. Standalone\n\
+    binary in /bin.\n"
 
 #define GROUPS_PAGE "NAME\n\
     groups - print the current group name\n\
@@ -216,7 +218,8 @@ SYNOPSIS\n\
     groups\n\
 \n\
 DESCRIPTION\n\
-    Prints the group of the current session. Shell builtin.\n"
+    Prints the group of the current session. Standalone\n\
+    binary in /bin.\n"
 
 #define USERADD_PAGE "NAME\n\
     useradd - add a new user account\n\
@@ -243,7 +246,7 @@ SYNOPSIS\n\
 DESCRIPTION\n\
     Root-only. Replaces the stored hash of USER (default: the\n\
     current user) in /etc/passwd after asking for the new\n\
-    password twice. Shell builtin.\n"
+    password twice. Standalone binary in /bin.\n"
 
 #define SU_PAGE "NAME\n\
     su - switch the session to another user\n\
@@ -254,7 +257,9 @@ SYNOPSIS\n\
 DESCRIPTION\n\
     Requires USER's password and switches the session identity\n\
     and working directory to that user. Changing to anything\n\
-    other than your own privilege level needs root. Shell builtin.\n"
+    other than your own privilege level needs root. On success\n\
+    it starts a fresh /bin/vash as the target user.\n\
+    Standalone binary in /bin.\n"
 
 #define COREUTILS_PAGE "NAME\n\
     coreutils - the standard command set (index)\n\
@@ -272,7 +277,11 @@ DESCRIPTION\n\
 \n\
     There is no 'coreutils' program on the image any more; this\n\
     page is kept as an index of the set. Run 'man <name>' for a\n\
-    single tool, or bare 'man' for every documented command.\n"
+    single tool, or bare 'man' for every documented command.\n\
+\n\
+    The separate account/install tools id, whoami, groups,\n\
+    useradd, passwd, su and install are standalone /bin binaries\n\
+    too — see also the VNU manual's list.\n"
 
 #define ECHO_PAGE "NAME\n\
     echo - write its arguments to standard output\n\
