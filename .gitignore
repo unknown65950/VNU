@@ -1,0 +1,21 @@
+# Build outputs — anything produced by ./tools/build_userspace.sh or
+# ./build_iso.sh must be ignored, not committed. If a build step starts
+# producing a new artifact, add it here (see AGENTS.md).
+
+# Kernel CMake build tree
+vnu/kernel/build/
+
+# Staged ISO payload and final image
+vnu/iso/boot/kernel.elf
+vnu/vnu.iso
+
+# Compiled userspace ELFs + binary blobs embedded into the kernel
+sysroot/bin/
+sysroot/lib/*.o
+sysroot/lib/*.a
+sysroot/lib/.vlibc.stamp
+vnu/kernel/proc/embedded_*.h
+
+# Generic object/archive debris
+*.o
+*.iso

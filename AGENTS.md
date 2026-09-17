@@ -47,5 +47,11 @@ consistent.
   include `<vnu/...>` headers. Userspace is C++17 with `vlibc` only.
 - Keep the style of the file you edit: comments in the language it
   already uses, same indentation, no new dependencies.
-- Don't commit secrets. Don't commit `vnu/kernel/build/` or ISO output
-  unless the repo already tracks them.
+- **Build outputs stay untracked.** `vnu/kernel/build/`, `vnu/vnu.iso`,
+  `vnu/iso/boot/kernel.elf`, `sysroot/bin/*`, `sysroot/lib/*` and
+  `vnu/kernel/proc/embedded_*.h` are build artifacts and must never be
+  committed. Whenever a build step starts producing a new artifact,
+  add it to the repo's `.gitignore` in the same change (a fresh checkout
+  regenerates everything via `./tools/build_userspace.sh` followed by
+  `./build_iso.sh`).
+- Don't commit secrets.
