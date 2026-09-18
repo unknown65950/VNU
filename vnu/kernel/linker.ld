@@ -1,4 +1,6 @@
 /* linker.ld — размещаем ядро по адресу 1 MiB, как ожидает Multiboot2. */
+/* Форма без BLOCK()/ALIGN(...)-в-адресной-экспрессии совместима и с
+ * GNU ld, и с lld (Termux). */
 
 ENTRY(_start)
 
@@ -6,18 +8,21 @@ SECTIONS
 {
     . = 1M;
 
-    .text BLOCK(4K) : ALIGN(4K)
+    . = ALIGN(4K);
+    .text :
     {
         *(.multiboot)
         *(.text)
     }
 
-    .rodata BLOCK(4K) : ALIGN(4K)
+    . = ALIGN(4K);
+    .rodata :
     {
         *(.rodata)
     }
 
-    .data BLOCK(4K) : ALIGN(4K)
+    . = ALIGN(4K);
+    .data :
     {
         *(.data)
     }
@@ -29,7 +34,7 @@ SECTIONS
      * globals there would fault the moment the first user process runs.
      * bss.ld zeroes this range at boot before any global is touched. */
     . = 0x00A00000;
-    .bss BLOCK(4K) : ALIGN(4K)
+    .bss :
     {
         __bss_start = .;
         *(COMMON)

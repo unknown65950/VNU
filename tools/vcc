@@ -1,4 +1,7 @@
-#!/usr/bin/env bash
+#!/bin/sh
+# Bash trampoline: /usr/bin/env is missing on some hosts (e.g. Termux
+# without termux-exec) -- if not under bash already, re-exec via PATH.
+if [ -z "${BASH_VERSION:-}" ]; then exec env bash "$0" "$@"; fi
 # vcc — VNU C compiler frontend (wraps host gcc -m32 + vlibc)
 set -euo pipefail
 
@@ -8,8 +11,21 @@ VLIBC_DIR="${VLIBC_DIR:-$ROOT/vlibc}"
 USER_LD="${USER_LD:-$SCRIPT_DIR/user.ld}"
 PREFIX="${VNU_PREFIX:-$ROOT/sysroot}"
 
-CC="${VNU_CC:-gcc}"
-CFLAGS_DEFAULT=(-m32 -std=c99 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -mno-sse -mno-sse2 -mno-avx -Wall -Wextra -DVLIBC_TARGET_VNU=1)
+# On aarch64/ARM hosts (e.g. Termux) there is no gcc multilib for -m32;
+# fall back to clang targeting bare i386. x86_64 Linux keeps host gcc -m32.
+HOST_ARCH="$(uname -m 2>/dev/null || true)"
+VNU_CROSS_MODE=0
+if [[ "${VNU_CROSS:-0}" == "1" ]] || [[ "$HOST_ARCH" == aarch64* ]] || [[ "$HOST_ARCH" == arm64* ]]; then
+    VNU_CROSS_MODE=1
+fi
+if [[ $VNU_CROSS_MODE -eq 1 ]]; then
+    CC="${VNU_CC:-clang}"
+    TARGET=("--target=i386-none-elf")
+else
+    CC="${VNU_CC:-gcc}"
+    TARGET=()
+fi
+CFLAGS_DEFAULT=(${TARGET[@]:-} -std=c99 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -mno-sse -mno-sse2 -mno-avx -Wall -Wextra -DVLIBC_TARGET_VNU=1)
 INCLUDES=(-I"$VLIBC_DIR/include")
 
 usage() {
@@ -146,7 +162,7 @@ build_vlibc() {
 
     run "$CC" "${CFLAGS_DEFAULT[@]}" "${INCLUDES[@]}" \
         -c "$VLIBC_DIR/src/crt/crt0_vnu.c" -o "$PREFIX/tmp-obj/crt0_vnu_c.o"
-    run "$CC" -m32 -c "$VLIBC_DIR/src/crt/crt0_vnu.S" -o "$PREFIX/tmp-obj/crt0_vnu_S.o"
+    run "$CC" "${TARGET[@]:-}" -c "$VLIBC_DIR/src/crt/crt0_vnu.S" -o "$PREFIX/tmp-obj/crt0_vnu_S.o"
     run ld -m elf_i386 -r "$PREFIX/tmp-obj/crt0_vnu_S.o" "$PREFIX/tmp-obj/crt0_vnu_c.o" \
         -o "$PREFIX/lib/crt0.o"
 
@@ -171,7 +187,7 @@ for src in "${srcs[@]:-}"; do
         run "$CC" "${CFLAGS_DEFAULT[@]}" "${extra_cflags[@]}" "${INCLUDES[@]}" "${extra_incs[@]}" \
             -c "$src" -o "$out"
     else
-        o="$(mktemp /tmp/vcc-XXXXXX.o)"
+        TMPD="${TMPDIR:-$PREFIX/tmp}"; mkdir -p "$TMPD"; o="$(mktemp "$TMPD/vcc-XXXXXX.o")"
         tmp_objs+=("$o")
         run "$CC" "${CFLAGS_DEFAULT[@]}" "${extra_cflags[@]}" "${INCLUDES[@]}" "${extra_incs[@]}" \
             -c "$src" -o "$o"

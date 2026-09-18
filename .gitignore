@@ -7,7 +7,13 @@ vnu/kernel/build/
 
 # Staged ISO payload and final image
 vnu/iso/boot/kernel.elf
+vnu/iso/boot/grub/i386-pc/
+vnu/iso/efi.img
 vnu/vnu.iso
+
+# GRUB boot blobs extracted from a grub-mkrescue ISO for the portable
+# (xorriso-only) ISO builder used on hosts without grub tools (Termux).
+vnu/grub-seed/
 
 # Compiled userspace ELFs + binary blobs embedded into the kernel
 sysroot/bin/

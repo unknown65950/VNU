@@ -354,18 +354,11 @@ static void handle_key(char k)
 static void draw_button(int x, int y, int w, int h, const char* label, int pressed)
 {
     vgfx_fill_rect(x, y, w, h, pressed ? VGFX_DGRAY : VGFX_LGRAY);
-    if (!pressed) {
-        /* classic 3D "raised" edge: light top/left, dark bottom/right */
-        vgfx_hline(x, y, w, VGFX_WHITE);
-        vgfx_vline(x, y, h, VGFX_WHITE);
-        vgfx_hline(x, y + h - 1, w, VGFX_DGRAY);
-        vgfx_vline(x + w - 1, y + 1, h - 1, VGFX_DGRAY);
-    }
     vgfx_rect(x, y, w, h, VGFX_BLACK);
     int tw = vgfx_text_width(label);
     int tx = x + (w - tw) / 2;
     int ty = y + (h - 16) / 2;
-    vgfx_str(tx, ty, label, pressed ? VGFX_WHITE : VGFX_BLACK);
+    vgfx_str(tx, ty, label, VGFX_WHITE);
 }
 
 static void draw(void)

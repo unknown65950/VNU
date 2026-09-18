@@ -53,9 +53,9 @@ static int draw_about(void)
     struct utsname u;
     if (uname(&u) != 0)
         return 0;
-    vgfx_str8(CONTENT_X, 4, "VNU/VibeGraphics", VGFX_BLACK);
-    vgfx_str8(CONTENT_X, 14, u.sysname, VGFX_DGRAY);
-    vgfx_str8(CONTENT_X, 24, u.release, VGFX_DGRAY);
+    vgfx_str8(CONTENT_X, 4, "VNU/VibeGraphics", VGFX_MAGENTA);
+    vgfx_str8(CONTENT_X, 14, u.sysname, VGFX_LBLUE);
+    vgfx_str8(CONTENT_X, 24, u.release, VGFX_LBLUE);
     char v[128];
     int n = read_proc("/proc/version", v, sizeof(v));
     if (n > 0) {
@@ -65,10 +65,10 @@ static int draw_about(void)
                 v[i] = 0;
                 break;
             }
-        vgfx_str8(CONTENT_X, 40, "version:", VGFX_BLACK);
+        vgfx_str8(CONTENT_X, 40, "version:", VGFX_WHITE);
         vgfx_str8(CONTENT_X, 50, v, VGFX_BLUE);
     }
-    vgfx_str8(CONTENT_X, 66, "machine:", VGFX_BLACK);
+    vgfx_str8(CONTENT_X, 66, "machine:", VGFX_WHITE);
     vgfx_str8(CONTENT_X, 76, u.machine, VGFX_BLUE);
     return 1;
 }
@@ -79,18 +79,18 @@ static int draw_memory(void)
     int n = read_proc("/proc/meminfo", mem, sizeof(mem));
     if (n < 0)
         return 0;
-    vgfx_str8(CONTENT_X, 4, "Memory", VGFX_BLACK);
+    vgfx_str8(CONTENT_X, 4, "Memory", VGFX_WHITE);
     int y = 18, line = 0;
     for (int i = 0; mem[i] && y < VGFX_H - 4; ++i) {
         if (mem[i] == '\n') {
             mem[i] = 0;
-            vgfx_str8(CONTENT_X + 2, y, mem + line, VGFX_DGRAY);
+            vgfx_str8(CONTENT_X + 2, y, mem + line, VGFX_LBLUE);
             y += 12;
             line = i + 1;
         }
     }
     if (line && mem[line] == 0) {
-        vgfx_str8(CONTENT_X + 2, y, mem + line, VGFX_DGRAY);
+        vgfx_str8(CONTENT_X + 2, y, mem + line, VGFX_LBLUE);
         y += 12;
     }
     char up[128];
@@ -101,7 +101,7 @@ static int draw_memory(void)
                 up[i] = ' ';
                 break;
             }
-        vgfx_str8(CONTENT_X, y + 2, "uptime:", VGFX_BLACK);
+        vgfx_str8(CONTENT_X, y + 2, "uptime:", VGFX_WHITE);
         vgfx_str8(CONTENT_X, y + 14, up, VGFX_BLUE);
     }
     return 1;
@@ -113,18 +113,18 @@ static int draw_mounts(void)
     int n = read_proc("/proc/mounts", m, sizeof(m));
     if (n < 0)
         return 0;
-    vgfx_str8(CONTENT_X, 4, "Mount points", VGFX_BLACK);
+    vgfx_str8(CONTENT_X, 4, "Mount points", VGFX_WHITE);
     int y = 18, line = 0;
     for (int i = 0; m[i] && y < VGFX_H - 4; ++i) {
         if (m[i] == '\n') {
             m[i] = 0;
-            vgfx_str8(CONTENT_X, y, m + line, VGFX_DGRAY);
+            vgfx_str8(CONTENT_X, y, m + line, VGFX_LBLUE);
             y += 10;
             line = i + 1;
         }
     }
     if (line && m[line] == 0)
-        vgfx_str8(CONTENT_X, y, m + line, VGFX_DGRAY);
+        vgfx_str8(CONTENT_X, y, m + line, VGFX_LBLUE);
     return 1;
 }
 
@@ -134,18 +134,18 @@ static int draw_info(void)
     int n = read_proc("/proc/cpuinfo", c, sizeof(c));
     if (n < 0)
         return 0;
-    vgfx_str8(CONTENT_X, 4, "CPU", VGFX_BLACK);
+    vgfx_str8(CONTENT_X, 4, "CPU", VGFX_WHITE);
     int y = 18, line = 0;
     for (int i = 0; c[i] && y < VGFX_H - 4; ++i) {
         if (c[i] == '\n') {
             c[i] = 0;
-            vgfx_str8(CONTENT_X, y, c + line, VGFX_DGRAY);
+            vgfx_str8(CONTENT_X, y, c + line, VGFX_LBLUE);
             y += 9;
             line = i + 1;
         }
     }
     if (line && c[line] == 0)
-        vgfx_str8(CONTENT_X, y, c + line, VGFX_DGRAY);
+        vgfx_str8(CONTENT_X, y, c + line, VGFX_LBLUE);
     return 1;
 }
 
@@ -155,20 +155,20 @@ static void draw(void)
     vgfx_clear(VGFX_LGRAY);
 
     /* selector column */
-    vgfx_fill_rect(0, 0, SELECTOR_W, VGFX_H, VGFX_LBLUE);
+    vgfx_fill_rect(0, 0, SELECTOR_W, VGFX_H, VGFX_DGRAY);
     vgfx_vline(SELECTOR_W - 1, 0, VGFX_H, VGFX_BLACK);
     for (int i = 0; i < PANE_ROWS; ++i) {
         int y = 2 + i * 26;
         int is_sel = i == cur_pane;
         int is_hov = i == hover_pane;
         if (is_sel)
-            vgfx_fill_rect(1, y, SELECTOR_W - 2, 24, VGFX_BLUE);
+            vgfx_fill_rect(1, y, SELECTOR_W - 2, 24, VGFX_LBLUE);
         else if (is_hov)
-            vgfx_fill_rect(1, y, SELECTOR_W - 2, 24, VGFX_CYAN);
-        int col = is_sel ? VGFX_WHITE : VGFX_BLACK;
+            vgfx_fill_rect(1, y, SELECTOR_W - 2, 24, VGFX_LGRAY);
+        int col = is_sel ? VGFX_BLACK : VGFX_WHITE;
         /* small pane glyph: a rounded square emulating the NeXT tile */
-        vgfx_fill_rect(5, y + 3, 8, 8, is_sel ? VGFX_WHITE : VGFX_DGRAY);
-        vgfx_rect(5, y + 3, 8, 8, VGFX_BLACK);
+        vgfx_fill_rect(5, y + 3, 8, 8, is_sel ? VGFX_BLACK : VGFX_LGRAY);
+        vgfx_rect(5, y + 3, 8, 8, VGFX_WHITE);
         vgfx_str8(17, y + 4, pane_names[i], col);
     }
 

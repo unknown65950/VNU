@@ -1,0 +1,12 @@
+// Freestanding C++20 <cstddef> shim (same rationale as include/cstdint):
+// re-export size_t/ptrdiff_t/nullptr_t from the compiler's free-standing
+// <stddef.h> into namespace std instead of pulling in a hosted libc++.
+
+#pragma once
+#include <stddef.h>
+
+namespace std {
+using ::size_t;
+using ::ptrdiff_t;
+using nullptr_t = decltype(nullptr);
+} // namespace std

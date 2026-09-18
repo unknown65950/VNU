@@ -1,4 +1,7 @@
-#!/usr/bin/env bash
+#!/bin/sh
+# Bash trampoline: /usr/bin/env is missing on some hosts (e.g. Termux
+# without termux-exec) -- if not under bash already, re-exec via PATH.
+if [ -z "${BASH_VERSION:-}" ]; then exec env bash "$0" "$@"; fi
 # v++ — VNU C++ compiler frontend (g++ -m32 freestanding + vlibc)
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -6,7 +9,20 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VLIBC_DIR="${VLIBC_DIR:-$ROOT/vlibc}"
 PREFIX="${VNU_PREFIX:-$ROOT/sysroot}"
 CXX="${VNU_CXX:-g++}"
-CFLAGS_DEFAULT=(-m32 -std=c++17 -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+# Same cross-mode fallback as vcc: clang --target=i386-none-elf on ARM hosts.
+HOST_ARCH="$(uname -m 2>/dev/null || true)"
+VNU_CROSS_MODE=0
+if [[ "${VNU_CROSS:-0}" == "1" ]] || [[ "$HOST_ARCH" == aarch64* ]] || [[ "$HOST_ARCH" == arm64* ]]; then
+    VNU_CROSS_MODE=1
+fi
+if [[ $VNU_CROSS_MODE -eq 1 ]]; then
+    CXX="${VNU_CXX:-clang++}"
+    TARGET=("--target=i386-none-elf")
+else
+    CXX="${VNU_CXX:-g++}"
+    TARGET=()
+fi
+CFLAGS_DEFAULT=(${TARGET[@]:-} -std=c++17 -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
                 -fno-stack-protector -fno-pic -Wall -Wextra -DVLIBC_TARGET_VNU=1)
 INCLUDES=(-I"$VLIBC_DIR/include")
 
@@ -27,15 +43,15 @@ if [[ $# -eq 0 || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 # Reuse vcc to ensure sysroot exists
-"$SCRIPT_DIR/vcc" -c -o /tmp/vnu_vxx_probe.o -x c - <<'C' 2>/dev/null || true
+"$SCRIPT_DIR/vcc" -c -o "${TMPDIR:-$PREFIX/tmp}/vnu_vxx_probe.o" -x c - <<'C' 2>/dev/null || true
 int x;
 C
-rm -f /tmp/vnu_vxx_probe.o
+rm -f "${TMPDIR:-$PREFIX/tmp}/vnu_vxx_probe.o"
 # Force sysroot via empty rebuild trigger
 if [[ ! -f "$PREFIX/lib/libvlibc.a" ]]; then
-    echo 'int main(){return 0;}' | "$SCRIPT_DIR/vcc" -x c - -o /tmp/vnu_vxx_dummy 2>/dev/null || \
-    (cd "$ROOT" && echo 'int main(){return 0;}' > /tmp/t.c && "$SCRIPT_DIR/vcc" /tmp/t.c -o /tmp/vnu_vxx_dummy)
-    rm -f /tmp/vnu_vxx_dummy /tmp/t.c
+    echo 'int main(){return 0;}' | "$SCRIPT_DIR/vcc" -x c - -o "${TMPDIR:-$PREFIX/tmp}/vnu_vxx_dummy" 2>/dev/null || \
+    (cd "$ROOT" && echo 'int main(){return 0;}' > "${TMPDIR:-$PREFIX/tmp}/t.c" && "$SCRIPT_DIR/vcc" "${TMPDIR:-$PREFIX/tmp}/t.c" -o "${TMPDIR:-$PREFIX/tmp}/vnu_vxx_dummy")
+    rm -f "${TMPDIR:-$PREFIX/tmp}/vnu_vxx_dummy" "${TMPDIR:-$PREFIX/tmp}/t.c"
 fi
 
 compile_only=0; verbose=0; outfile=""; srcs=(); objs=(); extra=(); extra_incs=()
@@ -63,7 +79,7 @@ for src in "${srcs[@]:-}"; do
         out="${outfile:-$base.o}"
         run "$CXX" "${CFLAGS_DEFAULT[@]}" "${extra[@]}" "${INCLUDES[@]}" "${extra_incs[@]}" -c "$src" -o "$out"
     else
-        o="$(mktemp /tmp/vxx-XXXXXX.o)"; tmp+=("$o")
+        o="$(mktemp "${TMPDIR:-$PREFIX/tmp}/vxx-XXXXXX.o")"; tmp+=("$o")
         run "$CXX" "${CFLAGS_DEFAULT[@]}" "${extra[@]}" "${INCLUDES[@]}" "${extra_incs[@]}" -c "$src" -o "$o"
         objs+=("$o")
     fi

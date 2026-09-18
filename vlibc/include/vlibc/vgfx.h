@@ -22,7 +22,11 @@
 #define VGFX_H 170
 #define VGFX_FD 3
 
-/* Standard VGA 16-color palette indices (same as text-mode attributes). */
+/* Palette indices (VGA layout: 0..7 dark-slot names, 8..15 bright-slot
+ * names). The actual RGB values are not fixed: the kernel programs these
+ * 16 DAC entries to the Catppuccin Mocha palette on entering graphics
+ * mode, so apps should pick by role (surfaces = LGRAY/DGRAY, highlights
+ * = LBLUE/LCYAN, text = WHITE/BLACK, accents = BLUE/GREEN/YELLOW/...) */
 #define VGFX_BLACK   0
 #define VGFX_BLUE    1
 #define VGFX_GREEN   2

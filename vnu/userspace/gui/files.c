@@ -168,7 +168,7 @@ static void draw(void)
         } else if (hover == r) {
             vgfx_fill_rect(1, y, VGFX_W - 2, ROW_H, VGFX_LCYAN);
         }
-        int text_col = VGFX_BLACK;
+        int text_col = (is_sel || hover == r) ? VGFX_BLACK : VGFX_WHITE;
         vgfx_str8(2, y + 1, e->is_dir ? "d" : "-", text_col);
         vgfx_str8(BADGE, y + 1, e->name, text_col);
         if (!e->is_dir) {

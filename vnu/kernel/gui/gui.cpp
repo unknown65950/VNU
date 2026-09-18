@@ -114,9 +114,9 @@ void draw_chrome(const Window& win, bool active)
     vline(win.x + 1, win.y + 2, win.h - 3, COLOR_WHITE);
     hline(win.x + 2, win.y + win.h - 2, win.w - 3, COLOR_DGRAY);
     vline(win.x + win.w - 2, win.y + 2, win.h - 3, COLOR_DGRAY);
-    /* Active window gets a blue title bar, inactive ones a dark one. */
+    /* Active window gets a lavender title bar, inactive ones a dark one. */
     fill_rect(win.x + 1, win.y + 1, win.w - 2, TITLE_H - 1,
-              active ? COLOR_BLUE : COLOR_DGRAY);
+              active ? COLOR_LBLUE : COLOR_DGRAY);
     hline(win.x + 1, win.y + TITLE_H, win.w - 2, COLOR_BLACK);
 }
 
@@ -161,7 +161,7 @@ void draw_console_window(const Window& win, const vnu::wintask::Console& con, bo
 {
     draw_chrome(win, active);
     using namespace vnu::vgfx;
-    draw_string(win.x + 4, win.y + 2, con.title, COLOR_WHITE);
+    draw_string(win.x + 4, win.y + 2, con.title, active ? COLOR_BLACK : COLOR_WHITE);
 
     int cols = fit_cols(win);
     int rows = fit_rows(win);
@@ -229,7 +229,7 @@ void draw_gfx_window(const Window& win, const vnu::wintask::Console& con, bool a
 {
     draw_chrome(win, active);
     using namespace vnu::vgfx;
-    draw_string(win.x + 4, win.y + 2, con.title, COLOR_WHITE);
+    draw_string(win.x + 4, win.y + 2, con.title, active ? COLOR_BLACK : COLOR_WHITE);
     int origin_x = win.x + 2;
     int origin_y = win.y + TITLE_H + 2;
     blit_scaled(con.pixel, vnu::wintask::GFX_W, vnu::wintask::GFX_H,

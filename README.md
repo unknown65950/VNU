@@ -100,6 +100,45 @@ cd vnu && ./build_iso.sh      # cmake kernel build + grub-mkrescue -> vnu.iso
 ./run.sh --headless           # QEMU without graphics (output via serial)
 ```
 
+### Cross-building on Termux (ARM/Android)
+
+There is no `grub-mkrescue`/multilib gcc on Termux, so `build_iso.sh`
+switches itself to a portable path automatically (host detected via
+`uname -m`):
+
+- **Compiler**: the kernel and userspace compile with `clang --target
+  i386-none-elf` instead of `gcc -m32` (vcc/v++/CMake do this on ARM).
+- **Linker**: `ld.lld` is used directly (the Termux clang driver has no
+  linker for a bare i386 triple). On LLD, the kernel linker script uses
+  `ALIGN(4K)` instead of the GNU-only `BLOCK(4K)`.
+- **ISO**: without `grub-mkrescue`, the ISO is rebuilt with `xorriso`
+  reusing GRUB boot blobs (`vnu/grub-seed/`) extracted from an existing
+  `vnu.iso` (always present after one build; regenerated on demand).
+  `grub-mkimage` is not needed — the in-kernel `install` payload becomes
+  empty stubs (kernel boots fine, disk-writer is empty).
+- **Scripts**: executable scripts carry a `/bin/sh` trampoline that
+  re-execs `bash` from `$PATH`, so `#!/usr/bin/env bash` (missing on
+  Termux without `termux-exec`) is never needed.
+- **Running**: QEMU on Termux has no windowing backend, so use
+  `./run.sh --headless` (serial console in the terminal).
+
+Dependencies:
+
+```bash
+pkg install -y clang cmake nasm binutils python xorriso qemu-system-i386
+```
+
+Then the same commands work:
+
+```bash
+./tools/build_userspace.sh
+cd vnu && ./build_iso.sh
+./run.sh --headless
+```
+
+On this machine the flow is tested end-to-end: boot to `VNU login:`,
+`root`/`root`, then `uname`, `ls /bin`, `seq 3`, `man ls`, `echo`.
+
 After boot: log in as `root`/`root` (guest `guest`/`guest`). Then `help`,
 `man` (list: `man`), `gui`.
 

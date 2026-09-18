@@ -196,6 +196,60 @@ void capture_font()
     g_have_font = true;
 }
 
+/* Catppuccin Mocha DAC palette for the first 16 palette registers (the
+ * ones COLOR_* references). The desktop renders 8-bpp palette indices,
+ * so programming the DAC once restyles every surface — wallpaper, window
+ * chrome, icons and the gfx apps' own drawing — with no app-code churn.
+ * Values are 6-bit per channel (0..63), as the VGA DAC expects. */
+constexpr uint8_t CATT_PAL[16][3] = {
+    {7, 7, 11},    /*  0 BLACK   base      #1e1e2e */
+    {34, 45, 62},  /*  1 BLUE    blue      #89b4fa */
+    {41, 56, 40},  /*  2 GREEN   green     #a6e3a1 */
+    {29, 49, 59},  /*  3 CYAN    sapphire  #74c7ec */
+    {60, 34, 42},  /*  4 RED     red       #f38ba8 */
+    {50, 41, 61},  /*  5 MAGENTA mauve     #cba6f7 */
+    {62, 44, 33},  /*  6 BROWN   peach     #fab387 */
+    {12, 12, 17},  /*  7 LGRAY   surface0  #313244 */
+    {6, 6, 9},     /*  8 DGRAY   mantle    #181825 */
+    {45, 47, 63},  /*  9 LBLUE   lavender  #b4befe */
+    {37, 56, 53},  /* 10 LGREEN  teal      #94e2d5 */
+    {34, 55, 58},  /* 11 LCYAN   sky       #89dceb */
+    {58, 40, 43},  /* 12 LRED    maroon    #eba0ac */
+    {61, 48, 57},  /* 13 LMAGENTA pink     #f5c2e7 */
+    {62, 56, 43},  /* 14 YELLOW  yellow    #f9e2af */
+    {51, 53, 61},  /* 15 WHITE   text      #cdd6f4 */
+};
+
+uint8_t g_saved_pal[16][3];
+bool g_have_saved_pal = false;
+
+void load_palette(const uint8_t (&pal)[16][3])
+{
+    for (int i = 0; i < 16; ++i) {
+        outb(0x3C8, static_cast<uint8_t>(i));
+        outb(0x3C9, pal[i][0]);
+        outb(0x3C9, pal[i][1]);
+        outb(0x3C9, pal[i][2]);
+    }
+}
+
+void save_palette()
+{
+    for (int i = 0; i < 16; ++i) {
+        outb(0x3C7, static_cast<uint8_t>(i));
+        g_saved_pal[i][0] = inb(0x3C9);
+        g_saved_pal[i][1] = inb(0x3C9);
+        g_saved_pal[i][2] = inb(0x3C9);
+    }
+    /* Reading leaves the DAC in read mode with a stale write pointer;
+     * reset it by writing index 0 and clocking out three dummies. */
+    outb(0x3C8, 0);
+    inb(0x3C9);
+    inb(0x3C9);
+    inb(0x3C9);
+    g_have_saved_pal = true;
+}
+
 uint8_t g_backbuf[vnu::vgfx::WIDTH * vnu::vgfx::HEIGHT];
 
 /* Quarter-sine profile (0..255) used to carve the wallpaper's hill
@@ -236,12 +290,20 @@ void enter_gfx_mode()
     vbe_write(VBE_INDEX_VIRT_WIDTH, WIDTH);
     vbe_write(VBE_INDEX_BPP, 8);
     vbe_write(VBE_INDEX_ENABLE, VBE_ENABLED | VBE_LFB | VBE_8BIT_DAC);
+
+    /* Swap in the Catppuccin DAC the first time we enter graphics mode;
+     * the boot palette is saved so exit_to_text() can hand it back. */
+    if (!g_have_saved_pal)
+        save_palette();
+    load_palette(CATT_PAL);
 }
 
 void exit_to_text()
 {
     if (!g_have_saved)
         return;
+    if (g_have_saved_pal)
+        load_palette(g_saved_pal);
     vbe_write(VBE_INDEX_ENABLE, VBE_DISABLED);
     write_registers(g_saved.misc, g_saved.seq, g_saved.crtc, g_saved.gc, g_saved.ac);
 }
@@ -293,9 +355,9 @@ void draw_wallpaper()
             row[x] = (u >= (unsigned)(bayer[x & 3] * 17)) ? bottom : top;
     }
 
-    /* Sun with a yellow halo high on the right. */
-    fill_circle(848, 150, 58, COLOR_YELLOW);
-    fill_circle(848, 150, 40, COLOR_WHITE);
+    /* Sun: peach halo around a warm yellow core (Mocha dusk). */
+    fill_circle(848, 150, 58, COLOR_BROWN);
+    fill_circle(848, 150, 40, COLOR_YELLOW);
 
     /* Clouds: puffy white blobs. */
     fill_circle(180, 140, 26, COLOR_WHITE);

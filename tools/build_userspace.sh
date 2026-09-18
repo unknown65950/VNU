@@ -1,4 +1,7 @@
-#!/usr/bin/env bash
+#!/bin/sh
+# Bash trampoline: /usr/bin/env is missing on some hosts (e.g. Termux
+# without termux-exec) -- if not under bash already, re-exec via PATH.
+if [ -z "${BASH_VERSION:-}" ]; then exec env bash "$0" "$@"; fi
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VCC="$ROOT/tools/vcc"

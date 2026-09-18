@@ -21,10 +21,37 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # достаточно для x86-ядра, пока мы не трогаем ничего из libc/host ABI.
 # Для "по-настоящему правильной" сборки в будущем стоит завести
 # отдельный toolchain i686-elf-gcc (см. wiki.osdev.org/GCC_Cross-Compiler).
+#
+# На ARM/aarch64-хостах (например Termux) multilib gcc для -m32 нет;
+# там компилируем clang'ом под голый i386-триплет. Остальные флаги
+# (freestanding, запрет SSE/FPU и т.п.) общие для обоих путей.
+
+set(VNU_ARCH_FLAG -m32)
+set(VNU_KERNEL_LIBS -lgcc)
+set(VNU_USING_CLANG_CROSS OFF)
+if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|armv8)")
+    set(VNU_USING_CLANG_CROSS ON)
+    set(VNU_ARCH_FLAG "-target" "i386-none-elf")
+    # Для голого i386 libgcc из хоста нет — если ядру понадобятся
+    # компiler-rt-подобные хелперы (udivdi3 и т.п.), они добавляются
+    # отдельным TU в runtime/ (runtime/libgcc_shim.cpp).
+    set(VNU_KERNEL_LIBS "")
+    # Termux'овский clang не имеет линкер-драйвера для «голого» i386
+    # (команда линковки сводится к /usr/bin/false), поэтому в режиме
+    # кросс-сборки линкуем напрямую ld.lld. <LINK_FLAGS> несёт только
+    # target_link_options ниже — глобальные -O2 -g от драйвера не нужны.
+    # Автогенерируемый CMake --dependency-file проскакивает как -Xlinker,
+    # чего ld.lld не понимает, так что эту фичу тоже отключаем.
+    find_program(VNU_LD_LLD ld.lld REQUIRED)
+    set(CMAKE_CXX_LINK_EXECUTABLE
+        "${VNU_LD_LLD} -m elf_i386 <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
+    set(CMAKE_CXX_LINK_DEPENDS_USE_LINKER FALSE)
+endif()
 
 set(KERNEL_COMPILE_FLAGS
-    -m32
+    ${VNU_ARCH_FLAG}
     -ffreestanding
+    -nostdinc++
     -fno-exceptions
     -fno-rtti
     -fno-stack-protector
@@ -50,16 +77,21 @@ set_source_files_properties(
 # GRUB stage blobs for the disk installer. core.img contains only GRUB
 # modules, so generating it before the kernel links introduces no
 # circular dependency; the .inc with the incbin's is pulled in by
-# install/blobs.s via this include directory.
+# install/blobs.s via this include directory. On hosts without grub-mkimage
+# (ARM/Termux) a stub .inc with empty arrays is generated instead — the
+# kernel boots fine, only the `install` payload is empty.
 find_program(GRUB_MKIMAGE grub-mkimage)
-if(NOT GRUB_MKIMAGE)
-    message(FATAL_ERROR "grub-mkimage not found - needed for the disk installer payload")
-endif()
 set(INSTALL_BLOB_DIR ${CMAKE_CURRENT_BINARY_DIR}/install_blobs)
+if(GRUB_MKIMAGE)
+    set(INSTALL_BLOBS_ARGS bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_install_blobs.sh ${INSTALL_BLOB_DIR})
+else()
+    message(WARNING "grub-mkimage not found - disk installer payload will be empty stubs")
+    set(INSTALL_BLOBS_ARGS bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_install_blobs.sh --stub ${INSTALL_BLOB_DIR})
+endif()
 add_custom_command(
     OUTPUT ${INSTALL_BLOB_DIR}/vnu_install_blobs.inc
     COMMAND ${CMAKE_COMMAND} -E make_directory ${INSTALL_BLOB_DIR}
-    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_install_blobs.sh ${INSTALL_BLOB_DIR}
+    COMMAND ${INSTALL_BLOBS_ARGS}
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_install_blobs.sh
     COMMENT "Generating GRUB blobs for the disk installer"
     VERBATIM
@@ -105,14 +137,24 @@ target_compile_options(kernel.elf PRIVATE
 
 set_target_properties(kernel.elf PROPERTIES LINKER_LANGUAGE CXX)
 
-target_link_options(kernel.elf PRIVATE
-    -m32
-    -ffreestanding
-    -nostdlib
-    -static
-    -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker.ld
-    -lgcc
-)
+# В кросс-режиме (прямой ld.lld) флаги — только «настоящие» линкер-флаги;
+# в нативный ld через драйвер gcc опции-пробросы идут как -Wl,-T,...,
+# плюс там подцепляется хостовый libgcc.
+if(VNU_USING_CLANG_CROSS)
+    target_link_options(kernel.elf PRIVATE
+        -static
+        -T ${CMAKE_CURRENT_SOURCE_DIR}/linker.ld
+    )
+else()
+    target_link_options(kernel.elf PRIVATE
+        -m32
+        -ffreestanding
+        -nostdlib
+        -static
+        -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker.ld
+        ${VNU_KERNEL_LIBS}
+    )
+endif()
 
 target_include_directories(kernel.elf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include

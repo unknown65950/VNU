@@ -155,6 +155,19 @@ uint32_t create_address_space(const MapRange* ranges, int count)
                 }
                 meta->pt_frames[meta->pt_frame_count++] = pt_phys;
                 pgdir[pde_idx] = pt_phys | PDE_PRESENT | PDE_RW;
+                /* A fresh page table would wipe this whole 4 MiB window,
+                 * unmapping the kernel BSS/IDT that shares the same PDE
+                 * (e.g. the stack at 0x900000 sits in the same window as
+                 * the IDT at 0xA04022). Seed it with the shared identity
+                 * entries, then let the private frames below override. */
+                uint32_t* seed_pt = reinterpret_cast<uint32_t*>(pt_phys);
+                if (pde_idx < NUM_IDENTITY_PDES) {
+                    for (int k = 0; k < 1024; ++k)
+                        seed_pt[k] = g_identity_pt[pde_idx][k];
+                } else {
+                    for (int k = 0; k < 1024; ++k)
+                        seed_pt[k] = 0;
+                }
             }
             pt = reinterpret_cast<uint32_t*>(pgdir[pde_idx] & ~0xFFFu);
 
