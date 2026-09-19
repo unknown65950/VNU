@@ -9,6 +9,12 @@ char getch_blocking();
 bool scancode_ready();
 uint8_t read_raw_scancode();
 
+/* Discard any bytes already sitting in the keyboard output buffer.
+ * Used by the GUI before re-initialising the aux device, so a stale
+ * keyboard byte left over from an earlier read isn't misread as a
+ * mouse command acknowledgement. */
+void drain_excess();
+
 /* Non-blocking, shift/ctrl-aware character decode (same mapping as
  * getch_blocking, including the K_* pseudo-codes for arrow/home/end/
  * delete above 0x7F) for exactly one pending scancode. Returns -1 if

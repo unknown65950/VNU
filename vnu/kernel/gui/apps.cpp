@@ -75,9 +75,9 @@ void install_one(const char* name, uint8_t color, const uint8_t* data, uint32_t 
     }
 }
 
-/* Big enough for the largest embedded binary we ship (vedit, ~18 KiB);
- * matches vnu::vfs's own per-file DATA_CAP. */
-constexpr uint32_t LOAD_BUF_SIZE = 20480;
+/* Big enough for the largest embedded binary we ship (picview, ~37 KiB
+ * of ELF); matches vnu::vfs's own per-file DATA_CAP. */
+constexpr uint32_t LOAD_BUF_SIZE = 65536;
 uint8_t g_load_buf[LOAD_BUF_SIZE];
 
 } // namespace

@@ -12,7 +12,13 @@ constexpr int MAX_FD = 64;
  * the resulting .bss still ends well below the 0x400000 app-image
  * region (checked after building — see VIBEGRAPHICS_CHANGES.md). */
 constexpr int MAX_N = 96;
-constexpr int DATA_CAP = 20480; /* big enough to hold a small embedded ELF binary */
+/* Every Node carries a full DATA_CAP buffer. 65536 fits the largest
+ * embedded GUI binary (picview is ~37 KiB of ELF; the older 20480 cap
+ * silently truncated it, so the launched image was garbage and the app
+ * "crashed" on entry). With 96 nodes this is ~6 MiB of kernel .bss,
+ * which lives at 0xA00000 (linker.ld) — far below the 0x910000 top of
+ * the user app/stack window. */
+constexpr int DATA_CAP = 65536; /* big enough to hold any embedded ELF binary */
 constexpr int PATH_CAP = 64;
 
 /* Which /proc file a node synthesizes, if any. Content is regenerated

@@ -516,6 +516,7 @@ void run()
 {
     vnu::vgfx::enter_gfx_mode();
     vnu::vgfx::draw_wallpaper();
+    vnu::kbd::drain_excess();
     vnu::mouse::init();
     vnu::wintask::init();
 
@@ -533,7 +534,7 @@ void run()
     for (int i = 0; i < MAX_TASKS; ++i)
         gfx_scale[i] = GFX_DEFAULT_SCALE;
 
-    static uint8_t load_buf[20480];
+    static uint8_t load_buf[65536];
 
     auto raise_window = [&](TaskHandle h) {
         int j = -1;

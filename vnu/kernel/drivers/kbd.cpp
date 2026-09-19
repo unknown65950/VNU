@@ -175,6 +175,12 @@ bool scancode_ready()
     return (status & 0x21) == 0x01;
 }
 
+void drain_excess()
+{
+    while (scancode_ready())
+        (void)inb(0x60);
+}
+
 uint8_t read_raw_scancode()
 {
     return inb(0x60);
