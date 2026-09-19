@@ -599,6 +599,28 @@ KEYS\n\
     Esc closes, Up/Down changes pane, Enter activates it.\n\
     A GUI app.\n"
 
+#define PICVIEW_PAGE "NAME\n\
+    picview - graphical image viewer\n\
+\n\
+SYNOPSIS\n\
+    picview\n\
+\n\
+DESCRIPTION\n\
+    A tiny image viewer for the VNU desktop. Walks the /pics\n\
+    directory, decodes each BMP, PNG or JPEG with the embedded\n\
+    px.h decoder and renders it, colour-quantised to the 16\n\
+    index Catppuccin palette, into the window's client area.\n\
+\n\
+KEYS\n\
+    [ ]   previous / next picture\n\
+    z     toggle zoom (fit window / 1:1)\n\
+    d     toggle ordered dithering\n\
+    Esc   close the window\n\
+\n\
+FILES\n\
+    /pics   directory of embedded demo pictures\n\
+    /apps/picview/bin   the program itself\n"
+
 #define HELLO_PAGE "NAME\n\
     hello - demonstration program\n\
 \n\
@@ -747,6 +769,8 @@ static const struct Page pages[] = {
      FILES_PAGE},
     {"prefs",    "graphical system preferences",
      PREFS_PAGE},
+    {"picview",  "graphical image viewer",
+     PICVIEW_PAGE},
     {"hello",    "demonstration program",
      HELLO_PAGE},
     {"ttytest",  "POSIX compatibility smoke test",

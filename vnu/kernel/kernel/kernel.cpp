@@ -102,6 +102,7 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
     vnu::proc::init();
     vnu::pipe::init();
     vnu::apps::install_demo_apps();
+    vnu::apps::install_demo_pics();
     vnu::ata::init();
     serial_init();
     vnu::tty::init();

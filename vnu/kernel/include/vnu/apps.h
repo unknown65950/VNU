@@ -23,6 +23,10 @@ struct AppEntry {
 
 void install_demo_apps();
 
+// Mounts the demo photograph pack under /pics (one VFS node per image,
+// sourced from the embedded bytes) so picview has content to show.
+void install_demo_pics();
+
 // Scans /apps/ for subdirectories and fills out[] (up to max). Returns
 // the number of apps found.
 int list(AppEntry* out, int max);

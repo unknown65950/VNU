@@ -10,6 +10,13 @@
 #include "../proc/embedded_calc.h"
 #include "../proc/embedded_files.h"
 #include "../proc/embedded_prefs.h"
+#include "../proc/embedded_picview.h"
+#include "../proc/embedded_pic_flower.h"
+#include "../proc/embedded_pic_sunset.h"
+#include "../proc/embedded_pic_logo.h"
+#include "../proc/embedded_pic_gray_alpha.h"
+#include "../proc/embedded_pic_shapes_pal.h"
+#include "../proc/embedded_pic_shapes_rgba.h"
 
 namespace {
 
@@ -85,7 +92,38 @@ void install_demo_apps()
     install_one("term", vnu::vgfx::COLOR_LCYAN, embedded_vash_elf, embedded_vash_elf_size);
     install_one("calc", vnu::vgfx::COLOR_LRED, embedded_calc_elf, embedded_calc_elf_size);
     install_one("files", vnu::vgfx::COLOR_BROWN, embedded_files_elf, embedded_files_elf_size);
+    install_one("picview", vnu::vgfx::COLOR_LMAGENTA, embedded_picview_elf, embedded_picview_elf_size);
     install_one("prefs", vnu::vgfx::COLOR_LBLUE, embedded_prefs_elf, embedded_prefs_elf_size);
+}
+
+/* Mount the demo photograph pack under /pics so picview has something
+ * to show: one VFS node per picture, filled with the embedded bytes. */
+void install_demo_pics()
+{
+    struct Pic {
+        const char* name;
+        const uint8_t* data;
+        uint32_t size;
+    };
+    static const Pic pics[] = {
+        {"flower.bmp", embedded_pic_flower_elf, embedded_pic_flower_elf_size},
+        {"sunset.png", embedded_pic_sunset_elf, embedded_pic_sunset_elf_size},
+        {"logo.jpg", embedded_pic_logo_elf, embedded_pic_logo_elf_size},
+        {"gray_alpha.png", embedded_pic_gray_alpha_elf, embedded_pic_gray_alpha_elf_size},
+        {"shapes_pal.png", embedded_pic_shapes_pal_elf, embedded_pic_shapes_pal_elf_size},
+        {"shapes_rgba.png", embedded_pic_shapes_rgba_elf, embedded_pic_shapes_rgba_elf_size},
+    };
+
+    vnu::vfs::mkdir("/pics");
+    for (const Pic& p : pics) {
+        char path[64];
+        join(path, sizeof(path), "/pics", p.name);
+        int fd = vnu::vfs::open(path, O_WRONLY | O_CREAT | O_TRUNC);
+        if (fd < 0)
+            continue;
+        vnu::vfs::write(fd, p.data, p.size);
+        vnu::vfs::close(fd);
+    }
 }
 
 int list(AppEntry* out, int max)

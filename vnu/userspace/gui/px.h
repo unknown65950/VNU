@@ -15,7 +15,11 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#ifdef VLIBC_TARGET_VNU
+#include <vlibc/stdlib.h>
+#else
 #include <stdlib.h>
+#endif
 
 #define PX_BMP 1
 #define PX_PNG 2
