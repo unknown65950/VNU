@@ -23,8 +23,17 @@
 #include <vlibc/dirent.h>
 #include <vlibc/unistd.h>
 #include <vlibc/string.h>
+#include <vlibc/stdlib.h>
 
 #include "px.h"
+
+/* Decoded RGB888 image. Allocated on the brk heap (not a static BSS
+ * array): the windowed task's app image is capped at 96 KiB of code+
+ * data+.bss (wintask.cpp APP_PAGES=24), so a full VGFX_W x VGFX_H RGB
+ * buffer would overflow it and page-fault the GUI task to death.
+ * Freed and re-allocated each time a picture is loaded. */
+static uint8_t*  g_pic_rgb;
+static int       g_pic_w, g_pic_h;
 
 #define MAX_PICS 16
 #define NAME_CAP 32
@@ -37,9 +46,6 @@ static int   g_sel;
 static int   g_loaded = -1;
 static int   g_zoom;
 static int   g_dither = 1;
-
-static uint8_t g_pic_rgb[3 * VGFX_W * VGFX_H];
-static int     g_pic_w, g_pic_h;
 
 /* Catppuccin Mocha DAC palette (6-bit per channel), mirrors
  * kernel/drivers/vga_gfx.cpp CATT_PAL. */
@@ -119,13 +125,21 @@ static int load_sel(void)
     int fmt = px_probe(data, (unsigned)total, &w, &h);
     if (fmt == PX_NONE || w <= 0 || h <= 0)
         return -1;
-    /* decoded RGB must fit the window-sized render buffer */
-    if (w * h > VGFX_W * VGFX_H || w > VGFX_W * 8 || h > VGFX_H * 8)
+    /* decoded RGB must fit the windowed task's heap (brk region is
+     * 1 MiB, 0x700000..0x800000) — about a window's worth is plenty */
+    if (w * h > VGFX_W * VGFX_H)
         return -1;
 
-    if (px_decode(fmt, data, (unsigned)total, w, h, g_pic_rgb) != 0)
+    uint8_t* rgb = (uint8_t*)malloc((unsigned)(w * h * 3));
+    if (!rgb)
         return -1;
+    if (px_decode(fmt, data, (unsigned)total, w, h, rgb) != 0) {
+        free(rgb);
+        return -1;
+    }
 
+    free(g_pic_rgb);
+    g_pic_rgb = rgb;
     g_pic_w = w;
     g_pic_h = h;
     g_loaded = g_sel;
