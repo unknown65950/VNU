@@ -4,6 +4,7 @@
 #include <vlibc/stdio.h>
 #include <vlibc/fcntl.h>
 #include <vlibc/sys/stat.h>
+#include <vlibc/time.h>
 
 static void show(const char* path)
 {
@@ -33,5 +34,8 @@ int main(void)
     fd = open("/etc/motd", O_RDONLY);
     printf("isatty(/etc/motd)=%d\n", isatty(fd));
     close(fd);
+    long t = time(NULL);
+    printf("time=%ld (expect 0..86399: RTC seconds since midnight)\n", t);
+    printf("uptime=%lu seconds since boot\n", (unsigned long)uptime());
     return 0;
 }

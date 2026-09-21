@@ -36,6 +36,9 @@
 #define VNU_SYS_setgid   32
 #define VNU_SYS_chmod    33
 #define VNU_SYS_chown    34
+#define VNU_SYS_reboot   35
+#define VNU_SYS_time     36
+#define VNU_SYS_uptime   37
 
 #define VNU_EPERM 1
 #define VNU_ENOENT 2

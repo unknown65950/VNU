@@ -1,16 +1,16 @@
 /*
  * vgfx — pixel framebuffer API for VNU gfx-windowed apps.
  *
- * The app renders into a 240x146 pixel buffer and flushes it to
+ * The app renders into a 480x340 pixel buffer and flushes it to
  * the kernel's gfx surface (fd 3).  Mouse clicks over the client
  * area arrive as an escape stream on stdin (fd 0) which vgfx_poll
  * parses into easy-to-use event structs.
  *
  * Protocol (kernel → userspace, on fd 0):
- *   ESC '[' 'M' <button> <px> <py>
+ *   ESC '[' 'M' <button> <xl> <xh> <yl> <yh>
  *   <button>: 1 = left press, 2 = left released
- *   <px>     : 0..239
- *   <py>     : 0..169
+ *   <xl>/<xh>, <yl>/<yh>: little-endian 16-bit client-area pixel
+ *   coordinates (0..479 / 0..339).
  *
  * Keyboard characters arrive as a single byte (no ESC prefix), except
  * Esc (0x1B) which is wrapped as button 3 so the parser never stalls
@@ -18,8 +18,11 @@
  */
 #pragma once
 
-#define VGFX_W 240
-#define VGFX_H 170
+/* 480x340 is a native 8x16 text grid (60 cols x 21 rows), so a gfx
+ * app's text lands at the same physical size as every console window —
+ * the GUI displays this canvas 1:1. */
+#define VGFX_W 480
+#define VGFX_H 340
 #define VGFX_FD 3
 
 /* Palette indices (VGA layout: 0..7 dark-slot names, 8..15 bright-slot

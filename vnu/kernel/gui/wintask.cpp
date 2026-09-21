@@ -24,7 +24,8 @@ using vnu::wintask::MAX_TASKS;
  * physical frames in the task's own address space). Same addresses the
  * apps were always linked for. */
 constexpr uint32_t APP_BASE = 0x00400000;
-constexpr uint32_t APP_PAGES = 24; /* 96 KiB app code+data+.bss */
+constexpr uint32_t APP_PAGES = 64; /* 256 KiB app code+data+.bss
+                                      (a gfx app's fb is 480x340=159 KiB) */
 constexpr uint32_t STACK_BASE = 0x00900000;
 constexpr uint32_t STACK_SIZE = 0x00010000;
 constexpr uint32_t STACK_TOP = STACK_BASE + STACK_SIZE;
@@ -48,11 +49,11 @@ struct Task {
 };
 
 /* The whole task table lives in PMM frames. .bss ends at ~0x3F8000 and
- * each task's Console holds a 40800-byte pixel buffer, so (~41 KiB ×
- * MAX_TASKS) simply doesn't fit below the 4 MiB line. The PMM pool
- * (20-30 MiB) is identity-mapped in *every* page directory, so GUI and
- * tasks alike can always reach this array. It's one contiguous block so
- * we can index it as an array. */
+ * each task's Console holds a 163200-byte pixel buffer (480x340), so
+ * (~160 KiB × MAX_TASKS) simply doesn't fit below the 4 MiB line. The
+ * PMM pool (20-30 MiB) is identity-mapped in *every* page directory, so
+ * GUI and tasks alike can always reach this array. It's one contiguous
+ * block so we can index it as an array. */
 Task* g_tasks = nullptr;
 
 uint32_t g_base_pgdir = 0; /* page directory the GUI's own stack lives in */
@@ -413,6 +414,25 @@ void run_all_slices()
             run_slice(i);
 }
 
+void heartbeat_gfx_tasks()
+{
+    if (!g_tasks)
+        return;
+    for (int i = 0; i < MAX_TASKS; ++i) {
+        Task& t = g_tasks[i];
+        if (!(t.state == State::Runnable || t.state == State::Blocked))
+            continue;
+        if (!t.con.gfx)
+            continue; /* the tick is for pixel apps, not text consoles */
+        Console& c = t.con;
+        int next = (c.in_tail + 1) % INPUT_QUEUE_CAP;
+        if (next == c.in_head)
+            continue; /* queue full, drop the tick rather than a real key */
+        c.input[c.in_tail] = TICK_BYTE;
+        c.in_tail = next;
+    }
+}
+
 void feed_input(TaskHandle h, char ch)
 {
     if (!is_running(h))
@@ -441,8 +461,10 @@ void feed_mouse(TaskHandle h, int button, int px, int py)
     push('[');
     push('M');
     push(static_cast<char>(button));
-    push(static_cast<char>(px));
-    push(static_cast<char>(py));
+    push(static_cast<char>(px & 0xFF));         /* little-endian 16-bit */
+    push(static_cast<char>((px >> 8) & 0xFF));
+    push(static_cast<char>(py & 0xFF));
+    push(static_cast<char>((py >> 8) & 0xFF));
 }
 
 /* --- Gfx surface: fd 3 writes fill the pixel framebuffer --- */

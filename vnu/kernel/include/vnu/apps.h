@@ -3,7 +3,9 @@
 
 // The /apps/ launcher: each app is a real VFS directory
 // /apps/<name>/ containing exactly two files:
-//   icon  — 1 byte, a VGA palette index used to tint the icon glyph
+//   icon  — 2 bytes: a VGA palette index used to tint the icon glyph,
+//           then an IconGlyph id selecting which pictogram the desktop
+//           draws inside the tile (see gui/gui.cpp draw_*_icon).
 //   bin   — the raw ELF binary (small enough to fit vnu::vfs's
 //           per-file capacity, see kernel/fs/vfs.cpp DATA_CAP)
 //
@@ -16,9 +18,24 @@ namespace vnu::apps {
 constexpr int MAX_APPS = 16;
 constexpr int NAME_CAP = 24;
 
+// Per-app desktop pictogram, drawn kernel-side (gui/gui.cpp).
+// ICON_LETTER falls back to the app name's first letter.
+enum IconGlyph {
+    ICON_LETTER = 0,
+    ICON_SMILE,      // hello — happy face
+    ICON_DOC,        // vedit — document with text lines
+    ICON_TERM,       // term — terminal window with prompt
+    ICON_KEYPAD,     // calc — display + key grid
+    ICON_FOLDER,     // files — folder
+    ICON_PICTURE,    // picview — framed sun + mountains
+    ICON_SLIDERS,    // prefs — slider rows
+    ICON_CLOCK,      // clock — analogue face
+};
+
 struct AppEntry {
     char name[NAME_CAP];
     uint8_t icon_color;
+    uint8_t icon_glyph;
 };
 
 void install_demo_apps();

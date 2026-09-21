@@ -86,4 +86,10 @@ int dup2_fd(int oldfd, int newfd);
  * second. Backs the cooperative sleep() syscall. */
 uint32_t uptime_seconds();
 
+/* The RTC wall-clock time as whole seconds since local midnight
+ * (0..86399). Exposed to userspace as the `time` syscall; the GUI
+ * taskbar analog clock and its per-second heartbeat tick read it
+ * directly. */
+uint32_t time_seconds();
+
 } // namespace vnu::vfs

@@ -1,14 +1,13 @@
 /*
- * calc — Windows 3.1-style calculator for VibeGraphics.
+ * calc — a graphical keypad calculator for the VNU desktop.
  *
  * Renders its own pixel framebuffer (via the vgfx library) into the
  * window's client area and reads mouse/keyboard events off stdin.
  * Arithmetic is classic immediate-execution with no operator
- * precedence (like the old Windows Calculator applet):
- *   2 + 3 * 4 = 20 (not 14).
+ * precedence (2 + 3 * 4 = 20, not 14).
  *
- * Layout (Win3.1 keypad): BS CE C / 7 8 9 / 4 5 6 * 1 2 3 -
- * 0 ± . + and a wide = at the bottom.
+ * Layout: BS CE C / 7 8 9 / 4 5 6 * 1 2 3 - 0 ± . + and a wide = at
+ * the bottom.
  *
  * Keys: digits, '.' '+', '-', '*', '/', '=', '+', '%', Backspace, Esc
  * (close the window).

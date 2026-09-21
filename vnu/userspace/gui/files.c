@@ -1,14 +1,18 @@
 /*
- * files — a compact file manager for VibeGraphics.
+ * files — graphical file manager for the VNU desktop.
  *
- * Navigates the kernel's in-memory VFS (/, /bin, /apps, /dev, /proc,
- * /home, /tmp, ...) with a click-through directory list rendered in
- * the compact 8x8 UI face.  Each row shows a type badge, the entry
- * name and (for regular files) its size; clicking a directory enters
- * it, clicking ".." walks back up, and the path is always shown in
- * the header.
+ * Browses the kernel's in-memory VFS (/, /bin, /apps, /dev, /proc,
+ * /home, /tmp, ...). Rows are drawn in the crisp 8x16 VGA face with a
+ * coloured type tile per entry; the selected row gets a full-width
+ * light-blue bar, clicking a directory enters it and ".." walks back
+ * up. The path is shown in the header, the item count in the status
+ * strip.
  *
- * Keys: Esc (close the window), Enter (open the highlighted entry).
+ * Own-house flat look: dark header/status bars, accent tiles, exactly
+ * one glyph height per row — no bevels, no legacy window dressing.
+ *
+ * Keys: j/k select, Enter open, Esc close. Mouse: click to select,
+ * release on the same row to open it.
  */
 #include <vlibc/vgfx.h>
 #include <vlibc/dirent.h>
@@ -19,6 +23,16 @@
 #define MAX_ENTS 32
 #define NAME_LEN 255
 #define PATH_LEN 128
+
+/* Layout: dark header, full-height 16px rows, dark status strip. The
+ * canvas is a native 8x16 grid, so VIS_ROWS is a full column of text. */
+#define HEAD_H 18
+#define ROW_PITCH 16
+#define STATUS_Y (VGFX_H - 17)
+#define VIS_ROWS ((STATUS_Y - HEAD_H) / ROW_PITCH)
+#define NAME_X 15
+#define TILE 8
+#define TILE_Y(r) (HEAD_H + (r) * ROW_PITCH + (ROW_PITCH - TILE) / 2)
 
 struct ent {
     char name[NAME_LEN];
@@ -32,7 +46,7 @@ static int list_n = 0;
 static int scroll = 0;
 static int sel = 0;
 static int error_flag = 0;
-static int hover = -1;
+static int press_row = -1;
 
 static void pcat(char* dst, const char* a, const char* b)
 {
@@ -100,28 +114,34 @@ static void enter_path(const char* p)
     load_dir(cwd);
 }
 
+static void up_dir(char* out)
+{
+    int i = (int)strlen(cwd) - 1;
+    while (i > 0 && cwd[i] != '/')
+        --i;
+    if (i == 0) {
+        out[0] = '/';
+        out[1] = 0;
+        return;
+    }
+    int j = 0;
+    while (j < i) {
+        out[j] = cwd[j];
+        ++j;
+    }
+    out[j] = 0;
+}
+
 static void enter_sel(void)
 {
-    if (sel <= 0) { /* up */
+    if (sel == 0) {
         char parent[PATH_LEN];
-        int i = (int)strlen(cwd) - 1;
-        while (i > 0 && cwd[i] != '/')
-            --i;
-        if (i == 0)
-            parent[0] = '/', parent[1] = 0;
-        else {
-            int j = 0;
-            while (j < i) {
-                parent[j] = cwd[j];
-                ++j;
-            }
-            parent[j] = 0;
-        }
+        up_dir(parent);
         enter_path(parent);
         return;
     }
     int idx = scroll + sel - 1;
-    if (idx >= list_n)
+    if (idx < 0 || idx >= list_n)
         return;
     struct ent* e = &list[idx];
     if (!e->is_dir)
@@ -131,90 +151,142 @@ static void enter_sel(void)
     enter_path(fp);
 }
 
-/* ---- layout ---- */
-#define HDR_H 18
-#define ROW_H 9
-#define BADGE 8
+/* ---- tiny text/flag helpers ---- */
 
-static int row_y(int r)
+static void ncpy_draw(int x, int y, const char* s, int maxch, int color)
 {
-    return HDR_H + r * ROW_H;
+    int i = 0;
+    while (s && s[i] && i < maxch) {
+        vgfx_char(x + i * 8, y, s[i], color);
+        ++i;
+    }
+}
+
+static void draw_tile(int x, int y, int color)
+{
+    vgfx_fill_rect(x, y, TILE, TILE, color);
+    vgfx_rect(x, y, TILE, TILE, VGFX_BLACK);
+}
+
+static void itoa_ul(unsigned long v, char* out)
+{
+    char t[16];
+    int i = 0;
+    do {
+        t[i++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    int j = 0;
+    while (i)
+        out[j++] = t[--i];
+    out[j] = 0;
+}
+
+/* ---- layout ---- */
+
+static int row_has(int r) /* visible row r has something to select? */
+{
+    if (r < 0 || r >= VIS_ROWS)
+        return 0;
+    if (r == 0)
+        return 1;
+    int idx = scroll + r - 1;
+    return idx >= 0 && idx < list_n;
+}
+
+static int sel_max(void)
+{
+    int m = list_n - scroll;
+    if (m < 0)
+        m = 0;
+    return m < VIS_ROWS - 1 ? m : VIS_ROWS - 1;
+}
+
+static int scroll_max(void)
+{
+    int m = list_n - (VIS_ROWS - 1);
+    return m < 0 ? 0 : m;
+}
+
+static void sel_down(void)
+{
+    if (sel < sel_max())
+        ++sel;
+    else if (scroll < scroll_max())
+        ++scroll;
+}
+
+static void sel_up(void)
+{
+    if (sel > 0)
+        --sel;
+    else if (scroll > 0)
+        --scroll;
 }
 
 static void draw(void)
 {
     vgfx_clear(VGFX_LGRAY);
 
-    /* header: path pill */
-    vgfx_fill_rect(0, 0, VGFX_W, HDR_H, VGFX_DGRAY);
-    vgfx_hline(0, HDR_H - 1, VGFX_W, VGFX_BLACK);
-    vgfx_str8(3, 3, cwd, VGFX_WHITE);
+    /* header: current path on a dark bar with a location tile */
+    vgfx_fill_rect(0, 0, VGFX_W, HEAD_H, VGFX_DGRAY);
+    vgfx_hline(0, HEAD_H - 1, VGFX_W, VGFX_BLACK);
+    draw_tile(4, (HEAD_H - TILE) / 2, VGFX_LBLUE);
+    ncpy_draw(NAME_X, 1, cwd, (VGFX_W - NAME_X) / 8, VGFX_WHITE);
 
-    /* up-arrow "button" as first list row */
-    int up_y = row_y(0);
-    vgfx_fill_rect(1, up_y, VGFX_W - 2, ROW_H, VGFX_LBLUE);
-    vgfx_str8(4, up_y + 1, "..  (parent dir)", VGFX_BLACK);
-
-    /* list rows (rom scroll..scroll+visible) */
-    for (int r = 1; r < MAX_ENTS && list_n - scroll + 1 > r; ++r) {
+    /* list rows: row 0 is the parent entry, then scroll..scroll+VIS */
+    for (int r = 0; r < VIS_ROWS; ++r) {
+        if (!row_has(r))
+            continue;
+        int y = HEAD_H + r * ROW_PITCH;
         int idx = scroll + r - 1;
-        if (idx >= list_n)
-            break;
-        struct ent* e = &list[idx];
-        int y = row_y(r);
         int is_sel = (r == sel);
-        if (is_sel) {
-            vgfx_fill_rect(1, y, VGFX_W - 2, ROW_H, VGFX_LBLUE);
-        } else if (hover == r) {
-            vgfx_fill_rect(1, y, VGFX_W - 2, ROW_H, VGFX_LCYAN);
-        }
-        int text_col = (is_sel || hover == r) ? VGFX_BLACK : VGFX_WHITE;
-        vgfx_str8(2, y + 1, e->is_dir ? "d" : "-", text_col);
-        vgfx_str8(BADGE, y + 1, e->name, text_col);
-        if (!e->is_dir) {
-            char sz[16];
-            int i = 0;
-            unsigned long v = e->size;
-            char tmp[16];
-            do {
-                tmp[i++] = (char)('0' + v % 10);
-                v /= 10;
-            } while (v);
-            int j = 0;
-            while (i > 0)
-                sz[j++] = tmp[--i];
-            sz[j] = 0;
-            int tw = vgfx_text_width8(sz);
-            vgfx_str8(VGFX_W - 3 - tw, y + 1, sz, text_col);
+        int col = is_sel ? VGFX_BLACK : VGFX_WHITE;
+        if (is_sel)
+            vgfx_fill_rect(0, y, VGFX_W, ROW_PITCH, VGFX_LBLUE);
+
+        if (r == 0) {
+            draw_tile(4, TILE_Y(0), VGFX_MAGENTA);
+            vgfx_str(NAME_X, y, "..", col);
+            vgfx_str(NAME_X + 16, y, "(parent)", col);
+        } else {
+            struct ent* e = &list[idx];
+            draw_tile(4, TILE_Y(r), e->is_dir ? VGFX_YELLOW : VGFX_LGREEN);
+            int name_cap = (VGFX_W - NAME_X - 4) / 8;
+            if (!e->is_dir)
+                name_cap -= 10; /* reserve space for the size column */
+            ncpy_draw(NAME_X + 8, y, e->name, name_cap, col);
+            if (!e->is_dir) {
+                char sz[16];
+                itoa_ul(e->size, sz);
+                int tw = vgfx_text_width(sz);
+                vgfx_str(VGFX_W - 4 - tw, y, sz, col);
+            }
         }
     }
 
     /* status strip */
-    int sy = VGFX_H - ROW_H;
-    vgfx_fill_rect(0, sy, VGFX_W, ROW_H, VGFX_DGRAY);
-    vgfx_hline(0, sy, VGFX_W, VGFX_BLACK);
-    if (error_flag)
-        vgfx_str8(3, sy + 1, "cannot open directory", VGFX_LRED);
-    else {
-        vgfx_str8(3, sy + 1, "double-click to open", VGFX_WHITE);
+    vgfx_fill_rect(0, STATUS_Y, VGFX_W, VGFX_H - STATUS_Y, VGFX_DGRAY);
+    vgfx_hline(0, STATUS_Y, VGFX_W, VGFX_BLACK);
+    if (error_flag) {
+        vgfx_str(4, STATUS_Y + 1, "cannot open directory", VGFX_LRED);
+    } else {
+        vgfx_str(4, STATUS_Y + 1, "j/k move  enter open", VGFX_WHITE);
         char cnt[16];
-        int i = 0, v = list_n;
-        char tmp[8];
-        do { tmp[i++] = (char)('0' + v % 10); v /= 10; } while (v);
-        int j = 0;
-        while (i > 0) cnt[j++] = tmp[--i];
-        cnt[j] = 0;
-        vgfx_str8(3 + 5 * 8, sy + 1, cnt, VGFX_WHITE);
-        vgfx_str8(3 + 5 * 8 + 1 * 8, sy + 1, "entries", VGFX_WHITE);
+        itoa_ul((unsigned long)list_n, cnt);
+        int cw = vgfx_text_width(cnt);
+        vgfx_str(VGFX_W - 4 - cw, STATUS_Y + 1, cnt, VGFX_WHITE);
+        vgfx_str(VGFX_W - 4 - cw - 2 - 5 * 8, STATUS_Y + 1, "items",
+                 VGFX_LBLUE);
     }
 }
 
 static int hit_row(int py)
 {
-    if (py < HDR_H)
+    if (py < HEAD_H || py >= STATUS_Y)
         return -1;
-    int r = (py - HDR_H) / ROW_H;
-    if (r < 0 || r >= list_n + 1)
+    int r = (py - HEAD_H) / ROW_PITCH;
+    if (r < 0 || r >= VIS_ROWS)
         return -1;
     return r;
 }
@@ -225,35 +297,37 @@ int main(void)
     draw();
     vgfx_flush();
 
-    int was_down = 0;
     for (;;) {
         vgfx_event_t ev;
         vgfx_poll(&ev);
         if (ev.type == VGFX_EV_KEY) {
             if (ev.key == 0x1B)
                 exit(0);
-            if (ev.key == '\n' || ev.key == '\r') {
-                enter_sel();
-                draw();
-                vgfx_flush();
+            else if (ev.key == 'j' || ev.key == 'J')
+                sel_down();
+            else if (ev.key == 'k' || ev.key == 'K')
+                sel_up();
+            else if (ev.key == '\n' || ev.key == '\r') {
+                if (row_has(sel))
+                    enter_sel();
             }
+            draw();
+            vgfx_flush();
         } else if (ev.type == VGFX_EV_PRESS) {
             int r = hit_row(ev.y);
-            if (r >= 0)
+            if (r >= 0 && row_has(r)) {
                 sel = r;
-            was_down = 1;
+                press_row = r;
+            }
             draw();
             vgfx_flush();
         } else if (ev.type == VGFX_EV_RELEASE) {
-            if (was_down) {
+            if (press_row >= 0) {
                 int r = hit_row(ev.y);
-                if (r >= 0 && r == sel) {
-                    if (r == 0)
-                        sel = r; /* ".." */
+                if (r == press_row && row_has(r))
                     enter_sel();
-                }
+                press_row = -1;
             }
-            was_down = 0;
             draw();
             vgfx_flush();
         }

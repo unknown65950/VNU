@@ -59,7 +59,8 @@ void circle(int cx, int cy, int r, uint8_t color);        // outline only
 void fill_circle(int cx, int cy, int r, uint8_t color);
 
 // Nearest-neighbour upscale of an 8-bpp surface into the backbuffer
-// (used to render the 240x170 gfx apps at 2x so their text is readable).
+// (gfx apps draw a native 480x340 canvas shown 1:1; scale > 1 only for
+// large-display resizing).
 void blit_scaled(const uint8_t* src, int sw, int sh, int dx, int dy, int scale);
 
 // Procedural desktop wallpaper (sky + sun + clouds + hills), drawn each

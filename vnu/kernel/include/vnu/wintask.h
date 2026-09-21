@@ -35,17 +35,23 @@ constexpr TaskHandle NO_TASK = -1;
  * task can flip its console into a "gfx" surface by writing pixels to
  * fd 3 (see task_gfx_write): the GUI then renders this buffer 1:1
  * instead of the character grid, and mouse clicks over the client area
- * get delivered to the app as escape-sequence events on stdin. */
-constexpr int GFX_W = 240;
-constexpr int GFX_H = 170;
+ * get delivered to the app as escape-sequence events on stdin.
+ *
+ * The canvas is a native 8x16 two-column pitch: 480x340 = 60 cols x 21
+ * rows of the VGA text face, so a gfx app's text renders at the same
+ * physical size as every console window. The GUI displays it 1:1
+ * (gfx_scale 1); higher scales exist only for large screens. */
+constexpr int GFX_W = 480;
+constexpr int GFX_H = 340;
 
 /* VNU mouse protocol (delivered over the stdin escape stream, one event
  * per message so a partially-queued press can't corrupt the next):
- *   ESC '[' 'M' <button> <x> <y>
- * where <button> is 1 (left pressed) / 2 (left released) and x/y are the
- * click position in client-area pixels. */
+ *   ESC '[' 'M' <button> <xl> <xh> <yl> <yh>
+ * where <button> is 1 (left pressed) / 2 (left released) and the
+ * coordinates are little-endian 16-bit client-area pixels (a 480-wide
+ * canvas no longer fits in one byte). */
 constexpr char MOUSE_ESC = 0x1B;
-constexpr int MOUSE_MSG_LEN = 6;
+constexpr int MOUSE_MSG_LEN = 8;
 
 struct Console {
     /* Text-mode screen: `cell` holds the visible CON_ROWS screen. When a
@@ -106,6 +112,17 @@ void run_all_slices();
 
 // Delivers one keystroke to a task's stdin queue.
 void feed_input(TaskHandle h, char ch);
+
+/* Per-second heartbeat. The GUI feeds TICK_BYTE into every live gfx-mode
+ * task's stdin queue once per RTC-second change, so animation apps (the
+ * desktop clock) can advance their hands even while idle — the task
+ * blocks in its next read, the byte unblocks it, and the app redraws.
+ * It arrives as a plain KEY event to vgfx_poll(); apps that don't want
+ * the tick simply ignore it. Switched off for text-console tasks. */
+enum : char { TICK_BYTE = 0x06 };
+
+// Feeds TICK_BYTE to every live gfx-mode task's input queue.
+void heartbeat_gfx_tasks();
 
 // Delivers a mouse event (button and pixel coordinates) to a task's
 // stdin queue as a VNU mouse protocol message (MOUSE_MSG_LEN bytes).

@@ -28,10 +28,10 @@
 #include "px.h"
 
 /* Decoded RGB888 image. Allocated on the brk heap (not a static BSS
- * array): the windowed task's app image is capped at 96 KiB of code+
- * data+.bss (wintask.cpp APP_PAGES=24), so a full VGFX_W x VGFX_H RGB
- * buffer would overflow it and page-fault the GUI task to death.
- * Freed and re-allocated each time a picture is loaded. */
+ * array): the windowed task's app image is capped at 256 KiB of code+
+ * data+.bss (wintask.cpp APP_PAGES=64), so a full 480x340 RGB buffer
+ * would overflow it and page-fault the GUI task to death. Freed and
+ * re-allocated each time a picture is loaded. */
 static uint8_t*  g_pic_rgb;
 static int       g_pic_w, g_pic_h;
 

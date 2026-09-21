@@ -30,6 +30,9 @@
 #define SYS_getppid VNU_SYS_getppid
 #define SYS_isatty VNU_SYS_isatty
 #define SYS_spawn VNU_SYS_spawn
+#define SYS_reboot VNU_SYS_reboot
+#define SYS_time VNU_SYS_time
+#define SYS_uptime VNU_SYS_uptime
 
 #ifdef __cplusplus
 extern "C" {

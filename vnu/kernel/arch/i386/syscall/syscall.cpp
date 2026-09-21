@@ -15,7 +15,8 @@ struct TrapFrame {
     std::uint32_t eip, cs, eflags;
 };
 
-static void serial_putc(char c)
+extern "C" void vnu_debug_putc(char c);
+void vnu_debug_putc(char c)
 {
     auto inb = [](std::uint16_t p) {
         std::uint8_t v;
@@ -68,7 +69,7 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
             /* VGA once per batch (flush cursor at end) — avoids CRTC lag */
             vnu::tty::write(p, n);
             for (std::uint32_t i = 0; i < n; ++i)
-                serial_putc(p[i]);
+                vnu_debug_putc(p[i]);
             return n;
         }
         return static_cast<std::uint32_t>(
@@ -332,6 +333,17 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
     case VNU_SYS_chown:
         return static_cast<std::uint32_t>(
             vnu::vfs::chown(reinterpret_cast<const char*>(tf->ebx), tf->ecx, tf->edx));
+    case VNU_SYS_reboot: {
+        /* System reset via the keyboard controller (same 8042 route the
+         * GUI "reboot" button uses). Requires root. */
+        if (!vnu::proc::current() || vnu::proc::current()->uid != 0)
+            return static_cast<std::uint32_t>(-VNU_EPERM);
+        for (unsigned i = 0; i < 100000; ++i) /* flush port writes */
+            asm volatile("" ::: "memory");
+        asm volatile("outb %0, %1" : : "a"(static_cast<std::uint8_t>(0xFE)),
+                     "Nd"(static_cast<std::uint16_t>(0x64)));
+        return 0;
+    }
     case VNU_SYS_brk: {
         std::uint32_t req = tf->ebx;
         /* Windowed tasks get their own pre-mapped heap slice
@@ -429,8 +441,20 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
         return static_cast<std::uint32_t>(vnu::install::disk_count());
 
     case VNU_SYS_install:
+        /* Destructive disk write: root only (same gate as reboot). */
+        if (!vnu::proc::current() || vnu::proc::current()->uid != 0)
+            return static_cast<std::uint32_t>(-VNU_EPERM);
         return static_cast<std::uint32_t>(
-            vnu::install::install(static_cast<int>(tf->ebx)));
+            vnu::install::install(static_cast<int>(tf->ebx),
+                                  static_cast<std::uint32_t>(tf->ecx)));
+
+    case VNU_SYS_time:
+        /* Wall clock: seconds since local midnight from the RTC. */
+        return static_cast<std::uint32_t>(vnu::vfs::time_seconds());
+
+    case VNU_SYS_uptime:
+        /* Monotonic-ish uptime (RTC delta, 1 s resolution). */
+        return static_cast<std::uint32_t>(vnu::vfs::uptime_seconds());
 
     default:
         return static_cast<std::uint32_t>(-VNU_ENOSYS);

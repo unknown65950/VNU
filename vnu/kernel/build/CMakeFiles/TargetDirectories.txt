@@ -1,4 +1,0 @@
-/home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles/install_blobs.dir
-/home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles/kernel.elf.dir
-/home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles/edit_cache.dir
-/home/unknown/Документы/vnu_git/vnu/kernel/build/CMakeFiles/rebuild_cache.dir

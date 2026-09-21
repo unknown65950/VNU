@@ -16,7 +16,7 @@ consistent.
 ## Build
 ```bash
 ./tools/build_userspace.sh   # compile userspace + regenerate embedded_*.h
-./build_iso.sh               # cmake kernel build + grub-mkrescue -> vnu/vnu.iso
+./vnu/build_iso.sh           # cmake kernel build + grub-mkrescue -> vnu/vnu.iso
 ```
 
 ## Rules
@@ -39,6 +39,17 @@ consistent.
   do not share a binary slot across unrelated commands. (Reused
   `argv[0]` aliases, e.g. vash as `sh`/`init`/`term`, are the only
   exception.) Shared code goes in a header (`cu.h`) as `static inline`.
+- **No library? Write a POSIX one.** If an application needs a capability
+  for which VNU has no library yet (image decoding, arithmetic helpers,
+  a parser, ...), implement the missing piece as a self-contained POSIX
+  library that any other Unix program — this OS or a host system — could
+  drop in and use unchanged: a freestanding header + implementation with
+  no kernel-only or VNU-only dependencies, entry points that take plain
+  buffers/pointers (no syscalls baked in), and a POSIX-friendly API. The
+  `px.h` image decoder in `vnu/userspace/gui/` is the reference example:
+  byte-for-byte pixel-exact vs. host tools and usable from both sides of
+  the tree. Do not bury the capability inside a single app; put it in a
+  shared library location so every Unix program can reuse it.
 - **No new syscalls without ABI documentation.** New syscall numbers are
   appended in `vnu/kernel/include/vnu/abi.h` and mirrored to
   `vlibc/include/vnu/abi.h`; `vnu/abi/ABI.md` must be updated in the
@@ -48,10 +59,11 @@ consistent.
 - Keep the style of the file you edit: comments in the language it
   already uses, same indentation, no new dependencies.
 - **Build outputs stay untracked.** `vnu/kernel/build/`, `vnu/vnu.iso`,
-  `vnu/iso/boot/kernel.elf`, `sysroot/bin/*`, `sysroot/lib/*` and
+  `vnu/iso/`, `vnu/grub-seed/`, `vnu/.tmp_grub/`, `sysroot/` and
   `vnu/kernel/proc/embedded_*.h` are build artifacts and must never be
   committed. Whenever a build step starts producing a new artifact,
   add it to the repo's `.gitignore` in the same change (a fresh checkout
   regenerates everything via `./tools/build_userspace.sh` followed by
-  `./build_iso.sh`).
+  `./vnu/build_iso.sh`). Artifacts already committed must be removed from
+  the index (`git rm -r --cached`), never from disk.
 - Don't commit secrets.

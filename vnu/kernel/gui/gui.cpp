@@ -4,6 +4,7 @@
 #include <vnu/kbd.h>
 #include <vnu/apps.h>
 #include <vnu/wintask.h>
+#include <vnu/vfs.h>
 
 namespace {
 
@@ -30,7 +31,10 @@ constexpr int ICON_ORIGIN_Y = PANEL_H + 8;
 
 constexpr int GFX_MIN_SCALE = 1;
 constexpr int GFX_MAX_SCALE = 4;
-constexpr int GFX_DEFAULT_SCALE = 2;
+/* Native 1:1: the 480x340 canvas is the same physical size as an 8x16
+ * text grid, so gfx text matches the console windows exactly. Resize
+ * upward for large displays. */
+constexpr int GFX_DEFAULT_SCALE = 1;
 
 /* Resize grip band width, in pixels, along the window's right/bottom. */
 constexpr int RESIZE_W = 12;
@@ -59,23 +63,142 @@ void icon_rect(int index, int& x, int& y)
     y = ICON_ORIGIN_Y + row * ICON_CELL_H;
 }
 
+/* 16x16 pictograms drawn inside each 24x24 app tile (kernel-side, so
+ * every /apps entry gets an artful icon without shipping bitmap data).
+ * All shapes are built from the vgfx primitives; white details sit on
+ * the accent tile behind. Coordinates are relative to the tile origin. */
+
+void glyph_smile(int x, int y)
+{
+    using namespace vnu::vgfx;
+    const int ox = x + 4, oy = y + 4;
+    fill_circle(ox + 8, oy + 8, 6, COLOR_BLACK);        /* face */
+    put_pixel(ox + 5, oy + 6, COLOR_WHITE);             /* eyes */
+    put_pixel(ox + 11, oy + 6, COLOR_WHITE);
+    put_pixel(ox + 4, oy + 9, COLOR_WHITE);             /* smile */
+    put_pixel(ox + 5, oy + 10, COLOR_WHITE);
+    put_pixel(ox + 6, oy + 11, COLOR_WHITE);
+    put_pixel(ox + 7, oy + 11, COLOR_WHITE);
+    put_pixel(ox + 8, oy + 11, COLOR_WHITE);
+    put_pixel(ox + 9, oy + 11, COLOR_WHITE);
+    put_pixel(ox + 10, oy + 11, COLOR_WHITE);
+    put_pixel(ox + 11, oy + 10, COLOR_WHITE);
+    put_pixel(ox + 12, oy + 9, COLOR_WHITE);
+}
+
+void glyph_doc(int x, int y)
+{
+    using namespace vnu::vgfx;
+    const int ox = x + 4, oy = y + 4;
+    rect(ox + 1, oy + 1, 13, 13, COLOR_BLACK);          /* page */
+    fill_rect(ox + 2, oy + 2, 11, 11, COLOR_WHITE);     /* paper */
+    hline(ox + 3, oy + 4, 6, COLOR_BLACK);              /* text lines */
+    hline(ox + 3, oy + 7, 8, COLOR_BLACK);
+    hline(ox + 3, oy + 10, 6, COLOR_BLACK);
+}
+
+void glyph_term(int x, int y)
+{
+    using namespace vnu::vgfx;
+    const int ox = x + 4, oy = y + 4;
+    fill_rect(ox, oy + 1, 16, 14, COLOR_BLACK);         /* window */
+    draw_char8(ox + 1, oy + 7, '>', COLOR_WHITE);       /* prompt */
+    fill_rect(ox + 9, oy + 9, 4, 3, COLOR_LGREEN);      /* cursor block */
+}
+
+void glyph_keypad(int x, int y)
+{
+    using namespace vnu::vgfx;
+    const int ox = x + 4, oy = y + 4;
+    fill_rect(ox + 1, oy + 1, 14, 5, COLOR_WHITE);      /* display */
+    rect(ox + 1, oy + 1, 14, 5, COLOR_BLACK);
+    for (int r = 0; r < 3; ++r)                         /* 3x3 keys */
+        for (int c = 0; c < 3; ++c)
+            fill_rect(ox + 1 + c * 5, oy + 7 + r * 3, 3, 3, COLOR_BLACK);
+}
+
+void glyph_folder(int x, int y)
+{
+    using namespace vnu::vgfx;
+    const int ox = x + 4, oy = y + 4;
+    fill_rect(ox + 1, oy + 2, 4, 2, COLOR_BLACK);       /* tab */
+    fill_rect(ox + 1, oy + 4, 14, 9, COLOR_BLACK);      /* body */
+}
+
+void glyph_picture(int x, int y)
+{
+    using namespace vnu::vgfx;
+    const int ox = x + 4, oy = y + 4;
+    rect(ox + 1, oy + 1, 14, 14, COLOR_BLACK);          /* frame */
+    fill_rect(ox + 2, oy + 2, 12, 12, COLOR_WHITE);     /* scene */
+    fill_circle(ox + 10, oy + 4, 2, COLOR_BLACK);       /* sun */
+    for (int yy = 6; yy <= 12; ++yy) {                  /* left mountain */
+        int hw = yy - 6;
+        hline(ox + 7 - hw, oy + yy, 1 + 2 * hw, COLOR_BLACK);
+    }
+    for (int yy = 9; yy <= 12; ++yy) {                  /* right peak */
+        int hw = yy - 9;
+        hline(ox + 11 - hw, oy + yy, 1 + 2 * hw, COLOR_BLACK);
+    }
+}
+
+void glyph_sliders(int x, int y)
+{
+    using namespace vnu::vgfx;
+    const int ox = x + 4, oy = y + 4;
+    vline(ox + 4, oy + 2, 12, COLOR_BLACK);
+    vline(ox + 11, oy + 2, 12, COLOR_BLACK);
+    fill_rect(ox + 2, oy + 8, 5, 2, COLOR_BLACK);
+    fill_rect(ox + 9, oy + 5, 5, 2, COLOR_BLACK);
+}
+
+void glyph_clock(int x, int y)
+{
+    using namespace vnu::vgfx;
+    const int ox = x + 4, oy = y + 4;
+    fill_circle(ox + 8, oy + 8, 6, COLOR_BLACK);        /* face */
+    hline(ox + 5, oy + 8, 4, COLOR_WHITE);              /* minute */
+    vline(ox + 8, oy + 4, 5, COLOR_WHITE);              /* hour */
+}
+
+/* 24x24 app tile with the accent fill, crisp border and pictogram —
+ * shared by the desktop icons and the taskbar's running-app buttons. */
+void draw_app_tile(int x, int y, const vnu::apps::AppEntry& app)
+{
+    using namespace vnu::vgfx;
+    fill_rect(x, y, ICON_SIZE, ICON_SIZE, app.icon_color);
+    hline(x, y, ICON_SIZE, COLOR_BLACK);
+    vline(x, y, ICON_SIZE, COLOR_BLACK);
+    hline(x, y + ICON_SIZE - 1, ICON_SIZE, COLOR_BLACK);
+    vline(x + ICON_SIZE - 1, y, ICON_SIZE, COLOR_BLACK);
+    hline(x + 1, y + 1, ICON_SIZE - 2, COLOR_WHITE);
+    vline(x + 1, y + 1, ICON_SIZE - 2, COLOR_WHITE);
+    /* 16x16 pictogram, or the first letter for unknown glyphs. */
+    switch (app.icon_glyph) {
+    case vnu::apps::IconGlyph::ICON_SMILE:   glyph_smile(x, y); break;
+    case vnu::apps::IconGlyph::ICON_DOC:     glyph_doc(x, y); break;
+    case vnu::apps::IconGlyph::ICON_TERM:    glyph_term(x, y); break;
+    case vnu::apps::IconGlyph::ICON_KEYPAD:  glyph_keypad(x, y); break;
+    case vnu::apps::IconGlyph::ICON_FOLDER:  glyph_folder(x, y); break;
+    case vnu::apps::IconGlyph::ICON_PICTURE: glyph_picture(x, y); break;
+    case vnu::apps::IconGlyph::ICON_SLIDERS: glyph_sliders(x, y); break;
+    case vnu::apps::IconGlyph::ICON_CLOCK:   glyph_clock(x, y); break;
+    default: {
+        char letter[2] = {app.name[0], 0};
+        draw_char(x + (ICON_SIZE - 8) / 2, y + (ICON_SIZE - 16) / 2,
+                  letter[0], COLOR_BLACK);
+        break;
+    }
+    }
+}
+
 void draw_icons(const vnu::apps::AppEntry* apps, int count)
 {
     using namespace vnu::vgfx;
     for (int i = 0; i < count; ++i) {
         int x, y;
         icon_rect(i, x, y);
-        /* NeXT-style beveled icon tile. */
-        fill_rect(x, y, ICON_SIZE, ICON_SIZE, apps[i].icon_color);
-        hline(x, y, ICON_SIZE, COLOR_BLACK);
-        vline(x, y, ICON_SIZE, COLOR_BLACK);
-        hline(x, y + ICON_SIZE - 1, ICON_SIZE, COLOR_BLACK);
-        vline(x + ICON_SIZE - 1, y, ICON_SIZE, COLOR_BLACK);
-        hline(x + 1, y + 1, ICON_SIZE - 2, COLOR_WHITE);
-        vline(x + 1, y + 1, ICON_SIZE - 2, COLOR_WHITE);
-        /* 8x16 letter vertically centered in the tile. */
-        char letter[2] = {apps[i].name[0], 0};
-        draw_char(x + (ICON_SIZE - 8) / 2, y + (ICON_SIZE - 16) / 2, letter[0], COLOR_BLACK);
+        draw_app_tile(x, y, apps[i]);
         int label_w = text_width(apps[i].name);
         int label_x = x + (ICON_SIZE - label_w) / 2;
         if (label_x < 0)
@@ -109,7 +232,7 @@ void draw_chrome(const Window& win, bool active)
     using namespace vnu::vgfx;
     fill_rect(win.x, win.y, win.w, win.h, COLOR_LGRAY);
     rect(win.x, win.y, win.w, win.h, COLOR_BLACK);
-    /* NeXT-style beveled window edge: light at top/left, dark bottom. */
+    /* Flat chrome: light edge at top/left, dark bottom/right. */
     hline(win.x + 1, win.y + 1, win.w - 2, COLOR_WHITE);
     vline(win.x + 1, win.y + 2, win.h - 3, COLOR_WHITE);
     hline(win.x + 2, win.y + win.h - 2, win.w - 3, COLOR_DGRAY);
@@ -181,9 +304,8 @@ void draw_console_window(const Window& win, const vnu::wintask::Console& con, bo
 
     int cx = win.x + 2;
     int cy = win.y + TITLE_H + 2;
-    /* TEMP-DIAGNOSE: red client == some console output written. */
-    if (con.cur_row > 0 || con.cur_col > 0 || con.hist_n > 0)
-        fill_rect(cx, cy, cols * CELL_W, rows * CELL_H, COLOR_RED);
+    /* Terminal-style client area: white text on black. */
+    fill_rect(cx, cy, cols * CELL_W, rows * CELL_H, COLOR_BLACK);
     (void)rows;
     for (int v = 0; v < rows; ++v) {
         int li = first_li + v;
@@ -192,7 +314,7 @@ void draw_console_window(const Window& win, const vnu::wintask::Console& con, bo
         for (int c = 0; c < cols; ++c) {
             char ch = row[c];
             if (ch != ' ' && ch != 0)
-                draw_char(cx + c * CELL_W, cy + v * CELL_H, ch, COLOR_BLACK);
+                draw_char(cx + c * CELL_W, cy + v * CELL_H, ch, COLOR_WHITE);
         }
     }
 
@@ -203,7 +325,7 @@ void draw_console_window(const Window& win, const vnu::wintask::Console& con, bo
             int v = live_row - first_li;
             int ccx = cx + con.cur_col * CELL_W;
             int ccy = cy + v * CELL_H + CELL_H - 3;
-            hline(ccx, ccy, CELL_W - 1, COLOR_BLACK);
+            hline(ccx, ccy, CELL_W - 1, COLOR_LGRAY);
         }
     }
 
@@ -290,7 +412,27 @@ struct PBtn {
     int handle;
 };
 
-int layout_panel(PBtn* out, int focused)
+/* Matches a window title to /apps/ launcher entry (windows spawned
+ * from the desktop carry the app name as their title). Returns the
+ * app index, or -1 if the window isn't one of the desktop apps. */
+int find_app_by_title(const vnu::apps::AppEntry* apps, int count, const char* title)
+{
+    if (!apps || !title || !*title)
+        return -1;
+    for (int i = 0; i < count; ++i) {
+        int k = 0;
+        while (apps[i].name[k] && title[k] && apps[i].name[k] == title[k])
+            ++k;
+        if (apps[i].name[k] == 0 && title[k] == 0)
+            return i;
+    }
+    return -1;
+}
+
+void draw_panel(const PBtn* out, int n, const vnu::apps::AppEntry* apps, int app_count);
+int layout_panel(PBtn* out, int focused, const vnu::apps::AppEntry* apps, int app_count);
+
+int layout_panel(PBtn* out, int focused, const vnu::apps::AppEntry* apps, int app_count)
 {
     using namespace vnu::vgfx;
     int n = 0;
@@ -311,14 +453,21 @@ int layout_panel(PBtn* out, int focused)
     out[n++] = {x, y, w2, BTN_H, PB::Reboot, -1};
     x += w2 + 4;
 
-    /* Running-app list: one button per open window ("active windows"). */
+    /* Running-app list: one button per open window ("active windows").
+     * Known /apps/ entries get a square icon tile; anything else falls
+     * back to a text button so off-launcher windows stay reachable. */
     for (int h = 0; h < MAX_TASKS && n < 24; ++h) {
         if (!vnu::wintask::has_window(h))
             continue;
         const char* title = vnu::wintask::console(h) ? vnu::wintask::console(h)->title : "";
-        w2 = text_width(title) + 12;
-        out[n++] = {x, y, w2, BTN_H, PB::App, h};
-        x += w2 + 3;
+        if (find_app_by_title(apps, app_count, title) >= 0) {
+            out[n++] = {x, y, ICON_SIZE + 2, BTN_H, PB::App, h};
+            x += ICON_SIZE + 2 + 3;
+        } else {
+            w2 = text_width(title) + 12;
+            out[n++] = {x, y, w2, BTN_H, PB::App, h};
+            x += w2 + 3;
+        }
     }
 
     /* --- Right cluster --- */
@@ -354,7 +503,7 @@ int hit_panel(const PBtn* out, int n, int mx, int my)
 }
 
 void draw_clock(int cx, int cy, int r);
-void draw_panel(const PBtn* out, int n)
+void draw_panel(const PBtn* out, int n, const vnu::apps::AppEntry* apps, int app_count)
 {
     using namespace vnu::vgfx;
     fill_rect(0, 0, WIDTH, PANEL_H, COLOR_LGRAY);
@@ -391,16 +540,28 @@ void draw_panel(const PBtn* out, int n)
             draw_string(b.x + 5, b.y + 5, b.kind == PB::Reboot ? "Reboot" : "Exit",
                         COLOR_WHITE);
             break;
-        case PB::App:
-            fill_rect(b.x, b.y, b.w, b.h, COLOR_DGRAY);
-            hline(b.x, b.y, b.w, COLOR_WHITE);
-            vline(b.x, b.y, b.h, COLOR_WHITE);
-            hline(b.x, b.y + b.h - 1, b.w, COLOR_BLACK);
-            vline(b.x + b.w - 1, b.y, b.h, COLOR_BLACK);
-            draw_string(b.x + 5, b.y + 5,
-                        vnu::wintask::console(b.handle) ? vnu::wintask::console(b.handle)->title : "",
-                        COLOR_WHITE);
+        case PB::App: {
+            int ai = find_app_by_title(apps, app_count,
+                                       vnu::wintask::console(b.handle)
+                                           ? vnu::wintask::console(b.handle)->title
+                                           : "");
+            if (ai >= 0) {
+                /* Running-app icon: the same tile the desktop shows. */
+                draw_app_tile(b.x + 1, b.y + 1, apps[ai]);
+            } else {
+                fill_rect(b.x, b.y, b.w, b.h, COLOR_DGRAY);
+                hline(b.x, b.y, b.w, COLOR_WHITE);
+                vline(b.x, b.y, b.h, COLOR_WHITE);
+                hline(b.x, b.y + b.h - 1, b.w, COLOR_BLACK);
+                vline(b.x + b.w - 1, b.y, b.h, COLOR_BLACK);
+                draw_string(b.x + 5, b.y + 5,
+                            vnu::wintask::console(b.handle)
+                                ? vnu::wintask::console(b.handle)->title
+                                : "",
+                            COLOR_WHITE);
+            }
             break;
+        }
         case PB::None:
             draw_string(b.x + 4, b.y + 5,
                         vnu::wintask::console(b.handle) ? vnu::wintask::console(b.handle)->title : "",
@@ -647,12 +808,22 @@ void run()
 
     PBtn panel_btns[24];
     int panel_n = 0;
+    uint32_t last_tick_sod = 0;
 
     for (;;) {
         /* Give every live task a burst; each either blocks on empty
          * input or exits, so this always comes straight back. */
         vnu::wintask::run_all_slices();
         sweep_finished();
+
+        /* One per-second tick for every gfx-mode window (the analog
+         * clock app animates from it). The RTC is the only clock, so on
+         * a second boundary we wake each pixel task once with TICK_BYTE. */
+        uint32_t sod = vnu::vfs::time_seconds();
+        if (sod != last_tick_sod) {
+            last_tick_sod = sod;
+            vnu::wintask::heartbeat_gfx_tasks();
+        }
 
         int key = vnu::kbd::poll_char();
         if (key >= 0) {
@@ -689,7 +860,7 @@ void run()
             left_was_down = left_down;
 
             if (just_pressed) {
-                panel_n = layout_panel(panel_btns, focused);
+                panel_n = layout_panel(panel_btns, focused, apps, app_count);
                 int pb = hit_panel(panel_btns, panel_n, mx, my);
                 if (pb >= 0) {
                     const PBtn& b = panel_btns[pb];
@@ -891,8 +1062,8 @@ void run()
                 draw_console_window(win, *con, h == focused);
         }
 
-        panel_n = layout_panel(panel_btns, focused);
-        draw_panel(panel_btns, panel_n);
+        panel_n = layout_panel(panel_btns, focused, apps, app_count);
+        draw_panel(panel_btns, panel_n, apps, app_count);
 
         vnu::vgfx::draw_cursor(mx, my, vnu::vgfx::COLOR_BLACK);
         vnu::vgfx::present();

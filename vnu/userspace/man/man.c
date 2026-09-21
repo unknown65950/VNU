@@ -177,16 +177,30 @@ DESCRIPTION\n\
     used for NAME. Identical in behaviour to type.\n"
 
 #define INSTALL_PAGE "NAME\n\
-    install - write the VNU system image to a disk\n\
+    install - install the VNU system image onto a disk\n\
 \n\
 SYNOPSIS\n\
-    install [DRIVE]\n\
+    install [DRIVE [SIZE_MIB]]\n\
 \n\
 DESCRIPTION\n\
-    Copies a bootable VNU image onto virtual disk DRIVE (default\n\
-    0, see VNU_SYS_blkcount for how many are present). This is\n\
-    what a distro 'sysinst' would be. Requires root. After a\n\
-    successful write, reboot from the target disk.\n\
+    With no arguments, install launches a full-screen interactive wizard\n\
+    in the style of the classic Windows Setup / FreeBSD sysinstall /\n\
+    Slackware setup screens. It lets you pick the target disk (from\n\
+    /proc/disks), choose the partition size in MiB, review the chosen\n\
+    parameters, confirm the destructive write and finally reboot. Blue\n\
+    screens use the console's ANSI color support.\n\
+\n\
+    With arguments, install runs non-interactively: DRIVE is the disk\n\
+    index (0..N-1, see VNU_SYS_blkcount or /proc/disks) and SIZE_MIB is\n\
+    the partition size in MiB (0 or omitted = the whole usable disk).\n\
+\n\
+    The write itself is performed by the kernel (syscall VNU_SYS_install,\n\
+    30): it stamps the MBR + GRUB core image and creates a FAT16\n\
+    partition at LBA 2048 holding /boot/kernel.elf and a GRUB config so\n\
+    the disk boots standalone. This is what a distro 'sysinst' would be.\n\
+\n\
+    Requires root. After a successful write, reboot from the target\n\
+    disk (with no arguments the wizard offers to reboot for you).\n\
 \n\
     Standalone binary /bin/install.\n"
 
@@ -555,9 +569,9 @@ SYNOPSIS\n\
     calc\n\
 \n\
 DESCRIPTION\n\
-    A Windows 3.1-style calculator GUI app. Arithmetic follows\n\
-    immediate execution without operator precedence, so 2 + 3 * 4\n\
-    is 20, not 14.\n\
+    A graphical keypad calculator for the VNU desktop. Arithmetic\n\
+    follows immediate execution without operator precedence, so\n\
+    2 + 3 * 4 is 20, not 14.\n\
 \n\
 KEYS\n\
     digits 0-9, . + - * / % and = operators, Backspace to clear\n\
@@ -573,11 +587,16 @@ SYNOPSIS\n\
 DESCRIPTION\n\
     A click-through directory browser over the in-memory VFS\n\
     (/, /bin, /apps, /dev, /proc, /home, /tmp, ...). Each row\n\
-    shows a type badge, the entry name and, for files, the\n\
-    size; clicking a directory enters it and '..' walks back up.\n\
+    shows a coloured type tile, the entry name and, for files, the\n\
+    size: yellow tiles for directories, green for files, magenta\n\
+    for the parent entry. The selected row is a full-width\n\
+    light-blue bar.\n\
 \n\
 KEYS\n\
-    Esc closes the window, Enter opens the highlighted entry.\n\
+    j/k      move up and down\n\
+    Enter    open the selected directory\n\
+    Esc      close the window\n\
+    Mouse: click to select, release on the same row to open.\n\
     A GUI app (see man calc for how GUI apps are launched).\n"
 
 #define PREFS_PAGE "NAME\n\
@@ -587,16 +606,16 @@ SYNOPSIS\n\
     prefs\n\
 \n\
 DESCRIPTION\n\
-    A NeXTSTEP-style preferences window split into a pane\n\
-    selector (left) and a content area (right):\n\
+    A preferences window split into a pane selector (left)\n\
+    and a content area (right):\n\
 \n\
       About   OS identification (utsname, /proc/version)\n\
       Memory  live totals from /proc/meminfo and /proc/uptime\n\
       Mounts  mounted filesystems from /proc/mounts\n\
-      Info    /proc/cpuinfo snippet\n\
+      CPU     /proc/cpuinfo snippet\n\
 \n\
 KEYS\n\
-    Esc closes, Up/Down changes pane, Enter activates it.\n\
+    j/k switch pane, Esc closes. Click a pane to select it.\n\
     A GUI app.\n"
 
 #define PICVIEW_PAGE "NAME\n\
@@ -620,6 +639,37 @@ KEYS\n\
 FILES\n\
     /pics   directory of embedded demo pictures\n\
     /apps/picview/bin   the program itself\n"
+
+#define CLOCK_PAGE "NAME\n\
+    clock - analog clock, stopwatch and countdown timer\n\
+\n\
+SYNOPSIS\n\
+    clock\n\
+\n\
+DESCRIPTION\n\
+    A graphical clock for the VNU desktop, rewritten from scratch (in\n\
+    C) after the classic clock-tui: an analog face over the `time`\n\
+    syscall (RTC, one-second resolution) with a digital read-out, a\n\
+    stopwatch and a countdown timer. The desktop advances it once per\n\
+    second through the GUI heartbeat; Esc closes the window.\n\
+\n\
+KEYS\n\
+    1 2 3      switch mode: Clock / Stopwatch / Timer\n\
+    Space      start or pause the stopwatch, start or pause the timer\n\
+    r          reset the stopwatch or the timer\n\
+    l          record a lap (stopwatch mode)\n\
+    Esc        close the window\n\
+\n\
+MOUSE\n\
+    Click the mode tabs to switch modes and the on-screen buttons to\n\
+    start, pause, lap, reset or tweak the timer duration.\n\
+\n\
+SYSCALLS\n\
+    time      seconds since midnight from the RTC (0..86399)\n\
+    uptime    whole seconds since boot (RTC-delta)\n\
+\n\
+FILES\n\
+    /apps/clock/bin   the program itself\n"
 
 #define HELLO_PAGE "NAME\n\
     hello - demonstration program\n\
@@ -771,6 +821,8 @@ static const struct Page pages[] = {
      PREFS_PAGE},
     {"picview",  "graphical image viewer",
      PICVIEW_PAGE},
+    {"clock",    "analog clock, stopwatch and timer",
+     CLOCK_PAGE},
     {"hello",    "demonstration program",
      HELLO_PAGE},
     {"ttytest",  "POSIX compatibility smoke test",

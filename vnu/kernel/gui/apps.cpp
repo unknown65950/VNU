@@ -11,6 +11,7 @@
 #include "../proc/embedded_files.h"
 #include "../proc/embedded_prefs.h"
 #include "../proc/embedded_picview.h"
+#include "../proc/embedded_clock.h"
 #include "../proc/embedded_pic_flower.h"
 #include "../proc/embedded_pic_sunset.h"
 #include "../proc/embedded_pic_logo.h"
@@ -52,7 +53,8 @@ void join(char* out, int cap, const char* a, const char* b)
     str_copy(out + n, b, cap - n);
 }
 
-void install_one(const char* name, uint8_t color, const uint8_t* data, uint32_t size)
+void install_one(const char* name, uint8_t color, uint8_t glyph,
+                 const uint8_t* data, uint32_t size)
 {
     char dir[64];
     join(dir, sizeof(dir), "/apps", name);
@@ -62,7 +64,8 @@ void install_one(const char* name, uint8_t color, const uint8_t* data, uint32_t 
     join(icon_path, sizeof(icon_path), dir, "icon");
     int fd = vnu::vfs::open(icon_path, O_WRONLY | O_CREAT | O_TRUNC);
     if (fd >= 0) {
-        vnu::vfs::write(fd, &color, 1);
+        const uint8_t icon[2] = { color, glyph };
+        vnu::vfs::write(fd, icon, 2);
         vnu::vfs::close(fd);
     }
 
@@ -87,13 +90,14 @@ namespace vnu::apps {
 void install_demo_apps()
 {
     vnu::vfs::mkdir("/apps");
-    install_one("hello", vnu::vgfx::COLOR_LGREEN, embedded_hello_elf, embedded_hello_elf_size);
-    install_one("vedit", vnu::vgfx::COLOR_YELLOW, embedded_vedit_elf, embedded_vedit_elf_size);
-    install_one("term", vnu::vgfx::COLOR_LCYAN, embedded_vash_elf, embedded_vash_elf_size);
-    install_one("calc", vnu::vgfx::COLOR_LRED, embedded_calc_elf, embedded_calc_elf_size);
-    install_one("files", vnu::vgfx::COLOR_BROWN, embedded_files_elf, embedded_files_elf_size);
-    install_one("picview", vnu::vgfx::COLOR_LMAGENTA, embedded_picview_elf, embedded_picview_elf_size);
-    install_one("prefs", vnu::vgfx::COLOR_LBLUE, embedded_prefs_elf, embedded_prefs_elf_size);
+    install_one("hello", vnu::vgfx::COLOR_LGREEN, IconGlyph::ICON_SMILE, embedded_hello_elf, embedded_hello_elf_size);
+    install_one("vedit", vnu::vgfx::COLOR_YELLOW, IconGlyph::ICON_DOC, embedded_vedit_elf, embedded_vedit_elf_size);
+    install_one("term", vnu::vgfx::COLOR_LCYAN, IconGlyph::ICON_TERM, embedded_vash_elf, embedded_vash_elf_size);
+    install_one("calc", vnu::vgfx::COLOR_LRED, IconGlyph::ICON_KEYPAD, embedded_calc_elf, embedded_calc_elf_size);
+    install_one("files", vnu::vgfx::COLOR_YELLOW, IconGlyph::ICON_FOLDER, embedded_files_elf, embedded_files_elf_size);
+    install_one("picview", vnu::vgfx::COLOR_LMAGENTA, IconGlyph::ICON_PICTURE, embedded_picview_elf, embedded_picview_elf_size);
+    install_one("prefs", vnu::vgfx::COLOR_LBLUE, IconGlyph::ICON_SLIDERS, embedded_prefs_elf, embedded_prefs_elf_size);
+    install_one("clock", vnu::vgfx::COLOR_LGREEN, IconGlyph::ICON_CLOCK, embedded_clock_elf, embedded_clock_elf_size);
 }
 
 /* Mount the demo photograph pack under /pics so picview has something
@@ -154,14 +158,19 @@ int list(AppEntry* out, int max)
             join(dir, sizeof(dir), "/apps", de->name);
             join(icon_path, sizeof(icon_path), dir, "icon");
             uint8_t color = vnu::vgfx::COLOR_LGRAY;
+            uint8_t glyph = IconGlyph::ICON_LETTER;
             int ifd = vnu::vfs::open(icon_path, O_RDONLY);
             if (ifd >= 0) {
-                uint8_t b;
-                if (vnu::vfs::read(ifd, &b, 1) == 1)
-                    color = b;
+                uint8_t b[2];
+                int got = vnu::vfs::read(ifd, b, 2);
+                if (got >= 1)
+                    color = b[0];
+                if (got >= 2)
+                    glyph = b[1];
                 vnu::vfs::close(ifd);
             }
             out[count].icon_color = color;
+            out[count].icon_glyph = glyph;
             ++count;
         }
         off += de->reclen;

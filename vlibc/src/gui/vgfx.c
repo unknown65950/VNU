@@ -1,14 +1,16 @@
 /*
  * vgfx — pixel framebuffer + input helper for VNU gfx-windowed apps.
  *
- * The app draws into a private 240x146 pixel buffer using the vgfx_*
+ * The app draws into a private 480x340 pixel buffer using the vgfx_*
  * primitives, then calls vgfx_flush() to push it to the kernel's gfx
  * surface (fd 3, an /dev/fb-like pipe: lseek(3,0) then write(3,...
  * VGFX_W*VGFX_H)).
  *
  * Mouse events come back through stdin as:
- *   ESC '[' 'M' <button> <px> <py>
- * vgfx_poll() parses that stream and returns vgfx_event_t structs.
+ *   ESC '[' 'M' <button> <xl> <xh> <yl> <yh>
+ * (little-endian 16-bit coordinates; a 480-wide canvas doesn't fit in
+ * a single byte). vgfx_poll() parses that stream and returns
+ * vgfx_event_t structs.
  */
 #include <vlibc/vgfx.h>
 #include <vlibc/vgfx_font.h>
@@ -135,17 +137,18 @@ void vgfx_flush(void)
     write(VGFX_FD, fb, (unsigned long)(VGFX_W * VGFX_H));
 }
 
-/* --- Input: parse the ESC '[ 'M' button px py mouse stream on fd 0 --- */
+/* --- Input: parse the ESC '[' 'M' btn xl xh yl yh stream on fd 0 --- */
 
 int vgfx_poll(vgfx_event_t* ev)
 {
-    enum { S_IDLE, S_ESC, S_BRACKET, S_M, S_BTN, S_X } state = S_IDLE;
+    enum { S_IDLE, S_ESC, S_BRACKET, S_M, S_BTN, S_XLO, S_XHI,
+           S_YLO } state = S_IDLE;
     ev->type = VGFX_EV_NONE;
     ev->x = ev->y = 0;
     ev->button = 0;
     ev->key = 0;
 
-    /* Because feed_mouse() enqueues all six bytes of a message
+    /* Because feed_mouse() enqueues all eight bytes of a message
      * atomically, a byte stream that starts "ESC [" always finishes. */
     for (;;) {
         char b;
@@ -185,11 +188,19 @@ int vgfx_poll(vgfx_event_t* ev)
             state = S_BTN;
             break;
         case S_BTN:
-            ev->x = (int)(unsigned char)b;
-            state = S_X;
+            ev->x = (int)(unsigned char)b; /* x low byte */
+            state = S_XLO;
             break;
-        case S_X:
-            ev->y = (int)(unsigned char)b;
+        case S_XLO:
+            ev->x |= (int)(unsigned char)b << 8; /* x high byte */
+            state = S_XHI;
+            break;
+        case S_XHI:
+            ev->y = (int)(unsigned char)b; /* y low byte */
+            state = S_YLO;
+            break;
+        case S_YLO:
+            ev->y |= (int)(unsigned char)b << 8; /* y high byte */
             if (ev->button == 1)
                 ev->type = VGFX_EV_PRESS;
             else if (ev->button == 2)

@@ -736,3 +736,39 @@ windowed terminal, followed by another command and `exit`, confirming
 the eighth drop's terminal-respawn fix and this new applet don't
 interact badly. Full shell regression (repeated `ls`, `cd` through
 `/apps/`, history recall) stayed clean.
+
+## Tenth drop: own-house flat GUI style + 1:1 HiDPI canvas
+
+The two demo GUI apps (`files`, `prefs`) used to copy NeXT and Windows
+3.1 styling (flat gray, thin single-pixel borders, 8x8 icons, cramped
+8-row lists). Per the style directive — "forget NeXT and Windows 3.1,
+mold our own system" — both were rewritten in an own-house flat look:
+dark header/status bars, colored tiles, full-width selection bar,
+8x16 face only. Along the way the root cause of them looking
+"pixelated/giant" turned out to be architectural, not cosmetic:
+
+- **The gfx canvas was 240x170 and the WM upscaled it 2x**, turning
+  every 8x16 glyph into 16x32 — twice the size of native console text.
+  The canvas is now **480x340 (= 60 cols x 21 rows of the 8x16 face)
+  and windows display it 1:1**, so gfx-app text matches the console
+  exactly. The on-screen window geometry is unchanged (488x372).
+- **The mouse protocol grew from one byte to two** per coordinate:
+  `ESC [ M <btn> <xl> <xh> <yl> <yh>` (little-endian u16, 8 bytes
+  total, enqueued atomically behind `MOUSE_MSG_LEN`) because 480
+  doesn't fit in 8 bits. Kernel encoder (`wintask.cpp feed_mouse`) and
+  userspace parser (`vgfx.c`) were changed together and stay in sync
+  via the shared header docs.
+- **App budget raised to 64 pages** (`APP_PAGES` 24 -> 64, 256 KiB):
+  a gfx app's static `fb[480*340]` (159 KiB of `.bss`) no longer fits
+  in the old 96 KiB app-image mapping. `MAX_FRAMES_PER_SPACE`
+  (app + stack + 1 MiB heap = 336 pinned frames/task) was raised
+  320 -> 512 to match; the old cap silently made `create_address_space`
+  fail and apps simply never opened.
+- **Userspace moved to the new layout:** `files.c` (19 visible rows,
+  j/k navigation, full-width selection, parent tile), `prefs.c`
+  (selector panes About/Memory/Mounts/CPU with colored tiles,
+  wider 92-px column), both with updated `man(1)` pages; `calc` and
+  `picview` are layout-macro-driven so they picked up 1:1 text with no
+  layout changes.
+- Verified: userspace + kernel build clean (no new warnings), ISO
+  regenerated. QEMU screenshot check outstanding.

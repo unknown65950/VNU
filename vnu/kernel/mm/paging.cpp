@@ -32,7 +32,11 @@ alignas(4096) uint32_t g_kernel_pgdir[1024];
 uint32_t g_current_pgdir = 0;
 
 constexpr int MAX_ADDRESS_SPACES = 16;
-constexpr int MAX_FRAMES_PER_SPACE = 320;
+/* Frames pinned per private address space: app region (64 pages) +
+ * stack (16) + heap (BRK 1 MiB = 256) = 336, with a little headroom.
+ * Each entry is a 4-byte frame number, so the meta table below stays
+ * well under a page. */
+constexpr int MAX_FRAMES_PER_SPACE = 512;
 constexpr int MAX_PRIVATE_PDES_PER_SPACE = 4;
 
 struct AddrSpaceMeta {

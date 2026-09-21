@@ -33,6 +33,7 @@ echo "==> userspace"
 "$VCC" "$ROOT/vnu/userspace/gui/files.c" -o "$ROOT/sysroot/bin/files"
 "$VCC" "$ROOT/vnu/userspace/gui/prefs.c" -o "$ROOT/sysroot/bin/prefs"
 "$VCC" "$ROOT/vnu/userspace/gui/picview.c" -o "$ROOT/sysroot/bin/picview"
+"$VCC" "$ROOT/vnu/userspace/gui/clock.c" -o "$ROOT/sysroot/bin/clock"
 "$VCC" "$ROOT/vnu/userspace/examples/hello/hello.c" -o "$ROOT/sysroot/bin/hello"
 "$VCC" "$ROOT/vnu/userspace/examples/ttytest.c" -o "$ROOT/sysroot/bin/ttytest"
 "$VCC" "$ROOT/vnu/userspace/man/man.c" -o "$ROOT/sysroot/bin/man"
@@ -52,6 +53,7 @@ embed "$ROOT/sysroot/bin/calc" calc
 embed "$ROOT/sysroot/bin/files" files
 embed "$ROOT/sysroot/bin/prefs" prefs
 embed "$ROOT/sysroot/bin/picview" picview
+embed "$ROOT/sysroot/bin/clock" clock
 embed "$ROOT/vnu/userspace/gui/pics/flower.bmp" pic_flower
 embed "$ROOT/vnu/userspace/gui/pics/sunset.png" pic_sunset
 embed "$ROOT/vnu/userspace/gui/pics/logo.jpg" pic_logo

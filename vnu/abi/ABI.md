@@ -47,12 +47,33 @@ must never be renumbered.
 | 32 | setgid |
 | 33 | chmod  |
 | 34 | chown  |
+| 35 | reboot |
+| 36 | time   |
+| 37 | uptime |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
 with `-1` leaves a field unchanged; only root may chown.
 
-### Future (append-only, start at 35)
+### Notes on argument shapes
+- `blkcount(ebx)` — returns the number of ATA disks the installer sees.
+- `install(ebx, ecx)` — `ebx` is the target ATA disk index; `ecx` is the
+  partition size in MiB (0 = as much as the disk/FAT16 allows). Returns 0
+  or a negative errno. Root only — the write is destructive.
+- `reboot()` — triggers a system reset via the 8042 keyboard controller.
+  Root only.
+- `time()` — returns the RTC wall-clock time as whole seconds since local
+  midnight (0..86399). BCD-aware; the kernel's only clock is the CMOS RTC.
+- `uptime()` — returns whole seconds since boot, measured as a delta of
+  `time()` against a boot-time snapshot (so it wraps every local midnight;
+  one-second resolution, no timer interrupt). Backs the analog-clock GUI
+  apps' stopwatch/timer elapsed-time readings.
+
+### Removed
+
+Not applicable — numbers are never reused; old gaps stay reserved.
+
+### Future (append-only, start at 38)
 
 Unsupported calls return `-VNU_ENOSYS`.
 

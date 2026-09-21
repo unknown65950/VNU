@@ -119,6 +119,7 @@ build_vlibc() {
         src/unistd/spawn.c
         src/dirent/dirent.c
         src/gui/vgfx.c
+        src/time/time.c src/time/uptime.c
         src/stdio/putchar.c src/stdio/puts.c src/stdio/printf.c
         src/string/strlen.c src/string/strcpy.c src/string/strncpy.c
         src/string/strcmp.c src/string/strncmp.c src/string/memcpy.c src/string/memset.c

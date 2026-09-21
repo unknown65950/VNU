@@ -45,7 +45,7 @@ int disk_count()
     return vnu::ata::drive_count();
 }
 
-int install(int drive)
+int install(int drive, uint32_t size_mib)
 {
     if (drive < 0 || drive >= vnu::ata::drive_count())
         return -22; // EINVAL
@@ -53,9 +53,24 @@ int install(int drive)
     uint32_t total = vnu::ata::drive(drive).sectors;
     if (total <= PART_START + 8192)
         return -28; // ENOSPC: disk far too small
-    uint32_t part_sectors = total - PART_START;
-    if (part_sectors > MAX_PART_SECTORS)
-        part_sectors = MAX_PART_SECTORS;
+
+    // Partition size: explicit MiB (1 MiB = 2048 sectors), or the whole
+    // usable disk when size_mib is 0. An explicit size that cannot fit
+    // the disk is an error; an explicit size above the FAT16 ceiling is
+    // clamped down to it (same ceiling the "whole disk" path uses).
+    uint32_t part_sectors;
+    if (size_mib == 0) {
+        part_sectors = total - PART_START;
+        if (part_sectors > MAX_PART_SECTORS)
+            part_sectors = MAX_PART_SECTORS;
+    } else {
+        const uint64_t wanted = static_cast<uint64_t>(size_mib) * 2048;
+        if (wanted < 2048 || wanted > static_cast<uint64_t>(total - PART_START))
+            return -22; // EINVAL
+        part_sectors = static_cast<uint32_t>(wanted > MAX_PART_SECTORS
+                                                 ? MAX_PART_SECTORS
+                                                 : wanted);
+    }
 
     // 1) MBR: the GRUB boot image plus our partition table.
     vnu::tty::write_cstr("install: writing boot loader\n");

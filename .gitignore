@@ -1,25 +1,24 @@
 # Build outputs — anything produced by ./tools/build_userspace.sh or
-# ./build_iso.sh must be ignored, not committed. If a build step starts
+# ./vnu/build_iso.sh must be ignored, not committed. If a build step starts
 # producing a new artifact, add it here (see AGENTS.md).
 
 # Kernel CMake build tree
 vnu/kernel/build/
 
-# Staged ISO payload and final image
-vnu/iso/boot/kernel.elf
-vnu/iso/boot/grub/i386-pc/
-vnu/iso/efi.img
+# Staged ISO payload and final image (the whole staging dir is generated)
+vnu/iso/
 vnu/vnu.iso
 
 # GRUB boot blobs extracted from a grub-mkrescue ISO for the portable
 # (xorriso-only) ISO builder used on hosts without grub tools (Termux).
 vnu/grub-seed/
 
-# Compiled userspace ELFs + binary blobs embedded into the kernel
-sysroot/bin/
-sysroot/lib/*.o
-sysroot/lib/*.a
-sysroot/lib/.vlibc.stamp
+# Scratch dir used while regenerating the grub-seed (grub-mkrescue temp)
+vnu/.tmp_grub/
+
+# Compiled userspace ELFs + the vcc sysroot (headers are mirrors of
+# vlibc/include) and the kernel .bss blobs embedded from them
+sysroot/
 vnu/kernel/proc/embedded_*.h
 
 # Generic object/archive debris

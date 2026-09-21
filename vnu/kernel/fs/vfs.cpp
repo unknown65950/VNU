@@ -2,16 +2,18 @@
 #include <vnu/abi.h>
 #include <vnu/pmm.h>
 #include <vnu/process.h>
+#include <vnu/ata.h>
 
 namespace {
 
 constexpr int MAX_FD = 64;
 /* Every Node carries a full DATA_CAP buffer, so this is the dominant
- * consumer of kernel .bss (MAX_N * ~20 KiB). Raised from 64 to fit
- * /dev and /proc without displacing the existing /bin + /apps entries;
- * the resulting .bss still ends well below the 0x400000 app-image
- * region (checked after building — see VIBEGRAPHICS_CHANGES.md). */
-constexpr int MAX_N = 96;
+ * consumer of kernel .bss (MAX_N * ~20 KiB). Boot alone registers 98
+ * nodes (static /bin+proc+dev tree plus the /apps and /pics blobs),
+ * so heads-up room is needed for anything the runtime creates
+ * (/tmp/.session, redirections, ...) — an exhausted table makes those
+ * add() calls return ENOSPC and shells lose their session file. */
+constexpr int MAX_N = 112;
 /* Every Node carries a full DATA_CAP buffer. 65536 fits the largest
  * embedded GUI binary (picview is ~37 KiB of ELF; the older 20480 cap
  * silently truncated it, so the launched image was garbage and the app
@@ -25,7 +27,7 @@ constexpr int PATH_CAP = 64;
  * on every open() rather than stored, so a reader always sees current
  * values; the generated text lands in the node's normal data buffer so
  * read()/lseek() work on it unchanged. */
-enum class SynthKind : uint8_t { None = 0, Version, CpuInfo, MemInfo, SelfStatus, Mounts, Uptime };
+enum class SynthKind : uint8_t { None = 0, Version, CpuInfo, MemInfo, SelfStatus, Mounts, Uptime, Disks };
 
 struct Node {
     bool used;
@@ -45,6 +47,14 @@ struct Node {
 Node nodes[MAX_N];
 vnu::vfs::File files[MAX_FD];
 char cwd[PATH_CAP] = "/";
+
+/* --- TEMPORARY DEBUG TRACE: COM1. Remove before committing. --- */
+extern "C" void vnu_debug_putc(char c); /* in syscall.cpp */
+void dbg(const char* s)
+{
+    while (*s)
+        vnu_debug_putc(*s++);
+}
 
 bool same(const char* a, const char* b)
 {
@@ -396,6 +406,18 @@ void regen_synth(Node& n)
     case SynthKind::Mounts:
         a.str("vfs / vfs rw 0 0\ndev /dev devfs rw 0 0\nproc /proc procfs rw 0 0\n");
         break;
+    case SynthKind::Disks:
+        for (int i = 0; i < vnu::ata::drive_count(); ++i) {
+            const auto& d = vnu::ata::drive(i);
+            a.str("disk");
+            a.num(static_cast<uint32_t>(i));
+            a.str("\t");
+            a.str(d.model);
+            a.str("\t");
+            a.num(d.size_mib);
+            a.str(" MiB\n");
+        }
+        break;
     case SynthKind::Uptime: {
         uint32_t now = rtc_seconds_of_day();
         uint32_t delta = now >= g_boot_seconds ? now - g_boot_seconds
@@ -415,6 +437,23 @@ void regen_synth(Node& n)
 } // namespace
 
 namespace vnu::vfs {
+
+/* RTC-backed wall clock (seconds since local midnight) and the
+ * monotonic-ish boot clock derived from it. With no timer interrupt the
+ * RTC is the only clock in the machine; both helpers run at one-second
+ * resolution and wrap at midnight (uptime is a delta against the
+ * boot-time snapshot so it re-wraps then too). */
+uint32_t time_seconds()
+{
+    return rtc_seconds_of_day();
+}
+
+uint32_t uptime_seconds()
+{
+    const uint32_t now = rtc_seconds_of_day();
+    return now >= g_boot_seconds ? now - g_boot_seconds
+                                 : (86400u - g_boot_seconds) + now;
+}
 
 void init()
 {
@@ -543,6 +582,7 @@ void init()
     add_synth("/proc/meminfo", SynthKind::MemInfo);
     add_synth("/proc/mounts", SynthKind::Mounts);
     add_synth("/proc/uptime", SynthKind::Uptime);
+    add_synth("/proc/disks", SynthKind::Disks);
     add("/proc/self", true);
     add_synth("/proc/self/status", SynthKind::SelfStatus);
 
@@ -570,8 +610,18 @@ int open(const char* path, uint32_t flags)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
+    if (path[0] != '/') {
+        dbg("[open] cwd='");
+        dbg(cwd);
+        dbg("' rel='");
+        dbg(path);
+        dbg("'");
+    }
     int ni = find_index(abs);
     if (ni < 0) {
+        dbg("[open] NOTFOUND: '");
+        dbg(abs);
+        dbg("'\n");
         if (!(flags & vnu::posix::O_CREAT))
             return -VNU_ENOENT;
         /* Creating a file needs write permission on the parent dir. */
@@ -595,8 +645,12 @@ int open(const char* path, uint32_t flags)
     {
         uint32_t om = flags & 3u;
         uint32_t acc = (om == 1) ? A_W : ((om == 2) ? (A_R | A_W) : A_R);
-        if (!have_access(nodes[ni], acc))
+        if (!have_access(nodes[ni], acc)) {
+            dbg("[open] EACCES: '");
+            dbg(abs);
+            dbg("'\n");
             return -VNU_EACCES;
+        }
     }
     /* /proc files are generated fresh per open, so each reader sees
      * current values rather than whatever the last reader saw. */
@@ -1016,18 +1070,28 @@ int chdir(const char* path)
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
     Node* n = find(abs);
-    if (!n)
+    if (!n) {
+        dbg("[chdir] ENOENT: '");
+        dbg(abs);
+        dbg("'\n");
         return -VNU_ENOENT;
+    }
     if (!n->dir)
         return -VNU_ENOTDIR;
     if (!have_access(*n, A_X))
         return -VNU_EACCES;
     copy(cwd, abs, PATH_CAP);
+    dbg("[chdir] -> '");
+    dbg(abs);
+    dbg("'\n");
     return 0;
 }
 
 int getcwd(char* buf, uint32_t size)
 {
+    dbg("[getcwd] cwd='");
+    dbg(cwd);
+    dbg("'\n");
     if (!buf || size == 0)
         return -VNU_EINVAL;
     uint32_t n = 0;
