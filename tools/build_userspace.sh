@@ -39,7 +39,7 @@ echo "==> userspace"
 "$VCC" "$ROOT/vnu/userspace/man/man.c" -o "$ROOT/sysroot/bin/man"
 # coreutils: one separate binary per command (no multi-call applet).
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
-         wc head tail grep sort cp mv basename dirname seq; do
+         wc head tail grep sort cp mv basename dirname seq df; do
   "$VCC" "$ROOT/vnu/userspace/vibecoreutils/$c.c" -o "$ROOT/sysroot/bin/$c"
 done
 # account/install tools: one separate binary per command.
@@ -64,7 +64,7 @@ embed "$ROOT/sysroot/bin/hello" hello
 embed "$ROOT/sysroot/bin/ttytest" ttytest
 embed "$ROOT/sysroot/bin/man" man
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
-         wc head tail grep sort cp mv basename dirname seq; do
+         wc head tail grep sort cp mv basename dirname seq df; do
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
 for c in id whoami groups useradd passwd su install; do

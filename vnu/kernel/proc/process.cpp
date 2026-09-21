@@ -30,6 +30,7 @@
 #include "embedded_dirname.h"
 #include "embedded_seq.h"
 #include "embedded_man.h"
+#include "embedded_df.h"
 #include "embedded_id.h"
 #include "embedded_whoami.h"
 #include "embedded_groups.h"
@@ -87,6 +88,7 @@ const EmbeddedProg embedded[] = {
     {"/bin/basename", embedded_basename_elf, embedded_basename_elf_size},
     {"/bin/dirname", embedded_dirname_elf, embedded_dirname_elf_size},
     {"/bin/seq", embedded_seq_elf, embedded_seq_elf_size},
+    {"/bin/df", embedded_df_elf, embedded_df_elf_size},
     {"/bin/man", embedded_man_elf, embedded_man_elf_size},
     {"/bin/id", embedded_id_elf, embedded_id_elf_size},
     {"/bin/whoami", embedded_whoami_elf, embedded_whoami_elf_size},

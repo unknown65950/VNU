@@ -405,7 +405,7 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
         };
         cpy(u->sysname, "VNU");
         cpy(u->nodename, "vnu");
-        cpy(u->release, "0.2");
+        cpy(u->release, "0.5");
         cpy(u->version, "vibe");
         cpy(u->machine, "i386");
         cpy(u->processor, "i386");

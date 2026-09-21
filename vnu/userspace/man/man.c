@@ -287,7 +287,7 @@ DESCRIPTION\n\
     separate, self-contained executable in /bin:\n\
 \n\
         echo true false pwd cat ls mkdir rm touch uname clear\n\
-        wc head tail grep sort cp mv basename dirname seq\n\
+        wc head tail grep sort cp mv basename dirname seq df\n\
 \n\
     There is no 'coreutils' program on the image any more; this\n\
     page is kept as an index of the set. Run 'man <name>' for a\n\
@@ -539,6 +539,41 @@ DESCRIPTION\n\
     Prints integers from FIRST (default 1) up to LAST, counting\n\
     by STEP (default 1), one per line. A negative STEP counts\n\
     downwards. Unrepresentable values are printed as 0.\n"
+
+#define DF_PAGE "NAME\n\
+    df - report file system space usage\n\
+\n\
+SYNOPSIS\n\
+    df [OPTION] [FILE...]\n\
+\n\
+DESCRIPTION\n\
+    Shows the amount of space used and available on each mounted\n\
+    file system. VNU's only real file system is the in-memory VFS\n\
+    (mounted on /); /dev and /proc are pseudo file systems with\n\
+    no accounted space, so they print zeros. FILE operands restrict\n\
+    the report to the file systems containing those files.\n\
+\n\
+    Sizes are shown in 1 KiB blocks unless a human-readable option\n\
+    is given.\n\
+\n\
+OPTIONS\n\
+    -a            include pseudo file systems (all are shown anyway)\n\
+    -h            human-readable sizes (powers of 1024)\n\
+    -H            human-readable sizes (powers of 1000)\n\
+    -k            show sizes in 1 KiB blocks (the default)\n\
+    -l            limit to local file systems (all are local)\n\
+    -P            POSIX output format (1024-blocks, single spaces)\n\
+    -T            also print the file system type\n\
+    -t TYPE       only include file systems of type TYPE\n\
+    -x TYPE       exclude file systems of type TYPE\n\
+    -v            ignored (macOS compatibility)\n\
+        --help    display this help and exit\n\
+        --version output version information and exit\n\
+\n\
+EXAMPLES\n\
+    df\n\
+    df -h /proc/version\n\
+    df -T -t vfs\n"
 
 #define VEDIT_PAGE "NAME\n\
     vedit - full-screen text editor\n\
@@ -811,6 +846,8 @@ static const struct Page pages[] = {
      DIRNAME_PAGE},
     {"seq",      "print a sequence of numbers",
      SEQ_PAGE},
+    {"df",       "report file system space usage",
+     DF_PAGE},
     {"vedit",    "full-screen text editor",
      VEDIT_PAGE},
     {"calc",     "graphical calculator",

@@ -27,7 +27,7 @@ constexpr int PATH_CAP = 64;
  * on every open() rather than stored, so a reader always sees current
  * values; the generated text lands in the node's normal data buffer so
  * read()/lseek() work on it unchanged. */
-enum class SynthKind : uint8_t { None = 0, Version, CpuInfo, MemInfo, SelfStatus, Mounts, Uptime, Disks };
+enum class SynthKind : uint8_t { None = 0, Version, CpuInfo, MemInfo, SelfStatus, Mounts, Uptime, Disks, DfStat };
 
 struct Node {
     bool used;
@@ -47,15 +47,6 @@ struct Node {
 Node nodes[MAX_N];
 vnu::vfs::File files[MAX_FD];
 char cwd[PATH_CAP] = "/";
-
-/* --- TEMPORARY DEBUG TRACE: COM1. Remove before committing. --- */
-extern "C" void vnu_debug_putc(char c); /* in syscall.cpp */
-void dbg(const char* s)
-{
-    while (*s)
-        vnu_debug_putc(*s++);
-}
-
 bool same(const char* a, const char* b)
 {
     while (*a && *b && *a == *b) {
@@ -357,7 +348,7 @@ void regen_synth(Node& n)
     Appender a{n.data, DATA_CAP, 0};
     switch (n.synth) {
     case SynthKind::Version:
-        a.str("VNU version 0.2 (vibe) i386\n");
+        a.str("VNU version 0.5 (vibe) i386\n");
         break;
     case SynthKind::CpuInfo: {
         char vendor[13];
@@ -418,6 +409,27 @@ void regen_synth(Node& n)
             a.str(" MiB\n");
         }
         break;
+    case SynthKind::DfStat: {
+        /* Space report for df(1). The only real filesystem is the
+         * in-memory VFS: every node owns a fixed DATA_CAP buffer, so
+         * "total" is the whole node table's backing store and "used" is
+         * the sum of the live bytes in it. /dev and /proc are pure
+         * pseudo-filesystems with nothing to account. Lines are
+         * `source fstype mountpoint total_bytes used_bytes`. */
+        uint32_t total = static_cast<uint32_t>(MAX_N) * DATA_CAP;
+        uint32_t used = 0;
+        for (int i = 0; i < MAX_N; ++i)
+            if (nodes[i].used)
+                used += nodes[i].size;
+        a.str("vfs vfs / ");
+        a.num(total);
+        a.str(" ");
+        a.num(used);
+        a.str("\n");
+        a.str("dev devfs /dev 0 0\n");
+        a.str("proc procfs /proc 0 0\n");
+        break;
+    }
     case SynthKind::Uptime: {
         uint32_t now = rtc_seconds_of_day();
         uint32_t delta = now >= g_boot_seconds ? now - g_boot_seconds
@@ -527,6 +539,7 @@ void init()
     add("/bin/dirname", false);
     add("/bin/seq", false);
     add("/bin/man", false);
+    add("/bin/df", false);
     add("/bin/id", false);
     add("/bin/whoami", false);
     add("/bin/groups", false);
@@ -583,6 +596,7 @@ void init()
     add_synth("/proc/mounts", SynthKind::Mounts);
     add_synth("/proc/uptime", SynthKind::Uptime);
     add_synth("/proc/disks", SynthKind::Disks);
+    add_synth("/proc/dfstat", SynthKind::DfStat);
     add("/proc/self", true);
     add_synth("/proc/self/status", SynthKind::SelfStatus);
 
@@ -611,17 +625,9 @@ int open(const char* path, uint32_t flags)
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
     if (path[0] != '/') {
-        dbg("[open] cwd='");
-        dbg(cwd);
-        dbg("' rel='");
-        dbg(path);
-        dbg("'");
     }
     int ni = find_index(abs);
     if (ni < 0) {
-        dbg("[open] NOTFOUND: '");
-        dbg(abs);
-        dbg("'\n");
         if (!(flags & vnu::posix::O_CREAT))
             return -VNU_ENOENT;
         /* Creating a file needs write permission on the parent dir. */
@@ -646,9 +652,6 @@ int open(const char* path, uint32_t flags)
         uint32_t om = flags & 3u;
         uint32_t acc = (om == 1) ? A_W : ((om == 2) ? (A_R | A_W) : A_R);
         if (!have_access(nodes[ni], acc)) {
-            dbg("[open] EACCES: '");
-            dbg(abs);
-            dbg("'\n");
             return -VNU_EACCES;
         }
     }
@@ -1071,9 +1074,6 @@ int chdir(const char* path)
     normalize(path, abs, PATH_CAP);
     Node* n = find(abs);
     if (!n) {
-        dbg("[chdir] ENOENT: '");
-        dbg(abs);
-        dbg("'\n");
         return -VNU_ENOENT;
     }
     if (!n->dir)
@@ -1081,17 +1081,11 @@ int chdir(const char* path)
     if (!have_access(*n, A_X))
         return -VNU_EACCES;
     copy(cwd, abs, PATH_CAP);
-    dbg("[chdir] -> '");
-    dbg(abs);
-    dbg("'\n");
     return 0;
 }
 
 int getcwd(char* buf, uint32_t size)
 {
-    dbg("[getcwd] cwd='");
-    dbg(cwd);
-    dbg("'\n");
     if (!buf || size == 0)
         return -VNU_EINVAL;
     uint32_t n = 0;
