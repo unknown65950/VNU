@@ -1,4 +1,5 @@
 #include <vnu/vga_gfx.h>
+#include <vnu/wallpaper.h>
 
 extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
 
@@ -317,9 +318,18 @@ void clear(uint8_t color)
 /* Desktop wallpaper: a three-band sky (dithered, like clear_gradient),
  * a big sun, a few clouds and two silhouetted hill ranges, drawn every
  * frame so windows and icons paint on top of it. Cheap enough to be a
- * per-frame clear (slightly more work than the plain gradient). */
+ * per-frame clear (slightly more work than the plain gradient).
+ *
+ * If a /wallpaper picture was decoded and quantized at startup (see
+ * gui/wallpaper.cpp), its ready-made palette frame wins and this
+ * procedural scene only shows when there is no wallpaper file. */
 void draw_wallpaper()
 {
+    if (vnu::wallpaper::ready()) {
+        memcpy(g_backbuf, vnu::wallpaper::frame(),
+               static_cast<unsigned long>(WIDTH * HEIGHT));
+        return;
+    }
     static const uint8_t B4[4][4] = {
         {0, 8, 2, 10},
         {12, 4, 14, 6},

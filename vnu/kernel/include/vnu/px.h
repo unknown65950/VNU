@@ -15,7 +15,22 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#if defined(VNU_IN_KERNEL)
+/* The kernel is freestanding (no -ffreestanding <stdlib.h>) and has no
+ * heap, yet the PNG/JPEG paths malloc()/free(). Those calls are routed
+ * to the bump allocator in gui/wallpaper.cpp (vnu_kalloc/vnu_kfree):
+ * wallpaper decode runs once at desktop startup and never needs the
+ * memory back (free() is a no-op), and BMP decode needs no allocation
+ * at all. */
+extern "C" void* vnu_kalloc(unsigned long n);
+extern "C" void vnu_kfree(void* p);
+#define malloc vnu_kalloc
+#define free vnu_kfree
+#elif defined(VLIBC_TARGET_VNU)
+#include <vlibc/stdlib.h>
+#else
 #include <stdlib.h>
+#endif
 
 #define PX_BMP 1
 #define PX_PNG 2
@@ -468,6 +483,15 @@ static int px_png_decode(const uint8_t* d, unsigned n,
     } else if (bits != 8) {
         return -2;
     }
+    /* Declared up here, before the first `goto fail`: C++ forbids a
+     * forward jump that crosses the initialisation of an automatic
+     * variable (px.h is plain C99), so everything the failure path can
+     * skip has to already be in scope. */
+    unsigned bitpp = (unsigned)bits * (unsigned)ch;
+    unsigned rowbytes = ((unsigned)width * bitpp + 7u) / 8u;
+    unsigned expected = (unsigned)height * (1u + rowbytes);
+    uint8_t* raw = NULL;
+    unsigned dlen = 0;
 
     PngAux aux;
     aux.nplte = 0;
@@ -533,10 +557,7 @@ static int px_png_decode(const uint8_t* d, unsigned n,
     if (!got_idat)
         goto fail;
 
-    unsigned bitpp = (unsigned)bits * (unsigned)ch;
-    unsigned rowbytes = ((unsigned)width * bitpp + 7u) / 8u;
-    unsigned expected = (unsigned)height * (1u + rowbytes);
-    uint8_t* raw = (uint8_t*)malloc(expected + 1);
+    raw = (uint8_t*)malloc(expected + 1);
     if (!raw)
         goto fail;
     if (idat_used < 4)
@@ -544,7 +565,6 @@ static int px_png_decode(const uint8_t* d, unsigned n,
     /* zlib wrapper: CMF/FLG header, then DEFLATE. */
     if (((idat[0] << 8) | idat[1]) % 31 != 0 || (idat[1] & 0x20))
         goto fail;
-    unsigned dlen = 0;
     if (def_inflate(idat + 2, idat_used - 2, raw, expected + 1, &dlen) != 0 ||
         dlen != expected)
         goto fail;

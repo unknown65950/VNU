@@ -5,6 +5,7 @@
 #include <vnu/apps.h>
 #include <vnu/wintask.h>
 #include <vnu/vfs.h>
+#include <vnu/wallpaper.h>
 
 namespace {
 
@@ -680,6 +681,7 @@ void run()
     vnu::kbd::drain_excess();
     vnu::mouse::init();
     vnu::wintask::init();
+    vnu::wallpaper::load();
 
     vnu::apps::AppEntry apps[vnu::apps::MAX_APPS];
     int app_count = vnu::apps::list(apps, vnu::apps::MAX_APPS);

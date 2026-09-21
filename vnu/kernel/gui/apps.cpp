@@ -18,6 +18,7 @@
 #include "../proc/embedded_pic_gray_alpha.h"
 #include "../proc/embedded_pic_shapes_pal.h"
 #include "../proc/embedded_pic_shapes_rgba.h"
+#include "../proc/embedded_wallpaper.h"
 
 namespace {
 
@@ -127,6 +128,15 @@ void install_demo_pics()
             continue;
         vnu::vfs::write(fd, p.data, p.size);
         vnu::vfs::close(fd);
+    }
+
+    /* The desktop wallpaper lives at the VFS root, not under /pics, so
+     * picview's listing stays unchanged. gui/wallpaper.cpp decodes it
+     * with px.h (BMP/PNG/JPEG) and stretches it over the desktop. */
+    int wfd = vnu::vfs::open("/wallpaper", O_WRONLY | O_CREAT | O_TRUNC);
+    if (wfd >= 0) {
+        vnu::vfs::write(wfd, embedded_wallpaper_elf, embedded_wallpaper_elf_size);
+        vnu::vfs::close(wfd);
     }
 }
 

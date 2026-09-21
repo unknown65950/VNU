@@ -15,7 +15,15 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#ifdef VLIBC_TARGET_VNU
+#if defined(VNU_IN_KERNEL)
+/* Kernel build (vnu/kernel/include/vnu/px.h): freestanding, no
+ * <stdlib.h>, and no heap — wallpaper.cpp maps these to its bump
+ * allocator. Never defined for userspace builds. */
+extern "C" void* vnu_kalloc(unsigned long n);
+extern "C" void vnu_kfree(void* p);
+#define malloc vnu_kalloc
+#define free vnu_kfree
+#elif defined(VLIBC_TARGET_VNU)
 #include <vlibc/stdlib.h>
 #else
 #include <stdlib.h>

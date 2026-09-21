@@ -24,3 +24,6 @@ vnu/kernel/proc/embedded_*.h
 # Generic object/archive debris
 *.o
 *.iso
+
+# Test disk image produced by ./vnu/run.sh vhd
+vnu/vnu.vhd

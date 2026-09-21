@@ -116,6 +116,7 @@ add_executable(kernel.elf
     drivers/ata.cpp
     gui/gui.cpp
     gui/apps.cpp
+    gui/wallpaper.cpp
     gui/wintask.cpp
     install/blobs.s
     install/install.cpp

@@ -60,6 +60,7 @@ embed "$ROOT/vnu/userspace/gui/pics/logo.jpg" pic_logo
 embed "$ROOT/vnu/userspace/gui/pics/gray_alpha.png" pic_gray_alpha
 embed "$ROOT/vnu/userspace/gui/pics/shapes_pal.png" pic_shapes_pal
 embed "$ROOT/vnu/userspace/gui/pics/shapes_rgba.png" pic_shapes_rgba
+embed "$ROOT/vnu/userspace/gui/pics/wallpaper.png" wallpaper
 embed "$ROOT/sysroot/bin/hello" hello
 embed "$ROOT/sysroot/bin/ttytest" ttytest
 embed "$ROOT/sysroot/bin/man" man
