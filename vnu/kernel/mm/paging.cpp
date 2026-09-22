@@ -29,6 +29,16 @@ alignas(4096) uint32_t g_identity_pt[NUM_IDENTITY_PDES][1024];
 alignas(4096) uint32_t g_io_pt[1024];
 alignas(4096) uint32_t g_kernel_pgdir[1024];
 
+/* Kernel-only device MMIO window: a single 4 MiB page table at
+ * 0xFE800000 (PDE 1010), above the 32 MiB identity map and clear of
+ * the VBE LFB window (PDE 1012). PCI BARs that live in the high part
+ * of the 4 GiB space are remapped here by map_device_region() so
+ * drivers can dereference them as plain pointers in every address
+ * space (the PDE is copied from g_kernel_pgdir by create_address_space). */
+constexpr uint32_t DEV_MMIO_BASE = 0xFE800000u;
+constexpr int DEV_MMIO_PDE = DEV_MMIO_BASE >> 22; /* 1010 */
+alignas(4096) uint32_t g_dev_pt[1024];
+
 uint32_t g_current_pgdir = 0;
 
 constexpr int MAX_ADDRESS_SPACES = 16;
@@ -108,6 +118,27 @@ void init()
 uint32_t kernel_pgdir_phys()
 {
     return reinterpret_cast<uint32_t>(&g_kernel_pgdir[0]);
+}
+
+uint32_t map_device_region(uint32_t phys, uint32_t size)
+{
+    if (size == 0)
+        return 0;
+    uint32_t offset = phys & 0x3FFFFFu;
+    uint32_t pages = (size + PAGE_SIZE - 1u) / PAGE_SIZE;
+    /* Must fully fit inside the single-table window. */
+    if (offset + pages * PAGE_SIZE > 0x400000u)
+        return 0;
+    uint32_t page = offset / PAGE_SIZE;
+    for (uint32_t i = 0; i < pages; ++i)
+        g_dev_pt[page + i] = ((phys & ~0xFFFu) + i * PAGE_SIZE) | PTE_PRESENT | PTE_RW;
+    g_kernel_pgdir[DEV_MMIO_PDE] =
+        reinterpret_cast<uint32_t>(&g_dev_pt[0]) | PDE_PRESENT | PDE_RW;
+    /* Reload CR3 so the new PDE is live immediately (boot-time, cheap). */
+    uint32_t pgdir = reinterpret_cast<uint32_t>(&g_kernel_pgdir[0]);
+    g_current_pgdir = pgdir;
+    asm volatile("mov %0, %%cr3" : : "r"(pgdir) : "memory");
+    return DEV_MMIO_BASE + offset;
 }
 
 uint32_t create_address_space(const MapRange* ranges, int count)

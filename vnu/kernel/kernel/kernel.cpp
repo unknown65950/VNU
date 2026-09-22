@@ -16,6 +16,7 @@
 #include <vnu/paging.h>
 #include <vnu/ata.h>
 #include <vnu/mboot.h>
+#include <vnu/net.h>
 extern "C" void vnu_console_start();
 
 namespace
@@ -107,12 +108,29 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
     serial_init();
     vnu::tty::init();
     vnu::tty::clear();
+    vnu::net::init(); /* QEMU's default e1000 NIC — backs the `ping` command */
     if (magic != 0x36d76289) {
         vga_print("invalid multiboot2 magic\n", 4);
         for (;;)
             asm volatile("hlt");
     }
     vga_print("VNU: starting init (/sbin/init)\n");
+
+    /* Network self-test: verify ARP + ICMP ping to the gateway. */
+    {
+        extern void vnu_debug_putc(char);
+        auto putdec = [](unsigned long v) {
+            if (v == 0) { vnu_debug_putc('0'); return; }
+            char buf[12]; int n = 0;
+            while (v) { buf[n++] = static_cast<char>('0' + v % 10); v /= 10; }
+            while (n) vnu_debug_putc(buf[--n]);
+        };
+        auto putstr = [](const char* s) { for (; *s; ++s) vnu_debug_putc(*s); };
+        long rtt = vnu::net::ping(vnu::net::GW_IP, 4000);
+        putstr("NET SELFTEST ping 10.0.2.2 > ");
+        if (rtt >= 0) { putdec(rtt); putstr(" ms\n"); }
+        else { putstr("FAIL rc="); putdec(-rtt); putstr("\n"); }
+    }
 
     /* Unified system: kernel + vlibc programs. Boot /sbin/init as a
      * scheduler-managed coroutine (PID 1); init spawns services and

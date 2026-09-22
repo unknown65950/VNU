@@ -540,6 +540,7 @@ void init()
     add("/bin/seq", false);
     add("/bin/man", false);
     add("/bin/df", false);
+   add("/bin/ping", false);
     add("/bin/id", false);
     add("/bin/whoami", false);
     add("/bin/groups", false);

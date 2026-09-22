@@ -50,6 +50,8 @@ must never be renumbered.
 | 35 | reboot |
 | 36 | time   |
 | 37 | uptime |
+| 38 | ping   |
+| 39 | netinfo |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
@@ -68,14 +70,30 @@ with `-1` leaves a field unchanged; only root may chown.
   `time()` against a boot-time snapshot (so it wraps every local midnight;
   one-second resolution, no timer interrupt). Backs the analog-clock GUI
   apps' stopwatch/timer elapsed-time readings.
+- `ping(ebx, ecx, edx)` — `ebx` is the target IPv4 address as a
+  big-endian uint32 (10.0.2.2 = `0x0A000202`), `edx` the timeout in
+  milliseconds (kernel clamps to 10..2000; `ecx` reserved, must be 0).
+  Returns the round-trip time in ms on success, or
+  `-VNU_EIO` (no NIC), `-VNU_EHOSTUNREACH` (ARP resolution failed),
+  `-VNU_ETIMEDOUT` (host did not answer in time). Pinging the machine's
+  own address returns 0 without sending anything.
+- `netinfo(ebx)` — writes a `vnu_netinfo` struct to the caller's buffer:
+  `mac[6]`, `ip`, `mask`, `gw` (all IPs big-endian uint32s) and `up`
+  (1 = the kernel NIC is initialized). Returns 0, or `-VNU_EIO` if there
+  is no NIC.
 
 ### Removed
 
 Not applicable — numbers are never reused; old gaps stay reserved.
 
-### Future (append-only, start at 38)
+### Future (append-only, start at 40)
 
 Unsupported calls return `-VNU_ENOSYS`.
+
+### Errors added with networking
+
+`VNU_ETIMEDOUT` (110) and `VNU_EHOSTUNREACH` (113) were added in the
+same change as the `ping`/`netinfo` syscalls; values match Linux's.
 
 ## Interrupt gate
 Vector `0x80`, selector `0x08`, DPL=3, present 32-bit interrupt gate (`0xEE`).

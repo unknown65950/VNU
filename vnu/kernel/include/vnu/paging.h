@@ -59,4 +59,11 @@ uint32_t current_pgdir();
 // having to switch CR3 first.
 uint32_t phys_frame_at(uint32_t pgdir_phys, uint32_t vaddr);
 
+// Maps a physical window (e.g. a PCI MMIO BAR that lives above the
+// 32 MiB identity map) into a kernel-only virtual sub-range and returns
+// that virtual address, or 0 if the window won't fit. The mapping is
+// shared with every address space via the "copy g_kernel_pgdir" step,
+// and the returned pointers stay valid for the life of the kernel.
+uint32_t map_device_region(uint32_t phys, uint32_t size);
+
 } // namespace vnu::paging

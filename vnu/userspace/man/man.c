@@ -287,7 +287,7 @@ DESCRIPTION\n\
     separate, self-contained executable in /bin:\n\
 \n\
         echo true false pwd cat ls mkdir rm touch uname clear\n\
-        wc head tail grep sort cp mv basename dirname seq df\n\
+        wc head tail grep sort cp mv basename dirname seq df ping\n\
 \n\
     There is no 'coreutils' program on the image any more; this\n\
     page is kept as an index of the set. Run 'man <name>' for a\n\
@@ -575,6 +575,30 @@ EXAMPLES\n\
     df -h /proc/version\n\
     df -T -t vfs\n"
 
+#define PING_PAGE "NAME\n\
+    ping - send ICMP echo requests (network test)\n\
+\n\
+SYNOPSIS\n\
+    ping IP [COUNT]\n\
+\n\
+DESCRIPTION\n\
+    Sends an IPv4 ICMP echo request to IP and reports the round-trip\n\
+    time the kernel measured. Used to check that the NIC is up: on\n\
+    QEMU's default user network the host router answers at 10.0.2.2,\n\
+    so 'ping 10.0.2.2' is a quick connectivity smoke test.\n\
+\n\
+    There is no DNS yet, so only numeric dotted-quad addresses are\n\
+    accepted. COUNT (default 4) picks how many requests to send before\n\
+    printing a summary; each request waits at most 300 ms in the kernel\n\
+    (ARP resolution first for a new target).\n\
+\n\
+EXIT STATUS\n\
+    0 if at least one reply arrived, 1 otherwise.\n\
+\n\
+EXAMPLES\n\
+    ping 10.0.2.2\n\
+    ping 10.0.2.2 1\n"
+
 #define VEDIT_PAGE "NAME\n\
     vedit - full-screen text editor\n\
 \n\
@@ -846,8 +870,10 @@ static const struct Page pages[] = {
      DIRNAME_PAGE},
     {"seq",      "print a sequence of numbers",
      SEQ_PAGE},
-    {"df",       "report file system space usage",
+{"df",       "report file system space usage",
      DF_PAGE},
+    {"ping",     "send ICMP echo requests (network test)",
+      PING_PAGE},
     {"vedit",    "full-screen text editor",
      VEDIT_PAGE},
     {"calc",     "graphical calculator",

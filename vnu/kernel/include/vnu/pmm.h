@@ -2,16 +2,21 @@
 #include <stdint.h>
 
 // Bitmap physical-frame allocator over a fixed pool. QEMU is launched
-// with -m 32 (see run.sh) and the kernel's own fixed layout already
-// uses physical memory up to ~0x940000 (see kernel/include/vnu/wintask.h
-// and vnu::proc's user-stack base), so the pool sits well clear of
-// that, comfortably inside 32 MiB.
+// with -m 32 (see run.sh). The pool must stay clear of the kernel's
+// own memory: the kernel image sits at 1-3 MiB and the (identity-mapped)
+// BSS -- wallpaper buffers, embedded userspace blobs, the pmm bitmap,
+// the identity page tables and the kernel page directory -- extends to
+// ~0x14d13f0 (__bss_end). The former POOL_BASE = 0x01400000 (20 MiB)
+// overlapped that BSS region: alloc_frame()'s zeroing memset was wiping
+// g_bitmap/g_identity_pt/g_kernel_pgdir, the allocator then re-issued
+// in-use frames and corrupted the freshly created process page
+// directory. So the pool starts at 21 MiB, above __bss_end.
 
 namespace vnu::pmm {
 
 constexpr uint32_t FRAME_SIZE = 4096;
-constexpr uint32_t POOL_BASE = 0x01400000; // 20 MiB
-constexpr uint32_t POOL_END = 0x01E00000;  // 30 MiB (10 MiB pool, 2560 frames)
+constexpr uint32_t POOL_BASE = 0x01500000; // 21 MiB
+constexpr uint32_t POOL_END = 0x01F00000;  // 31 MiB (10 MiB pool, 2560 frames)
 
 void init();
 

@@ -114,6 +114,8 @@ add_executable(kernel.elf
     drivers/vga_gfx.cpp
     drivers/ps2mouse.cpp
     drivers/ata.cpp
+    drivers/pci.cpp
+    drivers/e1000.cpp
     gui/gui.cpp
     gui/apps.cpp
     gui/wallpaper.cpp

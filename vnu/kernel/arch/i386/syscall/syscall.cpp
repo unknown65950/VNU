@@ -9,6 +9,7 @@
 #include <vnu/gui.h>
 #include <vnu/wintask.h>
 #include <vnu/install.h>
+#include <vnu/net.h>
 
 struct TrapFrame {
     std::uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
@@ -455,6 +456,20 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
     case VNU_SYS_uptime:
         /* Monotonic-ish uptime (RTC delta, 1 s resolution). */
         return static_cast<std::uint32_t>(vnu::vfs::uptime_seconds());
+
+    case VNU_SYS_ping:
+        /* RTT to an IPv4 address (ebx, big-endian uint32); edx is the
+         * timeout in ms. Returns RTT ms or -VNU_EHOSTUNREACH/-VNU_ETIMEDOUT. */
+        return static_cast<std::uint32_t>(vnu::net::ping(tf->ebx, tf->edx));
+
+    case VNU_SYS_netinfo: {
+        /* Fill a vnu_netinfo struct (MAC, addresses, link status). */
+        auto* info = reinterpret_cast<vnu::net::Info*>(tf->ebx);
+        if (!info)
+            return static_cast<std::uint32_t>(-VNU_EFAULT);
+        vnu::net::get_info(info);
+        return 0;
+    }
 
     default:
         return static_cast<std::uint32_t>(-VNU_ENOSYS);

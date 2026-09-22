@@ -39,6 +39,8 @@
 #define VNU_SYS_reboot   35
 #define VNU_SYS_time     36
 #define VNU_SYS_uptime   37
+#define VNU_SYS_ping     38
+#define VNU_SYS_netinfo  39
 
 #define VNU_EPERM 1
 #define VNU_ENOENT 2
@@ -58,6 +60,8 @@
 #define VNU_EINVAL 22
 #define VNU_ENOSPC 28
 #define VNU_ERANGE 34
+#define VNU_ETIMEDOUT 110
+#define VNU_EHOSTUNREACH 113
 #define VNU_ENOSYS 38
 #define VNU_ENOTEMPTY 39
 #define VNU_EPIPE 32
