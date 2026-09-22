@@ -1,14 +1,16 @@
 /* ping — send ICMP echo requests and report round-trip times.
  *
- * Requires the kernel NIC (QEMU's default e1000). IPs are given as
- * dotted quads; there is no DNS yet, so names are not accepted.
+ * Requires the kernel NIC (QEMU's default e1000). The target is a
+ * dotted-quad address or a host name, resolved via /etc/hosts then
+ * DNS (nameservers from /etc/resolv.conf, default 1.1.1.1).
  *
- *   ping IP [COUNT]
+ *   ping TARGET [COUNT]
  *
  * COUNT pings with a kernel-side timeout of 300 ms each (IPv4 only).
  */
 #include "cu.h"
 #include <vnu/abi.h>
+#include <vlibc/netdb.h>
 
 static int digit(char c)
 {
@@ -61,14 +63,21 @@ int main(int argc, char** argv)
 {
     unsigned long count = 4;
     unsigned long ip = 0;
+    unsigned long restype = 0; /* header shows the resolved address */
 
     if (argc < 2) {
-        we("usage: ping IP [COUNT]\n");
+        we("usage: ping TARGET [COUNT]\n");
         return 2;
     }
     if (parse_ip(argv[1], &ip) != 0) {
-        we("ping: bad address; names are not supported yet (no DNS)\n");
-        return 2;
+        /* Not a dotted quad: resolve the name (hosts, then DNS). */
+        unsigned long resolved = 0;
+        if (gethostbyname(argv[1], &resolved) != 0) {
+            we("ping: unknown host\n");
+            return 2;
+        }
+        ip = resolved;
+        restype = 1;
     }
     if (argc >= 3) {
         count = 0;
@@ -84,7 +93,10 @@ int main(int argc, char** argv)
     }
 
     w("PING ");
-    print_ip(ip);
+    if (restype)
+        w(argv[1]);
+    else
+        print_ip(ip);
     w(" (");
     print_ip(ip);
     w("): 56 data bytes\n");

@@ -52,6 +52,7 @@ must never be renumbered.
 | 37 | uptime |
 | 38 | ping   |
 | 39 | netinfo |
+| 40 | resolve |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
@@ -81,12 +82,20 @@ with `-1` leaves a field unchanged; only root may chown.
   `mac[6]`, `ip`, `mask`, `gw` (all IPs big-endian uint32s) and `up`
   (1 = the kernel NIC is initialized). Returns 0, or `-VNU_EIO` if there
   is no NIC.
+- `resolve(ebx, ecx)` — `ebx` points to a NUL-terminated host name,
+  `ecx` to a uint32 that receives the resolved IPv4 (big-endian).
+  Resolution checks `/etc/hosts` (`ip alias...` lines) first, then sends
+  a DNS A query to each `nameserver` listed in `/etc/resolv.conf`,
+  tried in order; with no entry the default server is `1.1.1.1`.
+  Returns 0, or `-VNU_ENOENT` (name has no A record / not in hosts),
+  `-VNU_EIO` (no NIC), `-VNU_EHOSTUNREACH` (no route), `-VNU_ETIMEDOUT`
+  (no answer in time).
 
 ### Removed
 
 Not applicable — numbers are never reused; old gaps stay reserved.
 
-### Future (append-only, start at 40)
+### Future (append-only, start at 41)
 
 Unsupported calls return `-VNU_ENOSYS`.
 

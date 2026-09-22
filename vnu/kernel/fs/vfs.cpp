@@ -484,6 +484,33 @@ void init()
     m->size = 15;
     add("/etc/initialD", true);
 
+    /* --- name resolution ---
+     * /etc/hosts: static `ip addr [name ...]` mappings, consulted
+     * before DNS. /etc/resolv.conf: `nameserver a.b.c.d` lines tried
+     * in order; resolve falls back to 1.1.1.1 when the file lists
+     * none. Both are plain editable files. */
+    auto* hosts = add("/etc/hosts", false);
+    if (hosts) {
+        const char* h =
+            "127.0.0.1   localhost\n"
+            "10.0.2.2    gateway\n"
+            "10.0.2.15   vnu\n";
+        int i = 0;
+        for (; h[i] && i < DATA_CAP - 1; ++i)
+            hosts->data[i] = h[i];
+        hosts->size = static_cast<uint32_t>(i);
+        hosts->perm = 0644u;
+    }
+    auto* resolv = add("/etc/resolv.conf", false);
+    if (resolv) {
+        const char* r = "nameserver 1.1.1.1\n";
+        int i = 0;
+        for (; r[i] && i < DATA_CAP - 1; ++i)
+            resolv->data[i] = r[i];
+        resolv->size = static_cast<uint32_t>(i);
+        resolv->perm = 0644u;
+    }
+
     /* --- multiuser account database ---
      * /etc/passwd: one line per user, `name:hash:uid:gid:gecos:home:shell`.
      * The hash is djb2 (see vash's pw_hash) — this is a hobby OS with a

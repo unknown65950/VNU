@@ -41,6 +41,7 @@
 #define VNU_SYS_uptime   37
 #define VNU_SYS_ping     38
 #define VNU_SYS_netinfo  39
+#define VNU_SYS_resolve  40
 
 #define VNU_EPERM 1
 #define VNU_ENOENT 2

@@ -21,6 +21,17 @@ extern "C" void* memcpy(void* dst, const void* src, std::size_t count)
     return dst;
 }
 
+extern "C" int memcmp(const void* a, const void* b, std::size_t count)
+{
+    const auto* lhs = static_cast<const std::uint8_t*>(a);
+    const auto* rhs = static_cast<const std::uint8_t*>(b);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (lhs[i] != rhs[i])
+            return lhs[i] < rhs[i] ? -1 : 1;
+    }
+    return 0;
+}
+
 extern "C" void* memmove(void* dst, const void* src, std::size_t count)
 {
     auto* out = static_cast<std::uint8_t*>(dst);

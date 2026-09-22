@@ -579,25 +579,71 @@ EXAMPLES\n\
     ping - send ICMP echo requests (network test)\n\
 \n\
 SYNOPSIS\n\
-    ping IP [COUNT]\n\
+    ping TARGET [COUNT]\n\
 \n\
 DESCRIPTION\n\
-    Sends an IPv4 ICMP echo request to IP and reports the round-trip\n\
-    time the kernel measured. Used to check that the NIC is up: on\n\
-    QEMU's default user network the host router answers at 10.0.2.2,\n\
-    so 'ping 10.0.2.2' is a quick connectivity smoke test.\n\
+    Sends an IPv4 ICMP echo request to TARGET and reports the\n\
+    round-trip time the kernel measured. Used to check that the NIC is\n\
+    up: on QEMU's default user network the host router answers at\n\
+    10.0.2.2, so 'ping 10.0.2.2' is a quick connectivity smoke test.\n\
 \n\
-    There is no DNS yet, so only numeric dotted-quad addresses are\n\
-    accepted. COUNT (default 4) picks how many requests to send before\n\
-    printing a summary; each request waits at most 300 ms in the kernel\n\
-    (ARP resolution first for a new target).\n\
+    TARGET is a dotted-quad address or a host name. Names are resolved\n\
+    through /etc/hosts first, then via DNS: A queries to each\n\
+    'nameserver' line of /etc/resolv.conf (default server 1.1.1.1),\n\
+    tried in order. COUNT (default 4) picks how many requests to send\n\
+    before printing a summary; each request waits at most 300 ms in the\n\
+    kernel (ARP resolution for a new target, via the gateway off\n\
+    subnet).\n\
+\n\
+FILES\n\
+    /etc/hosts\n\
+    /etc/resolv.conf\n\
 \n\
 EXIT STATUS\n\
-    0 if at least one reply arrived, 1 otherwise.\n\
+    0 if at least one reply arrived, 1 otherwise; 2 on bad usage or an\n\
+    unknown host.\n\
 \n\
 EXAMPLES\n\
     ping 10.0.2.2\n\
+    ping gateway 1\n\
     ping 10.0.2.2 1\n"
+
+#define HOSTS_PAGE "NAME\n\
+    hosts - static host name to IP mapping\n\
+\n\
+DESCRIPTION\n\
+    /etc/hosts maps names to IPv4 addresses before any DNS traffic is\n\
+    sent, so entries work offline and always win over DNS answers.\n\
+\n\
+    Each non-comment line lists an IP followed by one or more aliases:\n\
+\n\
+        10.0.2.2    gateway\n\
+        10.0.2.15   vnu\n\
+\n\
+    Lines starting with '#' are ignored; fields are separated by\n\
+    spaces or tabs. Lookups are case-insensitive. The file is seeded\n\
+    at boot and is a plain editable file (root: 0644).\n\
+\n\
+FILES\n\
+    /etc/hosts\n"
+
+#define RESOLV_PAGE "NAME\n\
+    resolv.conf - DNS server configuration\n\
+\n\
+DESCRIPTION\n\
+    /etc/resolv.conf lists the DNS servers the kernel queries when a\n\
+    name is not found in /etc/hosts. Each 'nameserver a.b.c.d' line\n\
+    adds a server; they are tried in order until one answers. Comment\n\
+    lines start with '#' or ';'.\n\
+\n\
+    The default file contains 'nameserver 1.1.1.1'. If the file is\n\
+    missing or lists no servers, 1.1.1.1 is used. Under QEMU's slirp\n\
+    user network the guest-side resolver is also reachable at\n\
+    10.0.2.3, and any external server (1.1.1.1, 8.8.8.8, ...) is\n\
+    forwarded through the host's NAT.\n\
+\n\
+FILES\n\
+    /etc/resolv.conf\n"
 
 #define VEDIT_PAGE "NAME\n\
     vedit - full-screen text editor\n\
@@ -874,6 +920,10 @@ static const struct Page pages[] = {
      DF_PAGE},
     {"ping",     "send ICMP echo requests (network test)",
       PING_PAGE},
+    {"hosts",    "static host name to IP mapping",
+      HOSTS_PAGE},
+    {"resolv.conf", "DNS server configuration",
+      RESOLV_PAGE},
     {"vedit",    "full-screen text editor",
      VEDIT_PAGE},
     {"calc",     "graphical calculator",

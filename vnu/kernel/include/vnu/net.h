@@ -28,9 +28,21 @@ int init();
 uint32_t uptime_ms();
 
 // Round-trip time to `ip` (big-endian uint32) in milliseconds, or a
-// negative errno: -VNU_EIO (no NIC), -VNU_EHOSTUNREACH (no ARP reply),
-// -VNU_ETIMEDOUT (no ICMP reply in time). Ping to OUR_IP returns 0.
+// negative errno: -VNU_EIO (no NIC), -VNU_EHOSTUNREACH (no ARP reply,
+// via the gateway for off-subnet targets), -VNU_ETIMEDOUT (no ICMP
+// reply in time). Ping to OUR_IP returns 0.
 long ping(uint32_t ip, uint32_t timeout_ms);
+
+// DNS A-record lookup of `name` against `server` (big-endian IPv4).
+// Returns 0 with *out big-endian on success, else -VNU_ENOENT,
+// -VNU_EIO, -VNU_EHOSTUNREACH or -VNU_ETIMEDOUT.
+long dns_query(uint32_t server, const char* name, uint32_t* out,
+               uint32_t timeout_ms);
+
+// Resolve `name`: /etc/hosts mapping first, then DNS A queries to the
+// servers listed in /etc/resolv.conf (default 1.1.1.1). Returns 0 with
+// *out big-endian, or a negative errno (same set as dns_query).
+long resolve_host(const char* name, uint32_t* out);
 
 void get_info(Info* out);
 

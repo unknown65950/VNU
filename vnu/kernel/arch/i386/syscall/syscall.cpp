@@ -462,6 +462,21 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
          * timeout in ms. Returns RTT ms or -VNU_EHOSTUNREACH/-VNU_ETIMEDOUT. */
         return static_cast<std::uint32_t>(vnu::net::ping(tf->ebx, tf->ecx));
 
+    case VNU_SYS_resolve:
+        /* Resolve `ebx` (host name) to a big-endian IPv4 written to
+         * *ecx: /etc/hosts first, then DNS via /etc/resolv.conf
+         * (default server 1.1.1.1). Returns 0 or -VNU_ENOENT /
+         * -VNU_EIO / -VNU_EHOSTUNREACH / -VNU_ETIMEDOUT. */
+        {
+            const char* name = reinterpret_cast<const char*>(tf->ebx);
+            auto* out = reinterpret_cast<std::uint32_t*>(tf->ecx);
+            std::uint32_t ip;
+            long rc = vnu::net::resolve_host(name, &ip);
+            if (rc == 0)
+                *out = ip;
+            return static_cast<std::uint32_t>(rc);
+        }
+
     case VNU_SYS_netinfo: {
         /* Fill a vnu_netinfo struct (MAC, addresses, link status). */
         auto* info = reinterpret_cast<vnu::net::Info*>(tf->ebx);
