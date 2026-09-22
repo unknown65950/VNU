@@ -458,9 +458,9 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
         return static_cast<std::uint32_t>(vnu::vfs::uptime_seconds());
 
     case VNU_SYS_ping:
-        /* RTT to an IPv4 address (ebx, big-endian uint32); edx is the
+        /* RTT to an IPv4 address (ebx, big-endian uint32); ecx is the
          * timeout in ms. Returns RTT ms or -VNU_EHOSTUNREACH/-VNU_ETIMEDOUT. */
-        return static_cast<std::uint32_t>(vnu::net::ping(tf->ebx, tf->edx));
+        return static_cast<std::uint32_t>(vnu::net::ping(tf->ebx, tf->ecx));
 
     case VNU_SYS_netinfo: {
         /* Fill a vnu_netinfo struct (MAC, addresses, link status). */

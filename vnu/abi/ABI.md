@@ -70,9 +70,9 @@ with `-1` leaves a field unchanged; only root may chown.
   `time()` against a boot-time snapshot (so it wraps every local midnight;
   one-second resolution, no timer interrupt). Backs the analog-clock GUI
   apps' stopwatch/timer elapsed-time readings.
-- `ping(ebx, ecx, edx)` — `ebx` is the target IPv4 address as a
-  big-endian uint32 (10.0.2.2 = `0x0A000202`), `edx` the timeout in
-  milliseconds (kernel clamps to 10..2000; `ecx` reserved, must be 0).
+- `ping(ebx, ecx)` — `ebx` is the target IPv4 address as a
+  big-endian uint32 (10.0.2.2 = `0x0A000202`), `ecx` the timeout in
+  milliseconds (kernel clamps to 10..2000).
   Returns the round-trip time in ms on success, or
   `-VNU_EIO` (no NIC), `-VNU_EHOSTUNREACH` (ARP resolution failed),
   `-VNU_ETIMEDOUT` (host did not answer in time). Pinging the machine's
