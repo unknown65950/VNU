@@ -798,6 +798,27 @@ DESCRIPTION\n\
     type bits against /dev and /proc and reports the results.\n\
     A quick way to sanity-check the terminal and VFS plumbing.\n"
 
+#define TLSDEMO_PAGE "NAME\n\
+    tlsdemo - TLS 1.2 client demo\n\
+\n\
+SYNOPSIS\n\
+    tlsdemo IP PORT [TIME_MS] [SNI]\n\
+\n\
+DESCRIPTION\n\
+    Connects to a TLS 1.2 server over the kernel's TCP socket\n\
+    API and runs the vlibc TLS handshake (cipher suite\n\
+    TLS_RSA_WITH_AES_128_GCM_SHA256) through the tls_stream\n\
+    callbacks, then sends one HTTP GET and prints the response.\n\
+    IP is a dotted quad; the default timeout is 15000 ms and the\n\
+    default SNI name is 'localhost'. From inside QEMU the host is\n\
+    reachable at 10.0.2.2 (slirp user networking).\n\
+\n\
+EXAMPLES\n\
+    tlsdemo 10.0.2.2 14433\n\
+\n\
+SEE ALSO\n\
+    ping(1), vprobe, man hosts\n"
+
 #define SH_PAGE "NAME\n\
     sh - the standard shell (synonym for vash)\n\
 \n\
@@ -940,6 +961,8 @@ static const struct Page pages[] = {
      HELLO_PAGE},
     {"ttytest",  "POSIX compatibility smoke test",
      TTYTEST_PAGE},
+    {"tlsdemo",  "TLS 1.2 client demo",
+     TLSDEMO_PAGE},
 };
 
 static int is_alias(const char* a)

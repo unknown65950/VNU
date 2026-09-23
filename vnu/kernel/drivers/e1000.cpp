@@ -1,10 +1,12 @@
 #include <vnu/net.h>
+#include <vnu/tcp.h>
 #include <vnu/pci.h>
 #include <vnu/paging.h>
 #include <vnu/pmm.h>
 #include <vnu/abi.h>
 #include <vnu/vfs.h>
 #include <stdint.h>
+#include "netcore.h"
 
 extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
 extern "C" void* memset(void* dst, int val, unsigned long count);
@@ -225,7 +227,9 @@ void read_mac()
 
 /* --- TX: one shared buffer, one descriptor, TDT as producer index --- */
 
-bool tx_send(const uint8_t* data, uint16_t len)
+/* Waits for a free TX descriptor (the single one), then hands the frame
+ * already assembled in g_tx_buf to the NIC. Returns false when stuck. */
+bool tx_send_current(uint16_t len)
 {
     if (len == 0 || len > RX_BUFSIZE || !g_up)
         return false;
@@ -241,7 +245,6 @@ bool tx_send(const uint8_t* data, uint16_t len)
             return false; /* ring full; drop rather than hang */
     }
 
-    memcpy(g_tx_buf, data, len);
     uint32_t tdt = rd(REG_TDT);
     TxDesc& d = g_tx_ring[tdt % TX_N];
     d.addr_lo = g_tx_buf_phys;
@@ -254,6 +257,14 @@ bool tx_send(const uint8_t* data, uint16_t len)
     d.special = 0;
     wr(REG_TDT, (tdt + 1u) % TX_N);
     return true;
+}
+
+bool tx_send(const uint8_t* data, uint16_t len)
+{
+    if (len == 0 || len > RX_BUFSIZE || !g_up)
+        return false;
+    memcpy(g_tx_buf, data, len);
+    return tx_send_current(len);
 }
 
 /* --- packet builders (all frames assembled in the shared TX buffer) --- */
@@ -515,13 +526,17 @@ void handle_frame(const uint8_t* f, uint16_t len)
     uint16_t iplen = (static_cast<uint16_t>(f[16]) << 8) | f[17];
     if (iplen < 20 || static_cast<uint16_t>(14 + iplen) > len)
         return;
+    uint32_t src_ip = get_be32(f + 26);
     uint8_t proto = f[23];
+    if (proto == 6) { /* TCP */
+        vnu::tcp::input_packet(src_ip, f, len, iplen);
+        return;
+    }
     if (proto != 1 && proto != 17) /* ICMP or UDP */
         return;
     if (iplen < 28)
         return;
 
-    uint32_t src_ip = get_be32(f + 26);
     uint32_t dst_ip = get_be32(f + 30);
     if (dst_ip != g_ip)
         return;
@@ -982,3 +997,49 @@ void get_info(Info* out)
 }
 
 } // namespace vnu::net
+
+/* --- netcore bridge: NIC internals exposed to the TCP module --- */
+
+namespace vnu::netcore {
+
+bool net_up()
+{
+    return g_up;
+}
+
+uint32_t our_ip()
+{
+    return g_ip;
+}
+
+void eth_header(uint16_t ethertype, const uint8_t* dst)
+{
+    ::eth_header(ethertype, dst);
+}
+
+uint8_t* tx_room()
+{
+    return g_tx_buf + 14;
+}
+
+bool tx_send_current(uint16_t frame_len)
+{
+    return ::tx_send_current(frame_len);
+}
+
+int arp_ensure(uint32_t ip, uint8_t mac[6], uint32_t timeout_ms)
+{
+    return ::arp_ensure(ip, mac, timeout_ms);
+}
+
+void rx_drain()
+{
+    ::rx_drain();
+}
+
+uint32_t now_ms()
+{
+    return net::uptime_ms();
+}
+
+} // namespace vnu::netcore

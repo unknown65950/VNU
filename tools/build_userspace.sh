@@ -35,6 +35,8 @@ echo "==> userspace"
 "$VCC" "$ROOT/vnu/userspace/gui/picview.c" -o "$ROOT/sysroot/bin/picview"
 "$VCC" "$ROOT/vnu/userspace/gui/clock.c" -o "$ROOT/sysroot/bin/clock"
 "$VCC" "$ROOT/vnu/userspace/examples/hello/hello.c" -o "$ROOT/sysroot/bin/hello"
+"$VCC" "$ROOT/vnu/userspace/examples/vprobe.c" -o "$ROOT/sysroot/bin/vprobe"
+"$VCC" "$ROOT/vnu/userspace/examples/tlsdemo.c" -o "$ROOT/sysroot/bin/tlsdemo"
 "$VCC" "$ROOT/vnu/userspace/examples/ttytest.c" -o "$ROOT/sysroot/bin/ttytest"
 "$VCC" "$ROOT/vnu/userspace/man/man.c" -o "$ROOT/sysroot/bin/man"
 # coreutils: one separate binary per command (no multi-call applet).
@@ -62,6 +64,8 @@ embed "$ROOT/vnu/userspace/gui/pics/shapes_pal.png" pic_shapes_pal
 embed "$ROOT/vnu/userspace/gui/pics/shapes_rgba.png" pic_shapes_rgba
 embed "$ROOT/vnu/userspace/gui/pics/wallpaper.png" wallpaper
 embed "$ROOT/sysroot/bin/hello" hello
+embed "$ROOT/sysroot/bin/vprobe" vprobe
+embed "$ROOT/sysroot/bin/tlsdemo" tlsdemo
 embed "$ROOT/sysroot/bin/ttytest" ttytest
 embed "$ROOT/sysroot/bin/man" man
 for c in echo true false pwd cat ls mkdir rm touch uname clear \

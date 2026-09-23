@@ -42,6 +42,11 @@
 #define VNU_SYS_ping     38
 #define VNU_SYS_netinfo  39
 #define VNU_SYS_resolve  40
+#define VNU_SYS_socket   41
+#define VNU_SYS_connect  42
+#define VNU_SYS_send     43
+#define VNU_SYS_recv     44
+#define VNU_SYS_netclose 45
 
 #define VNU_EPERM 1
 #define VNU_ENOENT 2
@@ -59,9 +64,13 @@
 #define VNU_ENOTDIR 20
 #define VNU_EISDIR 21
 #define VNU_EINVAL 22
+#define VNU_EMFILE 24
 #define VNU_ENOSPC 28
 #define VNU_ERANGE 34
+#define VNU_ECONNRESET 104
+#define VNU_ENOTCONN 107
 #define VNU_ETIMEDOUT 110
+#define VNU_ECONNREFUSED 111
 #define VNU_EHOSTUNREACH 113
 #define VNU_ENOSYS 38
 #define VNU_ENOTEMPTY 39

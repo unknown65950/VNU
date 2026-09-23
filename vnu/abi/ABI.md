@@ -53,6 +53,11 @@ must never be renumbered.
 | 38 | ping   |
 | 39 | netinfo |
 | 40 | resolve |
+| 41 | socket |
+| 42 | connect |
+| 43 | send |
+| 44 | recv |
+| 45 | netclose |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
@@ -90,12 +95,32 @@ with `-1` leaves a field unchanged; only root may chown.
   Returns 0, or `-VNU_ENOENT` (name has no A record / not in hosts),
   `-VNU_EIO` (no NIC), `-VNU_EHOSTUNREACH` (no route), `-VNU_ETIMEDOUT`
   (no answer in time).
+- `socket(ebx, ecx)` — opens a TCP socket. `ebx` is the address family
+  (2 = AF_INET), `ecx` the type (1 = SOCK_STREAM). Returns a small
+  non-negative socket handle, or `-VNU_EMFILE` (24) when the fixed
+  8-slot socket table is full. There is no listen(); the stack is
+  client-only TCP for now.
+- `connect(ebx, ecx, edx)` — `ebx` is the socket handle, `ecx` the
+  remote IPv4 as a big-endian uint32, `edx` the TCP port in host byte
+  order. Performs ARP resolution, the three-way handshake and blocks
+  until established. Returns 0, or `-VNU_EIO`/`-VNU_EHOSTUNREACH`
+  (ARP), `-VNU_ETIMEDOUT` (handshake did not complete in time),
+  `-VNU_ECONNREFUSED` (RST).
+- `send(ebx, ecx, edx, esi)` — sends `edx` bytes from the caller's
+  buffer `ecx` on the socket, with `esi` a timeout in ms. Blocks until
+  all bytes are buffered and pushed. Returns the byte count, or
+  `-VNU_ETIMEDOUT`/`-VNU_ECONNRESET`/`-VNU_ENOTCONN`.
+- `recv(ebx, ecx, edx, esi)` — receives up to `edx` bytes into buffer
+  `ecx`, `esi` timeout in ms. Returns bytes read, 0 on orderly close
+  (FIN), or `-VNU_ETIMEDOUT`/`-VNU_ECONNRESET`/`-VNU_ENOTCONN`.
+- `netclose(ebx)` — closes a socket (FIN if established) and frees its
+  slot. Returns 0.
 
 ### Removed
 
 Not applicable — numbers are never reused; old gaps stay reserved.
 
-### Future (append-only, start at 41)
+### Future (append-only, start at 46)
 
 Unsupported calls return `-VNU_ENOSYS`.
 
@@ -103,6 +128,8 @@ Unsupported calls return `-VNU_ENOSYS`.
 
 `VNU_ETIMEDOUT` (110) and `VNU_EHOSTUNREACH` (113) were added in the
 same change as the `ping`/`netinfo` syscalls; values match Linux's.
+`VNU_ECONNRESET` (104), `VNU_ENOTCONN` (107) and `VNU_ECONNREFUSED`
+(111) were added with the TCP socket syscalls; values match Linux's.
 
 ## Interrupt gate
 Vector `0x80`, selector `0x08`, DPL=3, present 32-bit interrupt gate (`0xEE`).

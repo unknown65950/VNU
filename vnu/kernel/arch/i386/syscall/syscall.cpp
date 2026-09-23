@@ -10,6 +10,7 @@
 #include <vnu/wintask.h>
 #include <vnu/install.h>
 #include <vnu/net.h>
+#include <vnu/tcp.h>
 
 struct TrapFrame {
     std::uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
@@ -485,6 +486,35 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
         vnu::net::get_info(info);
         return 0;
     }
+
+    case VNU_SYS_socket:
+        /* socket(ebx=family, ecx=type). AF_INET+SOCK_STREAM only; gets a
+         * fixed TCP slot. Returns the handle (small integer) or -errno. */
+        return static_cast<std::uint32_t>(vnu::tcp::socket_open(tf->ebx, tf->ecx));
+
+    case VNU_SYS_connect:
+        /* connect(ebx=sock, ecx=ip_be, edx=port_hostorder,
+         * esi=timeout_ms). Resolves the ARP entry, runs the SYN
+         * handshake and blocks until ESTABLISHED. 0 or -errno. */
+        return static_cast<std::uint32_t>(vnu::tcp::socket_connect(
+            tf->ebx, tf->ecx, static_cast<std::uint16_t>(tf->edx), tf->esi));
+
+    case VNU_SYS_send:
+        /* send(ebx=sock, ecx=buf, edx=len, esi=timeout_ms). Buffers and
+         * pushes all bytes onto the wire. Returns len or -errno. */
+        return static_cast<std::uint32_t>(vnu::tcp::socket_send(
+            tf->ebx, reinterpret_cast<void*>(tf->ecx), tf->edx, tf->esi));
+
+    case VNU_SYS_recv:
+        /* recv(ebx=sock, ecx=buf, edx=len, esi=timeout_ms). Returns up to
+         * len in-order bytes, 0 on EOF, or -errno. */
+        return static_cast<std::uint32_t>(vnu::tcp::socket_recv(
+            tf->ebx, reinterpret_cast<void*>(tf->ecx), tf->edx, tf->esi));
+
+    case VNU_SYS_netclose:
+        /* netclose(ebx=sock). Sends FIN (flushing buffered data) and
+         * frees the slot. 0 or -errno. */
+        return static_cast<std::uint32_t>(vnu::tcp::socket_close(tf->ebx));
 
     default:
         return static_cast<std::uint32_t>(-VNU_ENOSYS);

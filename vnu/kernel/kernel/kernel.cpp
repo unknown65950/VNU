@@ -17,7 +17,9 @@
 #include <vnu/ata.h>
 #include <vnu/mboot.h>
 #include <vnu/net.h>
+#include <vnu/tcp.h>
 extern "C" void vnu_console_start();
+extern "C" void vnu_debug_putc(char c);
 
 namespace
 {
@@ -118,7 +120,6 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
 
     /* Network self-test: verify ARP + ICMP ping to the gateway. */
     {
-        extern void vnu_debug_putc(char);
         auto putdec = [](unsigned long v) {
             if (v == 0) { vnu_debug_putc('0'); return; }
             char buf[12]; int n = 0;
@@ -130,6 +131,46 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
         putstr("NET SELFTEST ping 10.0.2.2 > ");
         if (rtt >= 0) { putdec(rtt); putstr(" ms\n"); }
         else { putstr("FAIL rc="); putdec(-rtt); putstr("\n"); }
+    }
+    /* TCP echo self-test: open a client socket, connect to the
+     * host-loopback echo service (10.0.2.2:7777) which slirp forwards
+     * to 127.0.0.1:7777 on the host, send a marker and print however
+     * many bytes the server bounces back. Runs at boot, no keyboard,
+     * purely to validate the connect()/send()/recv() path end-to-end. */
+    {
+        auto putdec = [](unsigned long v) {
+            if (v == 0) { vnu_debug_putc('0'); return; }
+            char buf[12]; int n = 0;
+            while (v) { buf[n++] = static_cast<char>('0' + v % 10); v /= 10; }
+            while (n) vnu_debug_putc(buf[--n]);
+        };
+        auto putstr = [](const char* s) { for (; *s; ++s) vnu_debug_putc(*s); };
+        int sock = vnu::tcp::socket_open(2, 1); /* AF_INET, SOCK_STREAM */
+        if (sock < 0) {
+            putstr("TCP SELFTEST socket: "); putdec(-sock); putstr("\n");
+        } else {
+            long rc = vnu::tcp::socket_connect(sock, vnu::net::GW_IP, 7777, 6000);
+            if (rc < 0) {
+                putstr("TCP SELFTEST connect: "); putdec(-rc); putstr("\n");
+            } else {
+                putstr("TCP SELFTEST connected\n");
+                static const char marker[] = "VNU-TCP-EO";
+                rc = vnu::tcp::socket_send(sock, marker,
+                                            static_cast<long>(sizeof(marker) - 1), 3000);
+                if (rc < 0) {
+                    putstr("TCP SELFTEST send: "); putdec(-rc); putstr("\n");
+                } else {
+                    char in[128];
+                    rc = vnu::tcp::socket_recv(sock, in, sizeof(in), 8000);
+                    putstr("TCP SELFTEST recv: "); putdec(rc); putstr(" :");
+                    if (rc > 0) {
+                        for (long i = 0; i < rc; ++i) vnu_debug_putc(in[i]);
+                    }
+                    putstr("\n");
+                }
+            }
+            vnu::tcp::socket_close(sock);
+        }
     }
 
     /* Unified system: kernel + vlibc programs. Boot /sbin/init as a
