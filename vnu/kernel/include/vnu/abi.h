@@ -47,6 +47,9 @@
 #define VNU_SYS_send     43
 #define VNU_SYS_recv     44
 #define VNU_SYS_netclose 45
+#define VNU_SYS_bind     46
+#define VNU_SYS_listen   47
+#define VNU_SYS_accept   48
 
 #define VNU_EPERM 1
 #define VNU_ENOENT 2
@@ -67,6 +70,7 @@
 #define VNU_EMFILE 24
 #define VNU_ENOSPC 28
 #define VNU_ERANGE 34
+#define VNU_EADDRINUSE 98
 #define VNU_ECONNRESET 104
 #define VNU_ENOTCONN 107
 #define VNU_ETIMEDOUT 110

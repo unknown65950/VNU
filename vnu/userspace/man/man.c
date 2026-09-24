@@ -819,6 +819,36 @@ EXAMPLES\n\
 SEE ALSO\n\
     ping(1), vprobe, man hosts\n"
 
+#define ECHOSERVER_PAGE "NAME\n\
+    echoserver - TCP echo server demo\n\
+\n\
+SYNOPSIS\n\
+    echoserver [PORT]\n\
+\n\
+DESCRIPTION\n\
+    Binds PORT (default 7778), enters listen mode and serves one\n\
+    client at a time: every byte received on the connection is sent\n\
+    straight back until the peer closes. Exercises the kernel's\n\
+    bind/listen/accept server path end-to-end over the real NIC.\n\
+\n\
+    run.sh forwards host loopback port 17778 to the guest's 7778\n\
+    (slirp hostfwd), so from the host shell 'nc 127.0.0.1 17778' (or\n\
+    bash's /dev/tcp) can drive it; in the guest, run 'echoserver\n\
+    7778' in the foreground first. The guest's own 10.0.2.15 is not\n\
+    reachable from the host on a plain slirp user network. accept()\n\
+    waits at most 20 s; recv()/send() 5 s per call.\n\
+\n\
+EXIT STATUS\n\
+    0 after the listener is closed, 1 on socket/bind/listen failure,\n\
+    2 on a bad PORT argument.\n\
+\n\
+EXAMPLES\n\
+    echoserver\n\
+    echoserver 9999\n\
+\n\
+SEE ALSO\n\
+    ping(1), tlsdemo, echoserver, man hosts\n"
+
 #define SH_PAGE "NAME\n\
     sh - the standard shell (synonym for vash)\n\
 \n\
@@ -963,6 +993,8 @@ static const struct Page pages[] = {
      TTYTEST_PAGE},
     {"tlsdemo",  "TLS 1.2 client demo",
      TLSDEMO_PAGE},
+    {"echoserver", "TCP echo server demo",
+     ECHOSERVER_PAGE},
 };
 
 static int is_alias(const char* a)

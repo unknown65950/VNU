@@ -26,3 +26,20 @@ int vnu_netclose(int sock)
 {
     return (int)syscall(VNU_SYS_netclose, sock);
 }
+
+int vnu_bind(int sock, uint16_t port)
+{
+    return (int)syscall(VNU_SYS_bind, sock, (long)port);
+}
+
+int vnu_listen(int sock, int backlog)
+{
+    return (int)syscall(VNU_SYS_listen, sock, (long)backlog);
+}
+
+int vnu_accept(int sock, uint32_t* ip_be_out, uint16_t* port_out,
+               uint32_t timeout_ms)
+{
+    return (int)syscall(VNU_SYS_accept, sock, (long)ip_be_out,
+                        (long)port_out, (long)timeout_ms);
+}

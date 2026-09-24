@@ -5,13 +5,20 @@
 #include "netcore.h"
 
 
-/* TCP/IPv4 client stack for the hobby kernel.
+/* TCP/IPv4 stack for the hobby kernel: one client connection per slot,
+ * plus bound/listen/accept server sockets sharing the same fixed table.
  *
  * Model: one port/one connection per slot, blocking ops driven from the
  * syscall (busy-wait + rx_drain, like ping/DNS). Sends are window-limited
  * with timeout-based retransmission of the oldest unacked bytes; receives
  * accept only in-order data (out-of-order / duplicate segments are dropped,
- * the running ACK is re-sent). There is no listener: this OS connects out.
+ * the running ACK is re-sent).
+ *
+ * Server side: a socket in ST_LISTEN answers inbound SYNs by spawning a
+ * child socket in ST_SYN_RCVD (backlog-bounded), completes the handshake
+ * on the final ACK and parks the child in the listener's accept queue
+ * until accept() hands it to userspace. Children are looked up by the
+ * full four-tuple; the listener by its local port alone.
  *
  * The FIN occupies its own sequence number and is retransmitted until
  * acked; only after all buffered data is pushed is the FIN emitted. */
@@ -22,13 +29,6 @@ extern "C" int memcmp(const void* a, const void* b, unsigned long count);
 extern "C" void vnu_debug_putc(char c);
 
 
-/* Temporary handshake tracing (serial COM1) — remove before landing. */
-void dbg_trace(const char* s)
-{
-    for (const char* p = s; *p; ++p)
-        vnu_debug_putc(*p);
-}
-
 namespace {
 
 constexpr int MAX_SOCKS = 8;   /* fixed socket table */
@@ -38,9 +38,12 @@ constexpr int PUSH_MSS = 1460;  /* we advertise (and usually send) 1460 */
 constexpr int DEFAULT_MSS = 536; /* RFC 793 default for peers without MSS */
 constexpr int MAX_RTO = 8000;   /* retransmission backoff ceiling, ms */
 constexpr int INITIAL_RTO = 1000;
+constexpr int MAX_ACCEPT = 4;   /* listen() backlog / accept queue cap */
 
 enum State {
     ST_CLOSED,
+    ST_LISTEN,
+    ST_SYN_RCVD,
     ST_SYN_SENT,
     ST_ESTABLISHED,
     ST_FIN_WAIT1,
@@ -87,6 +90,14 @@ struct TcpSock {
 
     bool fin_rcvd = false;
     bool err_reset = false;
+
+    /* server side */
+    int listener = -1;       /* LISTEN socket that spawned us, -1 otherwise */
+    int8_t accept_q[MAX_ACCEPT]; /* completed handshakes awaiting accept() */
+    uint8_t accept_q_len = 0;
+    uint8_t accept_q_head = 0;
+    int backlog = 0;         /* listen() backlog, clamped to 1..MAX_ACCEPT */
+    bool queued = false;     /* parked in the listener's accept queue */
 };
 
 TcpSock g_socks[MAX_SOCKS];
@@ -276,6 +287,12 @@ void tcp_retransmit(TcpSock& s, uint32_t now)
         tcp_send_seg(s, s.iss, 0, FLAG_SYN, true, nullptr, 0);
         return;
     }
+    if (s.state == ST_SYN_RCVD) {
+        /* Server side: refresh the SYN-ACK until the peer's ACK lands. */
+        tcp_send_seg(s, s.iss, s.rcv_base, FLAG_SYN | FLAG_ACK, true,
+                     nullptr, 0);
+        return;
+    }
     if (s.fin_sent && !s.fin_acked && s.snd_used == 0) {
         tcp_send_fin(s);
         return;
@@ -313,14 +330,80 @@ void acknowledge(TcpSock& s, uint32_t ackno, uint16_t window)
     tcp_push(s);
 }
 
-int find_peer_sock(uint32_t src_ip, uint16_t dport)
+/* Matches a socket by the full four-tuple: peers (client or server
+ * child) are found by src IP, src port and dst port. The LISTEN socket
+ * itself (rip == 0, rport == 0) never matches here — it is found by
+ * local port only, in find_listener(). */
+int find_peer_sock(uint32_t src_ip, uint16_t sport, uint16_t dport)
 {
     for (int i = 0; i < MAX_SOCKS; ++i) {
         TcpSock& s = g_socks[i];
-        if (s.used && s.rip == src_ip && s.lport == dport)
+        if (s.used && s.rip == src_ip && s.rport == sport && s.lport == dport)
             return i;
     }
     return -1;
+}
+
+int find_listener(uint16_t dport)
+{
+    for (int i = 0; i < MAX_SOCKS; ++i) {
+        TcpSock& s = g_socks[i];
+        if (s.used && s.state == ST_LISTEN && s.lport == dport)
+            return i;
+    }
+    return -1;
+}
+
+/* Cheap per-connection ISN: a mix of the clock and both ends' addresses,
+ * so simultaneous connections in adjacent slots diverge. */
+uint32_t derive_iss(uint32_t now, uint32_t rip, uint16_t rport, uint16_t lport)
+{
+    uint32_t iss = (now << 8) ^ (rip >> 16) ^ (static_cast<uint32_t>(rport) << 16) ^
+                   (static_cast<uint32_t>(lport) << 8);
+    return iss ? iss : 0x12345678u;
+}
+
+/* --- listener accept queue ------------------------------------------ */
+
+/* Parking a child in its listener's queue. The backlog cap makes sure
+ * this can never overflow: pending (SYN_RCVD + queued) children of a
+ * listener stay <= backlog <= MAX_ACCEPT from the moment of the SYN. */
+void accept_push(TcpSock& lst, TcpSock& child)
+{
+    auto pos = static_cast<uint8_t>((lst.accept_q_head + lst.accept_q_len) % MAX_ACCEPT);
+    lst.accept_q[pos] = static_cast<int8_t>(&child - g_socks);
+    ++lst.accept_q_len;
+    child.queued = true;
+}
+
+/* Removes a specific child from its listener's queue (used when the
+ * child is closed before being accepted). */
+void accept_remove(TcpSock& lst, int child_slot)
+{
+    for (uint8_t k = 0; k < lst.accept_q_len; ++k) {
+        uint8_t pos = static_cast<uint8_t>((lst.accept_q_head + k) % MAX_ACCEPT);
+        if (lst.accept_q[pos] == child_slot) {
+            for (uint8_t m = static_cast<uint8_t>(k + 1); m < lst.accept_q_len; ++m)
+                lst.accept_q[static_cast<uint8_t>((lst.accept_q_head + m - 1) % MAX_ACCEPT)] =
+                    lst.accept_q[static_cast<uint8_t>((lst.accept_q_head + m) % MAX_ACCEPT)];
+            --lst.accept_q_len;
+            return;
+        }
+    }
+}
+
+/* Handshake + queued connections a listener still owns. Bounds the
+ * socket-table pressure of a server: never more than its backlog. */
+int listener_pending(int lst_slot)
+{
+    int n = 0;
+    for (int i = 0; i < MAX_SOCKS; ++i) {
+        const TcpSock& s = g_socks[i];
+        if (s.used && s.listener == lst_slot &&
+            (s.state == ST_SYN_RCVD || s.queued))
+            ++n;
+    }
+    return n;
 }
 
 /* Parses the MSS option out of a SYN/SYN-ACK option block. */
@@ -367,6 +450,68 @@ void handle_syn_ack(TcpSock& s, uint32_t seq, uint32_t ackno,
     tcp_send_ack(s);
 }
 
+/* Server side of the handshake: an inbound SYN for a LISTEN socket.
+ * Spawns a child socket in ST_SYN_RCVD, seeds its sequence windows from
+ * the SYN and answers with a SYN-ACK. `src_mac` is the peer's MAC from
+ * the Ethernet frame, used directly as the child's destination. */
+void handle_incoming_syn(uint32_t src_ip, const uint8_t* src_mac,
+                         uint16_t sport, uint16_t dport, uint32_t seq,
+                         uint16_t window, const uint8_t* tcp_hdr_raw,
+                         int tcp_hdr_len)
+{
+    /* A repeated SYN for a child that already exists just re-arms the
+     * SYN-ACK (the peer never saw the first one). */
+    int exists = find_peer_sock(src_ip, sport, dport);
+    if (exists >= 0 && g_socks[exists].state == ST_SYN_RCVD) {
+        TcpSock& c = g_socks[exists];
+        tcp_send_seg(c, c.iss, c.rcv_base, FLAG_SYN | FLAG_ACK, true,
+                     nullptr, 0);
+        return;
+    }
+
+    int lst = find_listener(dport);
+    if (lst < 0)
+        return; /* nothing listening: drop, like other unknown 4-tuples */
+    if (listener_pending(lst) >= g_socks[lst].backlog)
+        return; /* backlog full: drop so the peer's retries land later */
+
+    int slot = -1;
+    for (int i = 0; i < MAX_SOCKS; ++i)
+        if (!g_socks[i].used) {
+            slot = i;
+            break;
+        }
+    if (slot < 0)
+        return; /* no table room: drop the SYN */
+
+    TcpSock& c = g_socks[slot];
+    c = TcpSock{}; /* zero-initialize: fresh ring/queue state */
+    c.used = true;
+    c.rip = src_ip;
+    c.rport = sport;
+    c.lport = dport;
+    c.listener = lst;
+    c.state = ST_SYN_RCVD;
+
+    uint32_t now = vnu::netcore::now_ms();
+    c.iss = derive_iss(now, src_ip, sport, dport);
+    c.snd_una = c.iss;
+    c.snd_nxt = c.iss;
+    c.rcv_base = seq + 1u; /* the SYN consumed the peer's initial seq */
+    c.rcv_used = 0;
+    c.peer_mss = parse_mss_opt(tcp_hdr_raw, tcp_hdr_len);
+    if (c.peer_mss == 0)
+        c.peer_mss = DEFAULT_MSS;
+    c.snd_wnd = window;
+    c.rto = INITIAL_RTO;
+    c.rto_at = now;
+    c.rto_active = true;
+    for (int i = 0; i < 6; ++i)
+        c.dst_mac[i] = src_mac[i];
+
+    tcp_send_seg(c, c.iss, c.rcv_base, FLAG_SYN | FLAG_ACK, true, nullptr, 0);
+}
+
 } // namespace
 
 namespace vnu::tcp {
@@ -382,12 +527,8 @@ void input_packet(uint32_t src_ip, const uint8_t* f, uint16_t frame_len,
     if (tcp_hdr_len < 20)
         return;
 
+    uint16_t sport = get_be16(f + 34);
     uint16_t dport = get_be16(f + 36);
-    int sock = find_peer_sock(src_ip, dport);
-    if (sock < 0)
-        return; /* no listener: drop segments for unknown four-tuples */
-
-    TcpSock& s = g_socks[sock];
     uint32_t seq = (static_cast<uint32_t>(f[38]) << 24) | (static_cast<uint32_t>(f[39]) << 16) |
                    (static_cast<uint32_t>(f[40]) << 8) | f[41];
     uint32_t ackno = (static_cast<uint32_t>(f[42]) << 24) | (static_cast<uint32_t>(f[43]) << 16) |
@@ -398,16 +539,46 @@ void input_packet(uint32_t src_ip, const uint8_t* f, uint16_t frame_len,
     const uint8_t* pay = f + 34 + tcp_hdr_len;
     uint32_t paylen = static_cast<uint32_t>(ip_len) - 20u - static_cast<uint32_t>(tcp_hdr_len);
 
+    /* SYN goes to the listener path, not to an existing socket. */
+    if (flags & FLAG_SYN) {
+        handle_incoming_syn(src_ip, f + 6, sport, dport, seq, window,
+                            f + 34, tcp_hdr_len);
+        return;
+    }
+
+    int sock = find_peer_sock(src_ip, sport, dport);
+    if (sock < 0)
+        return; /* no socket for this four-tuple: drop */
+
+    TcpSock& s = g_socks[sock];
+
     if (flags & FLAG_RST) {
         s.err_reset = true;
         return;
     }
 
     if (s.state == ST_SYN_SENT) {
-        ;
         if ((flags & (FLAG_SYN | FLAG_ACK)) == (FLAG_SYN | FLAG_ACK))
             handle_syn_ack(s, seq, ackno, f + 34, tcp_hdr_len, window);
         return;
+    }
+
+    if (s.state == ST_SYN_RCVD) {
+        /* The final ACK of the server handshake. The SYN is our only
+         * outstanding byte, so the peer must be acking iss+1; rejecting
+         * anything else matches acknowledge()'s "bogus ack" rule. */
+        if (!(flags & FLAG_ACK))
+            return;
+        if (ackno != s.iss + 1u)
+            return;
+        s.snd_una = s.iss + 1u;
+        s.snd_nxt = s.iss + 1u;
+        s.snd_wnd = window;
+        s.rto_active = false;
+        s.state = ST_ESTABLISHED;
+        if (s.listener >= 0)
+            accept_push(g_socks[s.listener], s);
+        /* fall through: the same segment may carry data or a FIN */
     }
 
     if (s.state != ST_ESTABLISHED && s.state != ST_CLOSE_WAIT &&
@@ -482,9 +653,7 @@ long socket_connect(int sock, uint32_t ip_be, uint16_t port, uint32_t timeout_ms
     s.rip = ip_be;
     s.rport = port;
     uint32_t now = vnu::netcore::now_ms();
-    s.iss = (now << 8) ^ (ip_be >> 16) ^ (static_cast<uint32_t>(port) << 16);
-    if (s.iss == 0)
-        s.iss = 0x12345678u;
+    s.iss = derive_iss(now, ip_be, port, s.lport);
     s.snd_una = s.iss;
     s.snd_nxt = s.iss;
     s.snd_used = 0;
@@ -498,10 +667,8 @@ long socket_connect(int sock, uint32_t ip_be, uint16_t port, uint32_t timeout_ms
     int mac_rc = vnu::netcore::arp_ensure(ip_be, s.dst_mac, timeout_ms);
     if (mac_rc < 0)
         return mac_rc;
-    dbg_trace("C:arp ok\n");
 
     tcp_send_seg(s, s.iss, 0, FLAG_SYN, true, nullptr, 0);
-    ;
 
     uint32_t deadline = vnu::netcore::now_ms() + timeout_ms;
     while (static_cast<int32_t>(vnu::netcore::now_ms() - deadline) < 0) {
@@ -600,6 +767,29 @@ long socket_close(int sock)
         return -VNU_EBADF;
     TcpSock& s = g_socks[sock];
 
+    if (s.state == ST_LISTEN) {
+        /* Abort every child still owned by this listener (half-open or
+         * parked in its accept queue): none was ever handed out, so a
+         * plain dealloc is correct — and it keeps the table from leaking. */
+        for (int i = 0; i < MAX_SOCKS; ++i)
+            if (g_socks[i].used && g_socks[i].listener == sock) {
+                g_socks[i].used = false;
+                g_socks[i].state = ST_CLOSED;
+            }
+        s.used = false;
+        return 0;
+    }
+
+    if (s.listener >= 0) {
+        /* A server child closed before accept() took it: drop it from the
+         * listener's queue (or the half-open pool) and free the slot. */
+        if (s.queued && g_socks[s.listener].used)
+            accept_remove(g_socks[s.listener], sock);
+        s.used = false;
+        s.state = ST_CLOSED;
+        return 0;
+    }
+
     if (s.state == ST_ESTABLISHED || s.state == ST_CLOSE_WAIT) {
         uint32_t deadline = vnu::netcore::now_ms() + 1000u;
         while (static_cast<int32_t>(vnu::netcore::now_ms() - deadline) < 0) {
@@ -618,6 +808,80 @@ long socket_close(int sock)
     s.used = false;
     s.state = ST_CLOSED;
     return 0;
+}
+
+long socket_bind(int sock, uint16_t port)
+{
+    TcpSock* sp = nullptr;
+    if (!valid_handle(sock, &sp))
+        return -VNU_EBADF;
+    TcpSock& s = *sp;
+    if (s.state != ST_CLOSED)
+        return -VNU_EINVAL; /* bind only a fresh, unconnected socket */
+    if (port == 0)
+        return -VNU_EINVAL; /* ephemeral assignment not supported:
+                               socket() already auto-picked a port */
+    for (int i = 0; i < MAX_SOCKS; ++i)
+        if (i != sock && g_socks[i].used && g_socks[i].lport == port)
+            return -VNU_EADDRINUSE;
+    s.lport = port;
+    return 0;
+}
+
+long socket_listen(int sock, int backlog)
+{
+    TcpSock* sp = nullptr;
+    if (!valid_handle(sock, &sp))
+        return -VNU_EBADF;
+    TcpSock& s = *sp;
+    if (s.state != ST_CLOSED)
+        return -VNU_EINVAL;
+    if (backlog < 1)
+        backlog = 1;
+    if (backlog > MAX_ACCEPT)
+        backlog = MAX_ACCEPT;
+    s.backlog = backlog;
+    s.accept_q_len = 0;
+    s.accept_q_head = 0;
+    s.state = ST_LISTEN;
+    return 0;
+}
+
+long socket_accept(int sock, uint32_t* ip_be_out, uint16_t* port_out,
+                   uint32_t timeout_ms)
+{
+    TcpSock* sp = nullptr;
+    if (!valid_handle(sock, &sp))
+        return -VNU_EBADF;
+    TcpSock& s = *sp;
+    if (s.state != ST_LISTEN)
+        return -VNU_EINVAL;
+    if (timeout_ms < 20)
+        timeout_ms = 20;
+    if (timeout_ms > 20000)
+        timeout_ms = 20000;
+
+    uint32_t deadline = vnu::netcore::now_ms() + timeout_ms;
+    for (;;) {
+        /* Drive the RX path so handshakes progress while we wait. */
+        vnu::netcore::rx_drain();
+        if (s.accept_q_len) {
+            uint8_t pos = s.accept_q_head;
+            int child = s.accept_q[pos];
+            s.accept_q_head = static_cast<uint8_t>((pos + 1) % MAX_ACCEPT);
+            --s.accept_q_len;
+            TcpSock& c = g_socks[child];
+            if (ip_be_out)
+                *ip_be_out = c.rip;
+            if (port_out)
+                *port_out = c.rport;
+            c.listener = -1; /* the child is now a standalone socket */
+            c.queued = false;
+            return child;
+        }
+        if (static_cast<int32_t>(vnu::netcore::now_ms() - deadline) >= 0)
+            return -VNU_ETIMEDOUT;
+    }
 }
 
 } // namespace vnu::tcp

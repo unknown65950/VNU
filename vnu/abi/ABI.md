@@ -58,6 +58,9 @@ must never be renumbered.
 | 43 | send |
 | 44 | recv |
 | 45 | netclose |
+| 46 | bind |
+| 47 | listen |
+| 48 | accept |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
@@ -98,8 +101,9 @@ with `-1` leaves a field unchanged; only root may chown.
 - `socket(ebx, ecx)` — opens a TCP socket. `ebx` is the address family
   (2 = AF_INET), `ecx` the type (1 = SOCK_STREAM). Returns a small
   non-negative socket handle, or `-VNU_EMFILE` (24) when the fixed
-  8-slot socket table is full. There is no listen(); the stack is
-  client-only TCP for now.
+  8-slot socket table is full. Combined with `bind`/`listen`/`accept`
+  a socket becomes a server; on its own the handle talks to a remote
+  end via `connect`/`send`/`recv`.
 - `connect(ebx, ecx, edx)` — `ebx` is the socket handle, `ecx` the
   remote IPv4 as a big-endian uint32, `edx` the TCP port in host byte
   order. Performs ARP resolution, the three-way handshake and blocks
@@ -115,12 +119,33 @@ with `-1` leaves a field unchanged; only root may chown.
   (FIN), or `-VNU_ETIMEDOUT`/`-VNU_ECONNRESET`/`-VNU_ENOTCONN`.
 - `netclose(ebx)` — closes a socket (FIN if established) and frees its
   slot. Returns 0.
+- `bind(ebx, ecx)` — pins the local port of a fresh (not yet
+  listening/connected) socket, `ecx` the port in host byte order.
+  Required before `listen`. Returns 0, `-VNU_EADDRINUSE` (98) when
+  another open socket already holds the port, `-VNU_EINVAL` if the
+  socket is already bound/connected or `ecx` is 0 (ephemeral
+  assignment is not supported; `socket()` already picked an
+  auto-assigned port).
+- `listen(ebx, ecx)` — turns the socket into a listener on its local
+  port; `ecx` is the backlog (clamped to 1..4, pending half-open
+  handshakes + completed connections waiting for accept). Returns 0,
+  or `-VNU_EINVAL` if the socket is not a fresh, unbound one... an
+  unbound-but-`socket()`ed handle listens on its auto-assigned port.
+- `accept(ebx, ecx, edx, esi)` — waits (up to `esi` ms, clamped
+  20..20000) for a completed incoming handshake on the listening
+  socket `ebx`; writes the peer's IPv4 (big-endian uint32) to `*ecx`
+  and port (host order) to `*edx` (either may be NULL), and returns a
+  new socket handle for the connection. Returns the handle, or
+  `-VNU_EINVAL` if `ebx` is not listening, `-VNU_ETIMEDOUT` when no
+  connection arrived in time. The accepted handle talks to the peer
+  with the same `send`/`recv`/`netclose` calls; only one pending
+  connection is served per accept call.
 
 ### Removed
 
 Not applicable — numbers are never reused; old gaps stay reserved.
 
-### Future (append-only, start at 46)
+### Future (append-only, start at 49)
 
 Unsupported calls return `-VNU_ENOSYS`.
 
@@ -130,6 +155,7 @@ Unsupported calls return `-VNU_ENOSYS`.
 same change as the `ping`/`netinfo` syscalls; values match Linux's.
 `VNU_ECONNRESET` (104), `VNU_ENOTCONN` (107) and `VNU_ECONNREFUSED`
 (111) were added with the TCP socket syscalls; values match Linux's.
+`VNU_EADDRINUSE` (98) was added with `bind`; value matches Linux's.
 
 ## Interrupt gate
 Vector `0x80`, selector `0x08`, DPL=3, present 32-bit interrupt gate (`0xEE`).

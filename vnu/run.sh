@@ -68,10 +68,16 @@ if [[ "$VIRTIO_GPU" == 1 ]]; then
     QEMU_GPU_ARGS=(-vga none -device virtio-vga)
 fi
 
+# slirp user networking (явный -netdev = тот же e1000, что и по
+# умолчанию) плюс проброс хостового loopback-порта 17778 на гостевой
+# 7778 — чтобы `echoserver` можно было дёргать с хоста:
+#   nc 127.0.0.1 17778
+QEMU_NET_ARGS=(-netdev user,id=n0,hostfwd=tcp::17778-:7778 -device e1000,netdev=n0)
+
 # Грузимся с ISO (устройство d), чтобы установщик/тест мог писать на VHD;
 # сам диск (c) остаётся рядом и готов к установке на него.
 if [[ "$HEADLESS" == 1 ]]; then
-    qemu-system-i386 -cdrom vnu.iso -m 32 -boot d -display none -serial stdio -no-reboot "${QEMU_GPU_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
+    qemu-system-i386 -cdrom vnu.iso -m 32 -boot d -display none -serial stdio -no-reboot "${QEMU_GPU_ARGS[@]}" "${QEMU_NET_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
 else
-    qemu-system-i386 -cdrom vnu.iso -m 32 -boot d -serial stdio -no-reboot "${QEMU_GPU_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
+    qemu-system-i386 -cdrom vnu.iso -m 32 -boot d -serial stdio -no-reboot "${QEMU_GPU_ARGS[@]}" "${QEMU_NET_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
 fi

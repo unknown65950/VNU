@@ -516,6 +516,27 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
          * frees the slot. 0 or -errno. */
         return static_cast<std::uint32_t>(vnu::tcp::socket_close(tf->ebx));
 
+    case VNU_SYS_bind:
+        /* bind(ebx=sock, ecx=port_hostorder). Pins the local port of a
+         * fresh socket before listen(); 0 or -errno. */
+        return static_cast<std::uint32_t>(vnu::tcp::socket_bind(
+            tf->ebx, static_cast<std::uint16_t>(tf->ecx)));
+
+    case VNU_SYS_listen:
+        /* listen(ebx=sock, ecx=backlog). Marks the socket as a listener
+         * (backlog clamped 1..4); 0 or -errno. */
+        return static_cast<std::uint32_t>(
+            vnu::tcp::socket_listen(tf->ebx, tf->ecx));
+
+    case VNU_SYS_accept:
+        /* accept(ebx=sock, ecx=&rip_be_out, edx=&port_out,
+         * esi=timeout_ms). Blocks up to the timeout for a completed
+         * incoming handshake; returns a new socket handle, the peer's
+         * IP/port written through the pointers, or -errno. */
+        return static_cast<std::uint32_t>(vnu::tcp::socket_accept(
+            tf->ebx, reinterpret_cast<std::uint32_t*>(tf->ecx),
+            reinterpret_cast<std::uint16_t*>(tf->edx), tf->esi));
+
     default:
         return static_cast<std::uint32_t>(-VNU_ENOSYS);
     }
