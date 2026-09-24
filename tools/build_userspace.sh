@@ -38,6 +38,7 @@ echo "==> userspace"
 "$VCC" "$ROOT/vnu/userspace/examples/vprobe.c" -o "$ROOT/sysroot/bin/vprobe"
 "$VCC" "$ROOT/vnu/userspace/examples/tlsdemo.c" -o "$ROOT/sysroot/bin/tlsdemo"
 "$VCC" "$ROOT/vnu/userspace/examples/echoserver.c" -o "$ROOT/sysroot/bin/echoserver"
+"$VCC" "$ROOT/vnu/userspace/examples/tlsserver.c" -o "$ROOT/sysroot/bin/tlsserver"
 "$VCC" "$ROOT/vnu/userspace/examples/ttytest.c" -o "$ROOT/sysroot/bin/ttytest"
 "$VCC" "$ROOT/vnu/userspace/man/man.c" -o "$ROOT/sysroot/bin/man"
 # coreutils: one separate binary per command (no multi-call applet).
@@ -68,6 +69,7 @@ embed "$ROOT/sysroot/bin/hello" hello
 embed "$ROOT/sysroot/bin/vprobe" vprobe
 embed "$ROOT/sysroot/bin/tlsdemo" tlsdemo
 embed "$ROOT/sysroot/bin/echoserver" echoserver
+embed "$ROOT/sysroot/bin/tlsserver" tlsserver
 embed "$ROOT/sysroot/bin/ttytest" ttytest
 embed "$ROOT/sysroot/bin/man" man
 for c in echo true false pwd cat ls mkdir rm touch uname clear \

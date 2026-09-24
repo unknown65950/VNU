@@ -20,6 +20,11 @@
  * until accept() hands it to userspace. Children are looked up by the
  * full four-tuple; the listener by its local port alone.
  *
+ * 127.0.0.0/8 is a software loopback: connect() skips ARP, and every
+ * segment to a loopback address is re-fed into the input path from
+ * tcp_send_seg (synchronous, no NIC) — so a guest process can open a
+ * TCP connection to a server inside the same guest.
+ *
  * The FIN occupies its own sequence number and is retransmitted until
  * acked; only after all buffered data is pushed is the FIN emitted. */
 
@@ -167,6 +172,11 @@ void tcp_send_seg(TcpSock& s, uint32_t seq, uint32_t ackno, uint8_t flags,
 {
     const uint16_t tcp_hdr = static_cast<uint16_t>(20u + (syn_opt ? 4u : 0u));
     const uint16_t frame_len = static_cast<uint16_t>(14 + 20 + tcp_hdr + paylen);
+    /* 127.0.0.0/8 goes to our own loopback: src becomes 127.0.0.1 and
+     * the frame is fed back into the input path instead of the NIC. */
+    const uint32_t src_ip = (s.rip & 0xFF000000u) == 0x7F000000u
+                                ? 0x7F000001u
+                                : vnu::netcore::our_ip();
 
     vnu::netcore::eth_header(0x0800, s.dst_mac);
     uint8_t* p = vnu::netcore::tx_room();
@@ -179,7 +189,7 @@ void tcp_send_seg(TcpSock& s, uint32_t seq, uint32_t ackno, uint8_t flags,
     p[8] = 64;          /* TTL */
     p[9] = 6;           /* TCP */
     put_be16(p + 10, 0); /* IP checksum, filled below */
-    put_be32(p + 12, vnu::netcore::our_ip());
+    put_be32(p + 12, src_ip);
     put_be32(p + 16, s.rip);
 
     uint8_t* t = p + 20;
@@ -206,7 +216,7 @@ void tcp_send_seg(TcpSock& s, uint32_t seq, uint32_t ackno, uint8_t flags,
     (void)n;
 
     uint8_t pseudo[12];
-    put_be32(pseudo + 0, vnu::netcore::our_ip());
+    put_be32(pseudo + 0, src_ip);
     put_be32(pseudo + 4, s.rip);
     pseudo[8] = 0;
     pseudo[9] = 6;
@@ -216,6 +226,16 @@ void tcp_send_seg(TcpSock& s, uint32_t seq, uint32_t ackno, uint8_t flags,
     put_be16(t + 16, checksum_done(sum));
 
     put_be16(p + 10, checksum_done(checksum_add(0, p, 20)));
+    if ((s.rip & 0xFF000000u) == 0x7F000000u) {
+        /* Loopback: no NIC involved — hand the fully-assembled frame
+         * straight back to the input path (synchronous, like a lo0
+         * interface that loops the packet). The TCP input path does
+         * not check the destination address, matching how the driver
+         * already dispatches NIC frames to it. */
+        vnu::tcp::input_packet(s.rip, p - 14, frame_len,
+                               static_cast<uint16_t>(20 + tcp_hdr + paylen));
+        return;
+    }
     vnu::netcore::tx_send_current(frame_len);
 }
 
@@ -664,9 +684,17 @@ long socket_connect(int sock, uint32_t ip_be, uint16_t port, uint32_t timeout_ms
     s.rto_at = now;
     s.state = ST_SYN_SENT;
 
-    int mac_rc = vnu::netcore::arp_ensure(ip_be, s.dst_mac, timeout_ms);
-    if (mac_rc < 0)
-        return mac_rc;
+    int mac_rc = 0;
+    if ((ip_be & 0xFF000000u) == 0x7F000000u) {
+        /* Loopback: the peer is ourselves; the MAC is irrelevant and
+         * nothing answers ARP for 127.0.0.1 on the wire. */
+        for (int i = 0; i < 6; ++i)
+            s.dst_mac[i] = 0;
+    } else {
+        mac_rc = vnu::netcore::arp_ensure(ip_be, s.dst_mac, timeout_ms);
+        if (mac_rc < 0)
+            return mac_rc;
+    }
 
     tcp_send_seg(s, s.iss, 0, FLAG_SYN, true, nullptr, 0);
 

@@ -69,10 +69,11 @@ if [[ "$VIRTIO_GPU" == 1 ]]; then
 fi
 
 # slirp user networking (явный -netdev = тот же e1000, что и по
-# умолчанию) плюс проброс хостового loopback-порта 17778 на гостевой
-# 7778 — чтобы `echoserver` можно было дёргать с хоста:
-#   nc 127.0.0.1 17778
-QEMU_NET_ARGS=(-netdev user,id=n0,hostfwd=tcp::17778-:7778 -device e1000,netdev=n0)
+# умолчанию) плюс проброс хостового loopback на гостевые порты:
+#   17778 -> 7778  echoserver (nc 127.0.0.1 17778)
+#   17779 -> 7779  tlsserver (openssl s_client -connect 127.0.0.1:17779)
+#   14433 -> 14433 tlsdemo против openssl s_server на хосте
+QEMU_NET_ARGS=(-netdev user,id=n0,hostfwd=tcp::17778-:7778,hostfwd=tcp::17779-:7779,hostfwd=tcp::14433-:14433 -device e1000,netdev=n0)
 
 # Грузимся с ISO (устройство d), чтобы установщик/тест мог писать на VHD;
 # сам диск (c) остаётся рядом и готов к установке на него.

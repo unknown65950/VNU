@@ -576,6 +576,7 @@ void init()
     add("/bin/su", false);
     add("/bin/install", false);
     add("/bin/echoserver", false);
+    add("/bin/tlsserver", false);
     add("/tmp", true);
     auto* tmp = find_index("/tmp") >= 0 ? &nodes[find_index("/tmp")] : nullptr;
     if (tmp)

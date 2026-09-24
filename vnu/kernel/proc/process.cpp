@@ -42,6 +42,7 @@
 #include "embedded_vprobe.h"
 #include "embedded_tlsdemo.h"
 #include "embedded_echoserver.h"
+#include "embedded_tlsserver.h"
 
 extern "C" void vnu_proc_switch(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_proc_trampoline();
@@ -105,6 +106,7 @@ const EmbeddedProg embedded[] = {
     {"/bin/vprobe", embedded_vprobe_elf, embedded_vprobe_elf_size},
     {"/bin/tlsdemo", embedded_tlsdemo_elf, embedded_tlsdemo_elf_size},
     {"/bin/echoserver", embedded_echoserver_elf, embedded_echoserver_elf_size},
+    {"/bin/tlsserver", embedded_tlsserver_elf, embedded_tlsserver_elf_size},
     /* short names for convenience */
     {"hello", embedded_hello_elf, embedded_hello_elf_size},
     {"echo", embedded_echo_elf, embedded_echo_elf_size},

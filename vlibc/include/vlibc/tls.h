@@ -1,16 +1,21 @@
 /*
- * tls.h — TLS 1.2 client library for VNU (self-contained POSIX flavour).
+ * tls.h — TLS 1.2 client+server library for VNU (self-contained POSIX
+ * flavour).
  *
  * Zero kernel/VNU dependencies: the handshake and record layer talk to
  * the network only through the two transport callbacks in tls_stream,
  * so the same code runs unchanged on any host OS (that is how the
- * library is validated: qemu guest <-> host test harness <-> openssl).
+ * library is validated: qemu guest <-> host test harness <-> openssl
+ * s_client/s_server on both sides).
  *
  * Cipher suite implemented: TLS_RSA_WITH_AES_128_GCM_SHA256 (0x009c).
- * TLS 1.2 only; SNI + RSA key exchange; no client certificates; no
- * renegotiation; close_notify handled. Certificate chain verification
- * is TODO — the leaf RSA key is parsed and used, hostname is sent as
- * SNI and matched against the certificate SAN/CN when available.
+ * TLS 1.2 only; RSA key exchange; no client certificates; no
+ * renegotiation; close_notify handled. The client sends SNI and uses
+ * the leaf RSA key (hostname matching where the cert allows it); the
+ * server presents a caller-supplied certificate (tls_keypair) and
+ * performs the plain-TLS_RSA handshake. Certificate chain verification
+ * is TODO — the leaf key is parsed and used, not validated towards a
+ * trust store.
  */
 #ifndef VLIBC_TLS_H
 #define VLIBC_TLS_H
@@ -49,6 +54,28 @@ typedef struct tls_conn tls_conn;
  * Returns a connection or NULL (see tls_last_error()).
  * timeout_ms bounds the whole handshake. */
 tls_conn* tls_connect(tls_stream* stream, const char* host, uint32_t timeout_ms);
+
+/* Server-side key material for tls_accept: a DER certificate to present
+ * plus the matching RSA private exponent. All integers are big-endian
+ * byte strings; `mod` must be 128..512 bytes (256 = RSA-2048). */
+typedef struct tls_keypair {
+    const uint8_t* cert_der;    /* DER X.509 certificate */
+    size_t         cert_len;
+    const uint8_t* mod;         /* RSA modulus n */
+    uint32_t       mod_len;
+    const uint8_t* exp;         /* public exponent (01 00 01) */
+    uint32_t       exp_len;
+    const uint8_t* priv;        /* private exponent d */
+    uint32_t       priv_len;
+} tls_keypair;
+
+/* Full TLS 1.2 server handshake over `stream`: answers the peer's
+ * ClientHello with ServerHello + Certificate + ServerHelloDone, decrypts
+ * the RSA-encrypted pre-master secret with `kp` and completes the
+ * handshake. Returns a connection or NULL (see tls_last_error()).
+ * timeout_ms bounds the whole handshake. */
+tls_conn* tls_accept(tls_stream* stream, const tls_keypair* kp,
+                     uint32_t timeout_ms);
 
 /* Write plaintext (blocks until everything is written or the timeout
  * expires). Returns bytes written or -errno. */
@@ -130,6 +157,13 @@ int  tls_gcm_open(const uint8_t key[TLS_AES_BLOCK],
 int tls_rsa_encrypt_pkcs1(const uint8_t* n, uint32_t nlen,
                           const uint8_t* m, uint32_t mlen,
                           uint8_t* out);            /* out: nlen bytes */
+/* Same block format, server side: RSAES-PKCS1-v1_5 decrypt of an
+ * nlen-byte ciphertext with the private exponent `d`. Writes the
+ * unpadded message to `out` (must hold nlen bytes) and returns its
+ * length, or -1 on padding/format error. */
+int tls_rsa_decrypt_pkcs1(const uint8_t* n, uint32_t nlen,
+                          const uint8_t* d, uint32_t dlen,
+                          const uint8_t* in, uint8_t* out);
 /* Generic modpow: out = base^exp mod mod (all big-endian byte strings,
  * mod up to TLS_RSA_MAX_MODULUS bytes). */
 void tls_modpow(const uint8_t* base, uint32_t base_len,

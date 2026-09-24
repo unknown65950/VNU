@@ -7,6 +7,8 @@
  * outbound connections, bind/listen/accept to serve inbound ones. All
  * operations block (busy-wait on the RX path) exactly like ping/DNS,
  * with retransmission and window handling inside the block.
+ * 127.0.0.0/8 is looped back in software (no ARP, no NIC), so in-guest
+ * clients can reach in-guest servers on the loopback address.
  *
  * Socket handles are small integers from a fixed 8-slot table; they are
  * NOT VFS file descriptors. IPs are big-endian, ports host byte order. */

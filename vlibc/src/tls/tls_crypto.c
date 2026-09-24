@@ -187,6 +187,7 @@ void tls_prf(const uint8_t* secret, size_t secretlen,
     tls_hmac_sha256(secret, secretlen, seed, seedlen, a);
     while (off < out_len) {
         size_t n = out_len - off;
+        uint8_t block[32];
         if (n > 32)
             n = 32;
         /* buf = A || seed */
@@ -194,7 +195,11 @@ void tls_prf(const uint8_t* secret, size_t secretlen,
         if (seedlen > 128)
             return; /* cannot happen with our labels; guard anyway */
         memcpy(buf + 32, seed, seedlen);
-        tls_hmac_sha256(secret, secretlen, buf, 32 + seedlen, out + off);
+        /* P_hash emits 32 bytes per block; copy only the requested
+         * amount so a short `out` (e.g. the 12-byte Finished
+         * verify_data) is not overrun. */
+        tls_hmac_sha256(secret, secretlen, buf, 32 + seedlen, block);
+        memcpy(out + off, block, n);
         tls_hmac_sha256(secret, secretlen, a, 32, a_next);
         memcpy(a, a_next, 32);
         off += n;

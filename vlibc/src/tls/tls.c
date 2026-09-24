@@ -1,10 +1,11 @@
 /*
- * tls.c — TLS 1.2 client handshake and record layer for VNU.
+ * tls.c — TLS 1.2 client+server handshake and record layer for VNU.
  *
  * Cipher suite: TLS_RSA_WITH_AES_128_GCM_SHA256 (0x009c), TLS 1.2 only.
  * Transport goes through the tls_stream callbacks (send/recv/rng), so
  * this code is POSIX-portable and runs unchanged on a host OS — that is
- * how it is tested (qemu guest <-> host harness <-> openssl s_server).
+ * how it is tested (qemu guest <-> host harness <-> openssl s_client /
+ * s_server on both sides of the tree).
  *
  * References: RFC 5246 (handshake, PRF, master secret, record layer),
  * RFC 5288 (AES-GCM wire format: 12-byte nonce = write_IV[4] ||
@@ -15,8 +16,12 @@
  * 64-bit sequence number in the explicit-nonce field, on read we take
  * the peer's explicit bytes from the wire (OpenSSL fills them with a
  * random per-direction counter, not the sequence number).
- * Certificate verification is limited to extracting the leaf
- * RSA public key and matching SNI where possible in tls_x509.c.
+ * Client side: Certificate verification is limited to extracting the
+ * leaf RSA public key and matching SNI where possible in tls_x509.c.
+ * Server side (tls_accept): the caller supplies a certificate plus the
+ * matching RSA private exponent (tls_keypair) and we run the plain
+ * TLS_RSA key exchange — ServerHello/Certificate/ServerHelloDone, RSA
+ * decrypt of the pre-master secret, then the CCS+Finished dance.
  */
 #include <vlibc/tls.h>
 #include <vlibc/string.h>
@@ -71,6 +76,8 @@ struct tls_conn {
 
     int stage;
     int closed;
+    int is_server;         /* 1 for tls_accept, 0 for tls_connect: picks
+                              the right write/read key direction */
     int write_enc;       /* 0 until our ChangeCipherSpec: plaintext records */
     int read_enc;        /* 0 until the server's ChangeCipherSpec */
 };
@@ -248,7 +255,12 @@ static int read_record(tls_conn* c, uint32_t to, uint8_t* out, size_t outcap,
     unsigned n;
     if (recv_all(c, hdr, 5, to) != 0)
         return -1;
-    if (be16(hdr + 1) != TLS_VERSION) {
+    /* Record-layer version: major must be 3 and the minor version may
+     * be at most the negotiated one. Peers are allowed to send TLS 1.0
+     * (0x0301) record headers on the ClientHello for compatibility —
+     * openssl does exactly that — so only a strict range is rejected. */
+    if (hdr[1] != (uint8_t)(TLS_VERSION >> 8) ||
+        hdr[2] > (uint8_t)TLS_VERSION) {
         seterr(c, "version mismatch");
         return -1;
     }
@@ -311,9 +323,13 @@ static int tls_send_record(tls_conn* c, uint8_t type, const uint8_t* pt,
     if (c->write_enc) {
         uint8_t nonce[12], aad[13], ct[MAX_PLAIN + TLS_GCM_TAG];
         size_t i;
-        gcm_nonce(c->civ, seq, nonce);
+        /* Each side writes with its own keys: the client uses
+         * client_write_key/IV, the server server_write_key/IV. */
+        const uint8_t* wkey = c->is_server ? c->skey : c->ckey;
+        const uint8_t* wiv  = c->is_server ? c->siv : c->civ;
+        gcm_nonce(wiv, seq, nonce);
         gcm_aad(seq, type, (uint16_t)ptlen, aad);
-        tls_gcm_seal(c->ckey, nonce, aad, sizeof aad, pt, ptlen, ct);
+        tls_gcm_seal(wkey, nonce, aad, sizeof aad, pt, ptlen, ct);
         put16(buf + 3, (unsigned)(AES_EXPLICIT + ptlen + TLS_GCM_TAG));
         for (i = 0; i < 8; ++i)
             buf[5 + i] = (uint8_t)(seq >> (8u * (7u - i)));
@@ -544,6 +560,7 @@ tls_conn* tls_connect(tls_stream* stream, const char* host, uint32_t to)
     c = (tls_conn*)xcalloc(sizeof *c, 1);
     if (!c) { seterr_global("out of memory"); return NULL; }
     memcpy(&c->s, stream, sizeof c->s);
+    c->is_server = 0;
 
     if (want_rng(c, c->crandom, 32) != 0)
         goto out;
@@ -731,6 +748,345 @@ out:
 }
 
 /* ------------------------------------------------------------------ */
+/* server handshake                                                    */
+/* ------------------------------------------------------------------ */
+
+/* Server side: validate a ClientHello, grab the client random and note
+ * which extensions matter to us. *reneg is set to 1 when the client
+ * signals secure renegotiation — via the renegotiation_info extension
+ * (RFC 5746) with an empty value or via the SCSV cipher suite 0x00FF —
+ * in which case the server must echo renegotiation_info or modern
+ * OpenSSL refuses to talk (its "unsafe legacy renegotiation" guard).
+ * All other extensions (SNI, signature_algorithms, ...) are skipped:
+ * this implementation negotiates exactly one suite and never resumes. */
+static int parse_client_hello(tls_conn* c, const uint8_t* b, size_t n,
+                              int* reneg)
+{
+    unsigned sidlen, slen, clen, k;
+
+    *reneg = 0;
+    if (n < 2 + 32 + 1) { seterr(c, "handshake failure"); return -1; }
+    if (be16(b) != TLS_VERSION) { seterr(c, "version mismatch"); return -1; }
+    memcpy(c->crandom, b + 2, 32);
+    b += 34; n -= 34;
+
+    sidlen = b[0]; b += 1; n -= 1;
+    if (sidlen > n) { seterr(c, "handshake failure"); return -1; }
+    b += sidlen; n -= sidlen;
+
+    /* cipher suites: our single suite must be offered. The SCSV
+     * TLS_EMPTY_RENEGOTIATION_INFO_SCSV (0x00FF) is how some clients
+     * (openssl with -tls1_2) signal secure renegotiation instead of the
+     * 0xFF01 extension — RFC 5746 §3.5 still demands a ServerHello echo. */
+    if (n < 2 + 2 + 1) { seterr(c, "handshake failure"); return -1; }
+    slen = be16(b); b += 2; n -= 2;
+    if (slen < 2 || slen > n) { seterr(c, "handshake failure"); return -1; }
+    k = 0;
+    {
+        unsigned have = 0;
+        while (k + 1 < slen) {
+            uint16_t cs = be16(b + k);
+            if (cs == 0x00FFu)
+                *reneg = 1;     /* SCSV: signal secure renegotiation */
+            else if (cs == SUITE)
+                have = 1;
+            k += 2;
+        }
+        if (!have) { seterr(c, "unsupported cipher suite"); return -1; }
+    }
+    b += slen; n -= slen;
+
+    /* compression methods: null compression must be offered */
+    if (n < 1) { seterr(c, "handshake failure"); return -1; }
+    clen = b[0]; b += 1; n -= 1;
+    if (clen < 1 || clen > n) { seterr(c, "handshake failure"); return -1; }
+    k = 0;
+    do {
+        if (b[k] == 0)
+            break;
+        ++k;
+    } while (k < clen);
+    if (k == clen) { seterr(c, "unsupported compression"); return -1; }
+    b += clen; n -= clen;
+
+    /* extensions: only renegotiation_info (0xFF01) is understood. The
+     * client signals secure renegotiation in the initial handshake with
+     * an empty renegotiated_connection (one 0x00 byte); anything else
+     * would be a renegotiation we never initiated. */
+    if (n >= 2) {
+        unsigned elen = be16(b);
+        b += 2; n -= 2;
+        if (elen > n) { seterr(c, "handshake failure"); return -1; }
+        while (n >= 4) {
+            unsigned type = be16(b);
+            unsigned vlen = be16(b + 2);
+            b += 4; n -= 4;
+            if (vlen > n) { seterr(c, "handshake failure"); return -1; }
+            if (type == 0xFF01u) {
+                if (vlen != 1 || b[0] != 0) {
+                    seterr(c, "renegotiation unsupported");
+                    return -1;
+                }
+                *reneg = 1;
+            }
+            b += vlen; n -= vlen;
+        }
+    }
+    return 0;
+}
+
+/* Read one complete handshake message into c->rx (loops over records if
+ * the peer fragments a message across several). Rejects non-handshake
+ * traffic and alerts. The message's raw wire bytes stay in c->rx; the
+ * caller parses them and adds them to the transcript as needed. */
+static int recv_hs_msg(tls_conn* c, uint32_t to)
+{
+    for (;;) {
+        uint8_t rec[MAX_RECORD_RX];
+        uint8_t rtype;
+        size_t  rlen;
+        if (read_record(c, to, rec, sizeof rec, &rtype, &rlen) != 0)
+            return -1;
+        ++c->seq_r;
+        if (rtype == CT_ALERT && rlen == 2) {
+            alert_err(c, rec[1]);
+            return -1;
+        }
+        if (rtype != CT_HANDSHAKE) {
+            seterr(c, "unexpected record during handshake");
+            return -1;
+        }
+        if (rx_add(c, rec, rlen) != 0)
+            return -1;
+        /* exactly one full message must be buffered */
+        if (c->rx_len >= 4 && be24(c->rx + 1) + 4u == c->rx_len)
+            return 0;
+        if (c->rx_len >= 4 && be24(c->rx + 1) + 4u < c->rx_len) {
+            seterr(c, "handshake failure");
+            return -1;
+        }
+    }
+}
+
+tls_conn* tls_accept(tls_stream* stream, const tls_keypair* kp, uint32_t to)
+{
+    tls_conn* c;
+    int rc = -1;
+
+    if (!stream || !stream->send_fn || !stream->recv_fn || !kp ||
+        !kp->cert_der || kp->cert_len < 16 || !kp->mod || !kp->priv ||
+        kp->mod_len < 128u || kp->mod_len > TLS_RSA_MAX_MODULUS) {
+        seterr_global("invalid stream or keypair");
+        return NULL;
+    }
+
+    c = (tls_conn*)xcalloc(sizeof *c, 1);
+    if (!c) { seterr_global("out of memory"); return NULL; }
+    memcpy(&c->s, stream, sizeof c->s);
+    c->is_server = 1;
+
+    if (want_rng(c, c->srandom, 32) != 0)
+        goto out;
+
+    /* --- ClientHello --- */
+    {
+        int reneg;
+        if (recv_hs_msg(c, to) != 0) goto out;
+        if (c->rx[0] != HS_CLIENT_HELLO) { seterr(c, "handshake failure"); goto out; }
+        if (parse_client_hello(c, c->rx + 4, be24(c->rx + 1), &reneg) != 0)
+            goto out;
+        if (transcript_add(c, c->rx, c->rx_len) != 0) goto out;
+        c->rx_len = 0;
+
+        /* --- ServerHello (no session id: resumption unsupported) --- */
+        {
+            uint8_t sh[45];
+            size_t  o = 0;
+            put16(sh + o, TLS_VERSION); o += 2;
+            memcpy(sh + o, c->srandom, 32); o += 32;
+            sh[o++] = 0;                    /* session id length */
+            put16(sh + o, SUITE); o += 2;
+            sh[o++] = 0;                    /* compression: none */
+            if (reneg) {
+                /* echo the client's renegotiation_info (RFC 5746): an
+                 * empty renegotiated_connection, i.e. extension type
+                 * 0xFF01, length 1, one 0x00 byte */
+                put16(sh + o, 5); o += 2;   /* extensions total length */
+                put16(sh + o, 0xFF01u); o += 2;
+                put16(sh + o, 1); o += 2;
+                sh[o++] = 0;
+            }
+            if (hs_send(c, HS_SERVER_HELLO, sh, o, to) != 0) goto out;
+        }
+    }
+
+    /* --- Certificate: one DER certificate --- */
+    {
+        uint8_t* der;
+        size_t n = 6 + kp->cert_len;
+        der = (uint8_t*)malloc(n);
+        if (!der) { seterr(c, "out of memory"); goto out; }
+        put24(der, (uint32_t)(3 + kp->cert_len));
+        put24(der + 3, (uint32_t)kp->cert_len);
+        memcpy(der + 6, kp->cert_der, kp->cert_len);
+        if (hs_send(c, HS_CERTIFICATE, der, n, to) != 0) {
+            free(der);
+            goto out;
+        }
+        free(der);
+    }
+
+    /* --- ServerHelloDone --- */
+    if (hs_send(c, HS_SERVER_HELLO_DONE, NULL, 0, to) != 0)
+        goto out;
+
+    /* --- ClientKeyExchange: RSA-decrypt the pre-master secret --- */
+    if (recv_hs_msg(c, to) != 0) goto out;
+    if (c->rx[0] != HS_CLIENT_KEY_EXCHANGE ||
+        c->rx_len != 4 + 2 + kp->mod_len) {
+        seterr(c, "handshake failure");
+        goto out;
+    }
+    if (transcript_add(c, c->rx, c->rx_len) != 0) goto out;
+    {
+        const uint8_t* body = c->rx + 4;      /* be16 len + ciphertext */
+        uint8_t pmsbuf[TLS_RSA_MAX_MODULUS];
+        int mlen = tls_rsa_decrypt_pkcs1(kp->mod, kp->mod_len,
+                                         kp->priv, kp->priv_len,
+                                         body + 2, pmsbuf);
+        if (mlen != 48 || pmsbuf[0] != (uint8_t)(TLS_VERSION >> 8) ||
+            pmsbuf[1] != (uint8_t)TLS_VERSION) {
+            seterr(c, "RSA decryption failed");
+            goto out;
+        }
+        derive_keys(c, pmsbuf);
+    }
+    c->rx_len = 0;
+
+    /* --- client CCS + encrypted Finished (our final flight comes after
+     * the client's, and the server Finished verify_data must cover the
+     * client Finished message, RFC 5246 §7.4.9) --- */
+    for (;;) {
+        uint8_t rec[MAX_RECORD_RX + 64];
+        uint8_t rtype;
+        size_t  rlen;
+        uint8_t pt[32];
+
+        if (read_record(c, to, rec, sizeof rec, &rtype, &rlen) != 0)
+            goto out;
+        if (rtype == CT_CCS) {
+            if (rlen != 1 || rec[0] != 1) {
+                seterr(c, "handshake failure");
+                goto out;
+            }
+            /* New read epoch: the client's Finished below is the first
+             * record protected by the new cipher state, so its AAD
+             * sequence number is 0. */
+            c->seq_r = 0;
+            c->read_enc = 1;
+            continue;
+        }
+        if (rtype == CT_ALERT && rlen == 2 && !c->read_enc) {
+            alert_err(c, rec[1]);
+            goto out;
+        }
+        if (rtype != CT_HANDSHAKE || !c->read_enc) {
+            seterr(c, "unexpected record during handshake");
+            goto out;
+        }
+        /* decrypt the client's Finished record */
+        {
+            uint8_t aad[13], nonce[12];
+            uint64_t seq = c->seq_r;
+            size_t  ptlen;
+            if (rlen < AES_EXPLICIT + TLS_GCM_TAG) {
+                seterr(c, "peer violation (record too short)");
+                goto out;
+            }
+            ptlen = rlen - AES_EXPLICIT - TLS_GCM_TAG;
+            gcm_nonce_wire(c->civ, rec, nonce);
+            gcm_aad(seq, CT_HANDSHAKE, (uint16_t)ptlen, aad);
+            if (tls_gcm_open(c->ckey, nonce, aad, sizeof aad,
+                             rec + AES_EXPLICIT, ptlen + TLS_GCM_TAG,
+                             pt, rec + AES_EXPLICIT + ptlen) != 0) {
+                seterr(c, "record authentication failed");
+                goto out;
+            }
+            ++c->seq_r;
+
+            if (ptlen != 16 || pt[0] != HS_FINISHED) {
+                seterr(c, "handshake failure");
+                goto out;
+            }
+        }
+        {
+            uint8_t hv[32], fin[12], sd[47];
+            tls_sha256_ctx m;
+            tls_sha256_init(&m);
+            tls_sha256_update(&m, c->hs, c->hs_len);
+            tls_sha256_final(&m, hv);
+            memcpy(sd, "client finished", 15);
+            memcpy(sd + 15, hv, 32);
+            tls_prf(c->master, 48, sd, 47, fin, 12);
+            if (!ct_eq(fin, pt + 4, 12)) {
+                seterr(c, "record authentication failed");
+                goto out;
+            }
+        }
+        /* the client's Finished message joins the transcript so the
+         * server Finished below can be verified (and recorded) */
+        if (transcript_add(c, pt, 16) != 0) goto out;
+        break;
+    }
+
+    /* --- our ChangeCipherSpec (plaintext) --- */
+    {
+        uint8_t ccs[6] = { CT_CCS, (uint8_t)(TLS_VERSION >> 8),
+                           (uint8_t)TLS_VERSION, 0, 1, 1 };
+        if (send_all(c, ccs, sizeof ccs, to) != 0)
+            goto out;
+        /* New write epoch: our Finished below must be sealed with
+         * sequence number 0 (the client resets its read counter at the
+         * CCS boundary for the same reason). */
+        c->seq_w = 0;
+    }
+
+    /* From here on (server Finished + app data) records are encrypted. */
+    c->write_enc = 1;
+
+    /* --- server Finished (first encrypted record) --- */
+    {
+        uint8_t  fin[16];
+        uint8_t  hv[32], sd[47];
+        tls_sha256_ctx m;
+        tls_sha256_init(&m);
+        tls_sha256_update(&m, c->hs, c->hs_len);
+        tls_sha256_final(&m, hv);
+        memcpy(sd, "server finished", 15);
+        memcpy(sd + 15, hv, 32);
+        tls_prf(c->master, 48, sd, 47, fin + 4, 12);
+        fin[0] = HS_FINISHED;
+        put24(fin + 1, 12);
+        if (transcript_add(c, fin, sizeof fin) != 0) goto out;
+        if (tls_send_record(c, CT_HANDSHAKE, fin, sizeof fin, to) != 0)
+            goto out;
+    }
+
+    c->stage = ST_ESTABLISHED;
+    rc = 0;
+
+out:
+    if (rc != 0) {
+        free(c->hs);
+        free(c->rx);
+        free(c->inbuf);
+        free(c);
+        return NULL;
+    }
+    return c;
+}
+
+/* ------------------------------------------------------------------ */
 /* application data                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -754,13 +1110,20 @@ static int decrypt_record(tls_conn* c, uint8_t type, uint8_t* rec, size_t rlen)
         grow((void**)&c->inbuf, &c->in_cap, c->in_len + ptlen, c) != 0)
         return -1;
 
-    gcm_nonce_wire(c->siv, rec, nonce);
-    gcm_aad(seq, type, (uint16_t)ptlen, aad);
-    if (tls_gcm_open(c->skey, nonce, aad, sizeof aad,
-                     rec + AES_EXPLICIT, ptlen + TLS_GCM_TAG,
-                     c->inbuf + c->in_len, tag) != 0) {
-        seterr(c, "record authentication failed");
-        return -1;
+    /* Read with the peer's write keys: a client reads server records
+     * with server_write_key/IV, a server reads client records with
+     * client_write_key/IV. */
+    {
+        const uint8_t* rkey = c->is_server ? c->ckey : c->skey;
+        const uint8_t* riv  = c->is_server ? c->civ : c->siv;
+        gcm_nonce_wire(riv, rec, nonce);
+        gcm_aad(seq, type, (uint16_t)ptlen, aad);
+        if (tls_gcm_open(rkey, nonce, aad, sizeof aad,
+                         rec + AES_EXPLICIT, ptlen + TLS_GCM_TAG,
+                         c->inbuf + c->in_len, tag) != 0) {
+            seterr(c, "record authentication failed");
+            return -1;
+        }
     }
     ++c->seq_r;
     c->in_len += ptlen;

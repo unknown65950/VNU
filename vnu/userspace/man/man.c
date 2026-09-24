@@ -815,9 +815,10 @@ DESCRIPTION\n\
 \n\
 EXAMPLES\n\
     tlsdemo 10.0.2.2 14433\n\
+    tlsdemo 127.0.0.1 7779\n\
 \n\
 SEE ALSO\n\
-    ping(1), vprobe, man hosts\n"
+    ping(1), tlsserver, echoserver, man hosts\n"
 
 #define ECHOSERVER_PAGE "NAME\n\
     echoserver - TCP echo server demo\n\
@@ -845,6 +846,41 @@ EXIT STATUS\n\
 EXAMPLES\n\
     echoserver\n\
     echoserver 9999\n\
+\n\
+SEE ALSO\n\
+    ping(1), tlsdemo, tlsserver, echoserver, man hosts\n"
+
+#define TLSSERVER_PAGE "NAME\n\
+    tlsserver - TLS 1.2 echo server demo\n\
+\n\
+SYNOPSIS\n\
+    tlsserver [PORT]\n\
+\n\
+DESCRIPTION\n\
+    Binds PORT (default 7779), listens and serves one client at a\n\
+    time: runs the vlibc TLS handshake (cipher suite\n\
+    TLS_RSA_WITH_AES_128_GCM_SHA256) through the tls_stream\n\
+    callbacks and echoes every byte received straight back until the\n\
+    peer closes. The certificate and RSA private key are the fixed\n\
+    demo keypair in tlsserver_key.h: self-signed and public, tests\n\
+    only, never for real traffic.\n\
+\n\
+    The kernel loopbacks 127.0.0.1, so inside the guest\n\
+    'tlsserver 7779' + 'tlsdemo 127.0.0.1 7779' runs the vlibc\n\
+    client against the vlibc server with no NIC involved. From the\n\
+    host, run.sh forwards guest port 7779 to host loopback 17779, so\n\
+    'printf ping\\n | openssl s_client -quiet -tls1_2 -cipher\n\
+    AES128-GCM-SHA256 -connect 127.0.0.1:17779' drives it over the\n\
+    real NIC (slirp hostfwd). accept() waits at most 20 s, the\n\
+    handshake 15 s and recv()/send() 5 s per call.\n\
+\n\
+EXIT STATUS\n\
+    0 after the listener is closed; 1 on socket/bind/listen or\n\
+    keypair failure; 2 on a bad PORT argument.\n\
+\n\
+EXAMPLES\n\
+    tlsserver\n\
+    tlsserver 9999\n\
 \n\
 SEE ALSO\n\
     ping(1), tlsdemo, echoserver, man hosts\n"
@@ -995,6 +1031,8 @@ static const struct Page pages[] = {
      TLSDEMO_PAGE},
     {"echoserver", "TCP echo server demo",
      ECHOSERVER_PAGE},
+    {"tlsserver",  "TLS 1.2 echo server demo",
+     TLSSERVER_PAGE},
 };
 
 static int is_alias(const char* a)
