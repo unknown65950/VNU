@@ -41,6 +41,7 @@ echo "==> userspace"
 "$VCC" "$ROOT/vnu/userspace/examples/tlsserver.c" -o "$ROOT/sysroot/bin/tlsserver"
 "$VCC" "$ROOT/vnu/userspace/examples/ttytest.c" -o "$ROOT/sysroot/bin/ttytest"
 "$VCC" "$ROOT/vnu/userspace/man/man.c" -o "$ROOT/sysroot/bin/man"
+"$VCC" "$ROOT/vnu/userspace/gui/play.c" "$ROOT/vnu/userspace/libwav/wav.c" -o "$ROOT/sysroot/bin/play"
 # coreutils: one separate binary per command (no multi-call applet).
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wc head tail grep sort cp mv basename dirname seq df ping; do
@@ -58,6 +59,10 @@ embed "$ROOT/sysroot/bin/files" files
 embed "$ROOT/sysroot/bin/prefs" prefs
 embed "$ROOT/sysroot/bin/picview" picview
 embed "$ROOT/sysroot/bin/clock" clock
+embed "$ROOT/sysroot/bin/play" play
+embed "$ROOT/vnu/userspace/gui/sounds/chime.wav" wav_chime
+embed "$ROOT/vnu/userspace/gui/sounds/melody.wav" wav_melody
+embed "$ROOT/vnu/userspace/gui/sounds/beep.wav" wav_beep
 embed "$ROOT/vnu/userspace/gui/pics/flower.bmp" pic_flower
 embed "$ROOT/vnu/userspace/gui/pics/sunset.png" pic_sunset
 embed "$ROOT/vnu/userspace/gui/pics/logo.jpg" pic_logo

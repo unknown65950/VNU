@@ -61,6 +61,14 @@ must never be renumbered.
 | 46 | bind |
 | 47 | listen |
 | 48 | accept |
+| 49 | audio_open |
+| 50 | audio_set_fmt |
+| 51 | audio_write |
+| 52 | audio_drain |
+| 53 | audio_close |
+| 54 | audio_pending |
+| 55 | audio_pause |
+| 56 | audio_reset |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
@@ -140,12 +148,53 @@ with `-1` leaves a field unchanged; only root may chown.
   connection arrived in time. The accepted handle talks to the peer
   with the same `send`/`recv`/`netclose` calls; only one pending
   connection is served per accept call.
+- `audio_open()` — opens the kernel's single AC'97 playback device
+  (QEMU `-soundhw ac97`, PCI 8086:2415). Returns a non-negative handle,
+  or `-VNU_ENODEV` (19, no sound hardware), `-VNU_EBUSY` (device already
+  open). Session state (descriptor ring, format, position) starts fresh.
+- `audio_set_fmt(ebx, ecx, edx)` — selects the PCM format to play:
+  `ebx` = sample rate in Hz (8000..48000), `ecx` = channels (1 or 2),
+  `edx` = bits per sample (8 or 16). Must be called after `audio_open`
+  and before `audio_write`. Programs the codec's sample-rate register
+  (`PCM_Front_DAC_Rate`); the hardware itself only plays 16-bit stereo,
+  so the kernel converts mono and/or 8-bit input to 16-bit stereo while
+  feeding the DMA ring. Returns 0, or `-VNU_EINVAL` for unsupported
+  values, `-VNU_EIO` when the device is not open.
+- `audio_write(ebx, ecx, edx)` — submits `edx` bytes of little-endian
+  PCM from user buffer `ecx` (the format given to `audio_set_fmt`).
+  **Non-blocking**: the driver copies only what fits into its ~1.5 s
+  DMA ring and returns the number of *input* bytes consumed (0 when the
+  ring is full — poll and retry later; a paused device accepts nothing).
+  The GUI player relies on this: a windowed task must never stall the
+  cooperative desktop scheduler. Returns the byte count, or
+  `-VNU_EIO` (device not open), `-VNU_EINVAL` (no format set / bad
+  arguments).
+- `audio_drain()` — blocks (bounded spin) until all currently queued PCM
+  has played out of the ring. For console-style producers that queue a
+  whole clip and wait; a windowed task should poll `audio_pending`
+  instead. Returns 0, or `-VNU_EIO` if the stream is not open.
+- `audio_pending()` — bytes of queued PCM still to play, counted in
+  16-bit stereo output bytes (divide by 4 and multiply by the input
+  sample size to convert to source-file bytes). Lets a player render a
+  progress bar and detect end-of-track without blocking. Returns the
+  count, or `-VNU_EIO` if the stream is not open.
+- `audio_pause()` — halts the DMA engine where it is; queued PCM stays
+  buffered and the position is preserved (resume = `audio_reset()` +
+  re-feed from the saved position; the unplayed tail of the ring is
+  dropped by the reset, at most ~1.5 s). Returns 0, or `-VNU_EIO` if
+  the stream is not open.
+- `audio_reset()` — stops the engine, drops queued PCM and rewinds the
+  ring so the next `audio_write` starts fresh. Returns 0, or `-VNU_EIO`
+  if the stream is not open.
+- `audio_close()` — stops playback, resets the bus-master DMA state and
+  closes the session, releasing the device for the next `audio_open`.
+  Returns 0, or `-VNU_EIO` if the device was never opened.
 
 ### Removed
 
 Not applicable — numbers are never reused; old gaps stay reserved.
 
-### Future (append-only, start at 49)
+### Future (append-only, start at 57)
 
 Unsupported calls return `-VNU_ENOSYS`.
 
@@ -156,6 +205,8 @@ same change as the `ping`/`netinfo` syscalls; values match Linux's.
 `VNU_ECONNRESET` (104), `VNU_ENOTCONN` (107) and `VNU_ECONNREFUSED`
 (111) were added with the TCP socket syscalls; values match Linux's.
 `VNU_EADDRINUSE` (98) was added with `bind`; value matches Linux's.
+`VNU_ENODEV` (19) was added with the audio syscalls to report missing
+sound hardware; value matches Linux's.
 
 ## Interrupt gate
 Vector `0x80`, selector `0x08`, DPL=3, present 32-bit interrupt gate (`0xEE`).

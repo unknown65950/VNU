@@ -12,6 +12,10 @@
 #include "../proc/embedded_prefs.h"
 #include "../proc/embedded_picview.h"
 #include "../proc/embedded_clock.h"
+#include "../proc/embedded_play.h"
+#include "../proc/embedded_wav_chime.h"
+#include "../proc/embedded_wav_melody.h"
+#include "../proc/embedded_wav_beep.h"
 #include "../proc/embedded_pic_flower.h"
 #include "../proc/embedded_pic_sunset.h"
 #include "../proc/embedded_pic_logo.h"
@@ -99,6 +103,7 @@ void install_demo_apps()
     install_one("picview", vnu::vgfx::COLOR_LMAGENTA, IconGlyph::ICON_PICTURE, embedded_picview_elf, embedded_picview_elf_size);
     install_one("prefs", vnu::vgfx::COLOR_LBLUE, IconGlyph::ICON_SLIDERS, embedded_prefs_elf, embedded_prefs_elf_size);
     install_one("clock", vnu::vgfx::COLOR_LGREEN, IconGlyph::ICON_CLOCK, embedded_clock_elf, embedded_clock_elf_size);
+    install_one("play", vnu::vgfx::COLOR_LBLUE, IconGlyph::ICON_MUSIC, embedded_play_elf, embedded_play_elf_size);
 }
 
 /* Mount the demo photograph pack under /pics so picview has something
@@ -137,6 +142,34 @@ void install_demo_pics()
     if (wfd >= 0) {
         vnu::vfs::write(wfd, embedded_wallpaper_elf, embedded_wallpaper_elf_size);
         vnu::vfs::close(wfd);
+    }
+}
+
+/* Mount the demo WAV clips under /sounds so the play app has content:
+ * one VFS node per clip, filled with the embedded bytes (each file
+ * stays well inside vfs's 64 KiB per-file DATA_CAP). */
+void install_demo_sounds()
+{
+    struct Clip {
+        const char* name;
+        const uint8_t* data;
+        uint32_t size;
+    };
+    static const Clip clips[] = {
+        {"chime.wav", embedded_wav_chime_elf, embedded_wav_chime_elf_size},
+        {"melody.wav", embedded_wav_melody_elf, embedded_wav_melody_elf_size},
+        {"beep.wav", embedded_wav_beep_elf, embedded_wav_beep_elf_size},
+    };
+
+    vnu::vfs::mkdir("/sounds");
+    for (const Clip& c : clips) {
+        char path[64];
+        join(path, sizeof(path), "/sounds", c.name);
+        int fd = vnu::vfs::open(path, O_WRONLY | O_CREAT | O_TRUNC);
+        if (fd < 0)
+            continue;
+        vnu::vfs::write(fd, c.data, c.size);
+        vnu::vfs::close(fd);
     }
 }
 

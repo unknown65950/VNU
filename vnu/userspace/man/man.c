@@ -776,6 +776,44 @@ SYSCALLS\n\
 FILES\n\
     /apps/clock/bin   the program itself\n"
 
+#define PLAY_PAGE "NAME\n\
+    play - WAV sound player for the desktop\n\
+\n\
+SYNOPSIS\n\
+    play\n\
+\n\
+DESCRIPTION\n\
+    A graphical sound player for the VNU desktop: lists the WAV\n\
+    clips in /sounds, decodes the selected one with the embedded\n\
+    libwav parser and streams the PCM through the kernel's AC'97\n\
+    audio driver (audio_* syscalls). It is launched from the play\n\
+    tile on the desktop; the window is 480x340 and lives on the\n\
+    cooperative GUI scheduler, so audio_write is non-blocking and\n\
+    the ring is topped up on every heartbeat.\n\
+\n\
+    The transport buttons and the space bar start (play), halt\n\
+    (pause), resume and stop playback; the progress bar tracks the\n\
+    play position via audio_pending() and the track's time is shown\n\
+    next to it. Pause keeps the position; resume restarts from there,\n\
+    stop rewinds to the beginning. The hardware plays 16-bit stereo,\n\
+    so 8-bit and/or mono clips are converted by the kernel driver.\n\
+\n\
+KEYS\n\
+    Up / Down   select a clip\n\
+    Space       play / pause / resume\n\
+    s           stop\n\
+    Esc         close the window\n\
+\n\
+FILES\n\
+    /sounds             directory of embedded demo WAV clips\n\
+    /dev/dsp            the sound card as a byte stream (16-bit stereo PCM;\n\
+                        writes go straight to the AC'97 DMA ring)\n\
+    /apps/play/bin      the program itself\n\
+\n\
+SYSCALLS\n\
+    audio_open, audio_set_fmt, audio_write, audio_pending, audio_pause,\n\
+    audio_reset, audio_close   the AC'97 playback channel\n"
+
 #define HELLO_PAGE "NAME\n\
     hello - demonstration program\n\
 \n\
@@ -1023,6 +1061,8 @@ static const struct Page pages[] = {
      PICVIEW_PAGE},
     {"clock",    "analog clock, stopwatch and timer",
      CLOCK_PAGE},
+    {"play",     "WAV sound player for the desktop",
+     PLAY_PAGE},
     {"hello",    "demonstration program",
      HELLO_PAGE},
     {"ttytest",  "POSIX compatibility smoke test",

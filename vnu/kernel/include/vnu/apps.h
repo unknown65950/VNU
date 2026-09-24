@@ -30,6 +30,7 @@ enum IconGlyph {
     ICON_PICTURE,    // picview — framed sun + mountains
     ICON_SLIDERS,    // prefs — slider rows
     ICON_CLOCK,      // clock — analogue face
+    ICON_MUSIC,      // play — quarter note
 };
 
 struct AppEntry {
@@ -43,6 +44,10 @@ void install_demo_apps();
 // Mounts the demo photograph pack under /pics (one VFS node per image,
 // sourced from the embedded bytes) so picview has content to show.
 void install_demo_pics();
+
+// Mounts the demo WAV clips under /sounds (one VFS node per file,
+// sourced from the embedded bytes) so the play app has content to play.
+void install_demo_sounds();
 
 // Scans /apps/ for subdirectories and fills out[] (up to max). Returns
 // the number of apps found.

@@ -50,6 +50,14 @@
 #define VNU_SYS_bind     46
 #define VNU_SYS_listen   47
 #define VNU_SYS_accept   48
+#define VNU_SYS_audio_open    49
+#define VNU_SYS_audio_set_fmt 50
+#define VNU_SYS_audio_write   51
+#define VNU_SYS_audio_drain   52
+#define VNU_SYS_audio_close   53
+#define VNU_SYS_audio_pending 54
+#define VNU_SYS_audio_pause   55
+#define VNU_SYS_audio_reset   56
 
 #define VNU_EPERM 1
 #define VNU_ENOENT 2
@@ -64,6 +72,7 @@
 #define VNU_EFAULT 14
 #define VNU_EBUSY 16
 #define VNU_EEXIST 17
+#define VNU_ENODEV 19
 #define VNU_ENOTDIR 20
 #define VNU_EISDIR 21
 #define VNU_EINVAL 22

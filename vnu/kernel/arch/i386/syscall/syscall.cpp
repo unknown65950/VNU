@@ -11,6 +11,7 @@
 #include <vnu/install.h>
 #include <vnu/net.h>
 #include <vnu/tcp.h>
+#include <vnu/audio.h>
 
 struct TrapFrame {
     std::uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
@@ -74,6 +75,13 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
                 vnu_debug_putc(p[i]);
             return n;
         }
+        if (vnu::vfs::fd_dev_kind(static_cast<int>(tf->ebx)) ==
+            vnu::vfs::DevKind::Audio) {
+            /* /dev/dsp: stream 16-bit stereo PCM to the AC'97 DAC.
+             * Non-blocking, like the audio_write syscall it wraps. */
+            return static_cast<std::uint32_t>(vnu::audio::write_data(
+                reinterpret_cast<const void*>(tf->ecx), tf->edx));
+        }
         return static_cast<std::uint32_t>(
             vnu::vfs::write(static_cast<int>(tf->ebx),
                             reinterpret_cast<const void*>(tf->ecx), tf->edx));
@@ -128,17 +136,38 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
             }
             return n;
         }
+        if (vnu::vfs::fd_dev_kind(static_cast<int>(tf->ebx)) ==
+            vnu::vfs::DevKind::Audio) {
+            /* /dev/dsp is an output-only stream (no recording path). */
+            return static_cast<std::uint32_t>(-VNU_EIO);
+        }
         return static_cast<std::uint32_t>(
             vnu::vfs::read(static_cast<int>(tf->ebx),
                            reinterpret_cast<void*>(tf->ecx), tf->edx));
     }
-    case VNU_SYS_open:
-        return static_cast<std::uint32_t>(
-            vnu::vfs::open(reinterpret_cast<const char*>(tf->ebx), tf->ecx));
+    case VNU_SYS_open: {
+        int fd = vnu::vfs::open(reinterpret_cast<const char*>(tf->ebx), tf->ecx);
+        if (fd < 0)
+            return static_cast<std::uint32_t>(fd);
+        /* Opening /dev/dsp acquires the (single) audio device just like
+         * the audio_open syscall, defaulting to the hardware's native
+         * 16-bit stereo format so raw PCM writes just play. */
+        if (vnu::vfs::fd_dev_kind(fd) == vnu::vfs::DevKind::Audio) {
+            const int rc = vnu::audio::open_device();
+            if (rc != 0) {
+                vnu::vfs::close(fd);
+                return static_cast<std::uint32_t>(rc); /* -ENODEV / -EBUSY */
+            }
+            vnu::audio::set_format(48000, 2, 16);
+        }
+        return static_cast<std::uint32_t>(fd);
+    }
     case VNU_SYS_close: {
         int fd = static_cast<int>(tf->ebx);
         if (vnu::pipe::is_pipe_fd(fd))
             return static_cast<std::uint32_t>(vnu::pipe::close_fd(fd));
+        if (vnu::vfs::fd_dev_kind(fd) == vnu::vfs::DevKind::Audio)
+            vnu::audio::close_device();
         return static_cast<std::uint32_t>(vnu::vfs::close(fd));
     }
     case VNU_SYS_lseek: {
@@ -536,6 +565,52 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
         return static_cast<std::uint32_t>(vnu::tcp::socket_accept(
             tf->ebx, reinterpret_cast<std::uint32_t*>(tf->ecx),
             reinterpret_cast<std::uint16_t*>(tf->edx), tf->esi));
+
+    case VNU_SYS_audio_open:
+        /* audio_open(). Starts an exclusive playback session; the AC'97
+         * driver is a single-device driver. Returns 0 or -errno. */
+        return static_cast<std::uint32_t>(vnu::audio::open_device());
+
+    case VNU_SYS_audio_set_fmt:
+        /* audio_set_fmt(ebx=rate, ecx=channels, edx=bits). Programs the
+         * codec sample rate; channels 1..2, bits 8/16. -errno otherwise. */
+        return static_cast<std::uint32_t>(
+            vnu::audio::set_format(tf->ebx, tf->ecx, tf->edx));
+
+    case VNU_SYS_audio_write:
+        /* audio_write(ebx=buf, ecx=len). NON-blocking: converts the PCM
+         * (8/16-bit, 1/2 channels) to the hardware's 16-bit stereo and
+         * copies as much as fits into the DMA ring. Returns the number of
+         * input bytes consumed (0 when the ring is full) or -errno. */
+        return static_cast<std::uint32_t>(vnu::audio::write_data(
+            reinterpret_cast<const void*>(tf->ebx), tf->ecx));
+
+    case VNU_SYS_audio_drain:
+        /* audio_drain(). Blocks until the DMA has consumed everything
+         * queued (console-style producers; a windowed task should poll
+         * audio_pending instead). 0 or -errno. */
+        return static_cast<std::uint32_t>(vnu::audio::drain());
+
+    case VNU_SYS_audio_close:
+        /* audio_close(). Stops the engine and ends the session. 0 or
+         * -errno. */
+        return static_cast<std::uint32_t>(vnu::audio::close_device());
+
+    case VNU_SYS_audio_pending:
+        /* audio_pending(). Bytes of (post-conversion) 16-bit stereo PCM
+         * still queued in the DMA ring and not yet played. -errno on an
+         * inactive device. */
+        return static_cast<std::uint32_t>(vnu::audio::pending());
+
+    case VNU_SYS_audio_pause:
+        /* audio_pause(). Halts the engine where it is; queued PCM stays
+         * buffered. 0 or -errno. */
+        return static_cast<std::uint32_t>(vnu::audio::pause_device());
+
+    case VNU_SYS_audio_reset:
+        /* audio_reset(). Drops queued PCM and rewinds the ring so a
+         * later write starts fresh. 0 or -errno. */
+        return static_cast<std::uint32_t>(vnu::audio::reset_device());
 
     default:
         return static_cast<std::uint32_t>(-VNU_ENOSYS);

@@ -369,7 +369,13 @@ bool has_window(TaskHandle h)
 {
     if (h < 0 || h >= MAX_TASKS || !g_tasks)
         return false;
-    return g_tasks[h].state != State::Unused;
+    /* Only live tasks have content worth showing. A task that finished
+     * (State::Done) must drop out of the window list so sweep_finished()
+     * closes it (reaching close_task(), which frees its pgdir and app
+     * image) — otherwise the desktop keeps drawing the corpse window's
+     * last frame after the app exits. */
+    State s = g_tasks[h].state;
+    return s == State::Runnable || s == State::Blocked;
 }
 
 Console* console(TaskHandle h)

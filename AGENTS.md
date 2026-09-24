@@ -58,6 +58,16 @@ userspace, если `vnu/kernel/proc/embedded_*.h` ещё не сгенерир�
   appended in `vnu/kernel/include/vnu/abi.h` and mirrored to
   `vlibc/include/vnu/abi.h`; `vnu/abi/ABI.md` must be updated in the
   same change.
+- **New devices must surface through `/dev`.** When support for a new
+  device is added (sound, network, disk, HID, ...), the attached device
+  MUST be accessible from userspace as a node in `/dev` — a character or
+  block device registered via `add_dev()` in `vnu/kernel/fs/vfs.cpp`
+  (like the existing `null`, `zero`, `tty`, `random` nodes), with reads/
+  writes going through the node. A driver whose device cannot be opened,
+  read and written by a userspace program is not done; if the device
+  deals in streams of blocks/samples/packets, expose those as
+  byte streams on the node. `/proc` or `ioctl`-style side channels alone
+  do not count as device access.
 - The kernel is freestanding C++20 (no exceptions/RTTI/STL) and may only
   include `<vnu/...>` headers. Userspace is C++17 with `vlibc` only.
 - Keep the style of the file you edit: comments in the language it

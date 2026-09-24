@@ -19,6 +19,7 @@
 #include <vnu/net.h>
 #include <vnu/tcp.h>
 #include <vnu/virtio_gpu.h>
+#include <vnu/audio.h>
 extern "C" void vnu_console_start();
 extern "C" void vnu_debug_putc(char c);
 
@@ -107,11 +108,14 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
     vnu::pipe::init();
     vnu::apps::install_demo_apps();
     vnu::apps::install_demo_pics();
+    vnu::apps::install_demo_sounds();
     vnu::ata::init();
     serial_init();
     vnu::tty::init();
     vnu::tty::clear();
     vnu::net::init(); /* QEMU's default e1000 NIC — backs the `ping` command */
+    vnu::audio::init(); /* QEMU's AC'97 sound card (-soundhw ac97); runs a
+                           short playback self-test, no-op without the card */
     vnu::virtio_gpu::init(); /* QEMU's virtio-gpu/virtio-vga display, if any;
                                 silent no-op otherwise (desktop stays on VBE) */
     if (magic != 0x36d76289) {

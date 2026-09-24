@@ -112,7 +112,7 @@ build_vlibc() {
     local stamp="$PREFIX/lib/.vlibc.stamp"
     local need=0
     local sources=(
-        src/sys/syscall.c src/sys/uname.c
+        src/sys/syscall.c src/sys/uname.c src/sys/audio.c
         src/unistd/write.c src/unistd/read.c src/unistd/open.c src/unistd/close.c
         src/unistd/lseek.c src/unistd/exit.c src/unistd/getpid.c
         src/unistd/getuid.c src/unistd/getgid.c src/unistd/chdir.c src/unistd/getcwd.c

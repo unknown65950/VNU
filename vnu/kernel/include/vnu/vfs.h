@@ -11,7 +11,7 @@ namespace vnu::vfs {
  * 0/1/2 (including the windowed-task redirection added for
  * VibeGraphics), so the syscall layer queries fd_dev_kind() and
  * handles that case itself rather than the VFS duplicating it. */
-enum class DevKind : uint8_t { None = 0, Null, Zero, Full, Random, Tty };
+enum class DevKind : uint8_t { None = 0, Null, Zero, Full, Random, Tty, Audio };
 
 struct File {
     bool used;

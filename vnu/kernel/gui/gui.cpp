@@ -162,6 +162,18 @@ void glyph_clock(int x, int y)
     vline(ox + 8, oy + 4, 5, COLOR_WHITE);              /* hour */
 }
 
+void glyph_music(int x, int y)
+{
+    using namespace vnu::vgfx;
+    const int ox = x + 4, oy = y + 4;
+    fill_rect(ox + 3, oy + 9, 8, 4, COLOR_BLACK);       /* note head */
+    put_pixel(ox + 4, oy + 8, COLOR_BLACK);
+    vline(ox + 9, oy + 2, 7, COLOR_BLACK);              /* stem */
+    hline(ox + 9, oy + 2, 5, COLOR_BLACK);              /* flag */
+    hline(ox + 10, oy + 3, 4, COLOR_BLACK);
+    put_pixel(ox + 13, oy + 4, COLOR_BLACK);
+}
+
 /* 24x24 app tile with the accent fill, crisp border and pictogram —
  * shared by the desktop icons and the taskbar's running-app buttons. */
 void draw_app_tile(int x, int y, const vnu::apps::AppEntry& app)
@@ -184,6 +196,7 @@ void draw_app_tile(int x, int y, const vnu::apps::AppEntry& app)
     case vnu::apps::IconGlyph::ICON_PICTURE: glyph_picture(x, y); break;
     case vnu::apps::IconGlyph::ICON_SLIDERS: glyph_sliders(x, y); break;
     case vnu::apps::IconGlyph::ICON_CLOCK:   glyph_clock(x, y); break;
+    case vnu::apps::IconGlyph::ICON_MUSIC:   glyph_music(x, y); break;
     default: {
         char letter[2] = {app.name[0], 0};
         draw_char(x + (ICON_SIZE - 8) / 2, y + (ICON_SIZE - 16) / 2,

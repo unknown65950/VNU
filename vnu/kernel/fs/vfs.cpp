@@ -8,16 +8,17 @@ namespace {
 
 constexpr int MAX_FD = 64;
 /* Every Node carries a full DATA_CAP buffer, so this is the dominant
- * consumer of kernel .bss (MAX_N * ~20 KiB). Boot alone registers 98
- * nodes (static /bin+proc+dev tree plus the /apps and /pics blobs),
- * so heads-up room is needed for anything the runtime creates
- * (/tmp/.session, redirections, ...) — an exhausted table makes those
- * add() calls return ENOSPC and shells lose their session file. */
-constexpr int MAX_N = 112;
+ * consumer of kernel .bss (MAX_N * ~64 KiB). Boot alone registers
+ * ~117 nodes (static /bin+proc+dev tree plus the /apps tiles, the
+ * /pics pack and the /sounds clips), so the remaining heads-up room is
+ * for anything the runtime creates (/tmp/.session, redirections, ...)
+ * — an exhausted table makes those add() calls return ENOSPC and
+ * shells lose their session file. */
+constexpr int MAX_N = 128;
 /* Every Node carries a full DATA_CAP buffer. 65536 fits the largest
  * embedded GUI binary (picview is ~37 KiB of ELF; the older 20480 cap
  * silently truncated it, so the launched image was garbage and the app
- * "crashed" on entry). With 96 nodes this is ~6 MiB of kernel .bss,
+ * "crashed" on entry). With 128 nodes this is ~8 MiB of kernel .bss,
  * which lives at 0xA00000 (linker.ld) — far below the 0x910000 top of
  * the user app/stack window. */
 constexpr int DATA_CAP = 65536; /* big enough to hold any embedded ELF binary */
@@ -603,6 +604,11 @@ void init()
     add_dev("/dev/urandom", DevKind::Random);
     add_dev("/dev/tty", DevKind::Tty);
     add_dev("/dev/console", DevKind::Tty);
+    /* Classic OSS name for the sound card's DAC: writes to /dev/dsp
+     * stream 16-bit stereo PCM (the AC'97 driver's native format) into
+     * the DMA ring; the syscall layer routes them to the audio device
+     * (see vnu::audio and VNU_SYS_audio_*). */
+    add_dev("/dev/dsp", DevKind::Audio);
     /* /dev nodes are world-accessible char devices. */
     for (int i = 0; i < MAX_N; ++i)
         if (nodes[i].used && nodes[i].dev != DevKind::None)
@@ -752,6 +758,10 @@ int read(int fd, void* buf, uint32_t count)
             /* Routed by the syscall layer (see fd_dev_kind) so it picks
              * up the same console/windowed-task handling as fd 0. */
             return -VNU_EIO;
+        case DevKind::Audio:
+            /* Output-only stream (the AC'97 DAC); there is no recording
+             * path, so reads always fail. */
+            return -VNU_EIO;
         case DevKind::None:
             break;
         }
@@ -789,6 +799,8 @@ int write(int fd, const void* buf, uint32_t count)
         case DevKind::Full:
             return -VNU_ENOSPC; /* the whole point of /dev/full */
         case DevKind::Tty:
+            return -VNU_EIO; /* routed by the syscall layer */
+        case DevKind::Audio:
             return -VNU_EIO; /* routed by the syscall layer */
         case DevKind::None:
             break;

@@ -75,10 +75,17 @@ fi
 #   14433 -> 14433 tlsdemo против openssl s_server на хосте
 QEMU_NET_ARGS=(-netdev user,id=n0,hostfwd=tcp::17778-:7778,hostfwd=tcp::17779-:7779,hostfwd=tcp::14433-:14433 -device e1000,netdev=n0)
 
+# QEMU's AC'97 sound card (PCI 8086:2415) backs the audio_* syscalls;
+# the kernel's ac97 driver does a short playback self-test at boot.
+# Modern QEMU (>= 8, where -soundhw was removed) maps `AC97` directly;
+# with no -audiodev it silently falls back to the "none" driver, which
+# still runs the audio timer at nominal rate (samples are discarded).
+QEMU_AUDIO_ARGS=(-device AC97)
+
 # Грузимся с ISO (устройство d), чтобы установщик/тест мог писать на VHD;
 # сам диск (c) остаётся рядом и готов к установке на него.
 if [[ "$HEADLESS" == 1 ]]; then
-    qemu-system-i386 -cdrom vnu.iso -m 32 -boot d -display none -serial stdio -no-reboot "${QEMU_GPU_ARGS[@]}" "${QEMU_NET_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
+    qemu-system-i386 -cdrom vnu.iso -m 32 -boot d -display none -serial stdio -no-reboot "${QEMU_AUDIO_ARGS[@]}" "${QEMU_GPU_ARGS[@]}" "${QEMU_NET_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
 else
-    qemu-system-i386 -cdrom vnu.iso -m 32 -boot d -serial stdio -no-reboot "${QEMU_GPU_ARGS[@]}" "${QEMU_NET_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
+    qemu-system-i386 -cdrom vnu.iso -m 32 -boot d -serial stdio -no-reboot "${QEMU_AUDIO_ARGS[@]}" "${QEMU_GPU_ARGS[@]}" "${QEMU_NET_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
 fi
