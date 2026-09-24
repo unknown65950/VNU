@@ -1,4 +1,5 @@
 #include <vnu/vga_gfx.h>
+#include <vnu/virtio_gpu.h>
 #include <vnu/wallpaper.h>
 
 extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
@@ -631,6 +632,27 @@ void draw_cursor(int x, int y, uint8_t color)
 
 void present()
 {
+    /* Virtio-gpu path (when QEMU was given a virtio display device):
+     * the host scanout is a 32-bpp resource backed by guest memory, so
+     * expand the 8-bpp backbuffer through the DAC palette first, then
+     * hand the true-colour buffer over to the driver, which transfers
+     * and flushes it. No VBE frame involved. */
+    if (vnu::virtio_gpu::active()) {
+        uint8_t* fb = vnu::virtio_gpu::framebuffer();
+        for (int i = 0; i < WIDTH * HEIGHT; ++i) {
+            const uint8_t* rgb = CATT_PAL[g_backbuf[i]];
+            uint8_t* p = fb + static_cast<unsigned long>(i) * 4;
+            /* 6-bit DAC -> 8-bit channel, then store B,G,R,X (pixel =
+             * 0x00RRGGBB) to match GPU_FORMAT_B8G8R8X8. */
+            p[0] = static_cast<uint8_t>((rgb[2] << 2) | (rgb[2] >> 4));
+            p[1] = static_cast<uint8_t>((rgb[1] << 2) | (rgb[1] >> 4));
+            p[2] = static_cast<uint8_t>((rgb[0] << 2) | (rgb[0] >> 4));
+            p[3] = 0xFF;
+        }
+        vnu::virtio_gpu::present();
+        return;
+    }
+
     /* Wait for vertical retrace before copying, so the flip doesn't
      * happen while the CRT (real or emulated) is partway through
      * scanning out the previous frame — without this, a screen

@@ -12,6 +12,13 @@ if [ -z "${BASH_VERSION:-}" ]; then exec env bash "$0" "$@"; fi
 #                                      и подключить его как жёсткий диск
 #   ./vnu/run.sh vhd --headless      — то же, но serial в текущий терминал
 #
+# Слово virtio-gpu подключает дисплей virtio-gpu (QEMU `-device
+# virtio-vga` вместо обычной std VGA); ядро выводит рабочий стол на
+# него, а консоль/шрифт по-прежнему живут на VGA-совместимой части
+# устройства:
+#   ./vnu/run.sh virtio-gpu           — рабочий стол через virtio-gpu
+#   ./vnu/run.sh virtio-gpu --headless — то же, serial в текущий терминал
+#
 # Дополнительно (необязательно):
 #   VHD=<путь>      — свой путь к образу диска (например VHD=/sdcard/sda.vhd)
 #   SIZE=<MiB>      — размер создаваемого диска (по умолчанию 64)
@@ -27,6 +34,7 @@ fi
 
 HEADLESS=0
 USE_VHD=0
+VIRTIO_GPU=0
 VHD_PATH="vnu.vhd"
 SIZE_MIB=64
 
@@ -34,7 +42,8 @@ for arg in "$@"; do
     case "$arg" in
         --headless)   HEADLESS=1 ;;
         vhd)          USE_VHD=1 ;;
-        --help|-h)    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        virtio-gpu)   VIRTIO_GPU=1 ;;
+        --help|-h)    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         VHD=*)        VHD_PATH="${arg#VHD=}" ; USE_VHD=1 ;;
         SIZE=*)       SIZE_MIB="${arg#SIZE=}" ;;
         *) echo "run.sh: неизвестный аргумент '$arg' (см. --help)" >&2; exit 2 ;;
@@ -52,10 +61,17 @@ if [[ "$USE_VHD" == 1 ]]; then
     QEMU_DISK_ARGS=(-hda "$VHD_PATH")
 fi
 
+QEMU_GPU_ARGS=()
+if [[ "$VIRTIO_GPU" == 1 ]]; then
+    # virtio-vga = VGA-совместимый virtio-gpu: ядро оставляет консоль и
+    # захват шрифта на VGA-части, а рабочий стол выводит через virtio.
+    QEMU_GPU_ARGS=(-vga none -device virtio-vga)
+fi
+
 # Грузимся с ISO (устройство d), чтобы установщик/тест мог писать на VHD;
 # сам диск (c) остаётся рядом и готов к установке на него.
 if [[ "$HEADLESS" == 1 ]]; then
-    qemu-system-i386 -cdrom vnu.iso -m 32 -boot d -display none -serial stdio -no-reboot "${QEMU_DISK_ARGS[@]}"
+    qemu-system-i386 -cdrom vnu.iso -m 32 -boot d -display none -serial stdio -no-reboot "${QEMU_GPU_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
 else
-    qemu-system-i386 -cdrom vnu.iso -m 32 -boot d -serial stdio -no-reboot "${QEMU_DISK_ARGS[@]}"
+    qemu-system-i386 -cdrom vnu.iso -m 32 -boot d -serial stdio -no-reboot "${QEMU_GPU_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
 fi

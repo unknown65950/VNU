@@ -116,6 +116,7 @@ add_executable(kernel.elf
     drivers/ata.cpp
     drivers/pci.cpp
     drivers/e1000.cpp
+    drivers/virtio_gpu.cpp
     drivers/tcp.cpp
     gui/gui.cpp
     gui/apps.cpp

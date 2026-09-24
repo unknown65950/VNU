@@ -18,6 +18,7 @@
 #include <vnu/mboot.h>
 #include <vnu/net.h>
 #include <vnu/tcp.h>
+#include <vnu/virtio_gpu.h>
 extern "C" void vnu_console_start();
 extern "C" void vnu_debug_putc(char c);
 
@@ -111,6 +112,8 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
     vnu::tty::init();
     vnu::tty::clear();
     vnu::net::init(); /* QEMU's default e1000 NIC — backs the `ping` command */
+    vnu::virtio_gpu::init(); /* QEMU's virtio-gpu/virtio-vga display, if any;
+                                silent no-op otherwise (desktop stays on VBE) */
     if (magic != 0x36d76289) {
         vga_print("invalid multiboot2 magic\n", 4);
         for (;;)

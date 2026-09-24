@@ -18,6 +18,10 @@ consistent.
 ./tools/build_userspace.sh   # compile userspace + regenerate embedded_*.h
 ./vnu/build_iso.sh           # cmake kernel build + grub-mkrescue -> vnu/vnu.iso
 ```
+`./vnu/build_iso.sh` (и `./vnu/run.sh`) сами запускают сборку
+userspace, если `vnu/kernel/proc/embedded_*.h` ещё не сгенерированы
+(свежий клон), так что с нуля достаточно одной команды
+`./vnu/build_iso.sh`.
 
 ## Rules
 - **Mandatory man pages.** Every user-visible command — vash builtins,

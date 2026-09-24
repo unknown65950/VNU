@@ -8,6 +8,17 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$ROOT_DIR/kernel/build"
 SOURCE_DIR="$ROOT_DIR/kernel"
 SEED_DIR="$ROOT_DIR/grub-seed"
+REPO_DIR="$(cd "$ROOT_DIR/.." && pwd)"
+
+# The kernel embeds every userspace binary via generated
+# vnu/kernel/proc/embedded_*.h (gitignored build artifacts produced by
+# tools/build_userspace.sh). A fresh checkout has none of them yet, so run
+# the userspace build first; afterwards the headers exist and this step is
+# skipped, keeping incremental rebuilds fast.
+if ! ls "$ROOT_DIR"/kernel/proc/embedded_*.h >/dev/null 2>&1; then
+    echo "embedded_*.h не найдены, собираю userspace..."
+    bash "$REPO_DIR/tools/build_userspace.sh"
+fi
 
 # CMake stores absolute source/build paths in CMakeCache.txt. A build
 # directory copied from another machine/archive must be reconfigured.

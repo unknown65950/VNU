@@ -40,7 +40,7 @@ static int px_probe(const uint8_t* d, unsigned n, int* w, int* h);
 
 /* Decode d (n bytes) into rgb, which must hold 3*w*h bytes (top-down
  * rows, byte order RGB).  Returns 0 on success or a negative error. */
-static int px_decode(int fmt, const uint8_t* d, unsigned n,
+static inline int px_decode(int fmt, const uint8_t* d, unsigned n,
                      int w, int h, uint8_t* rgb);
 
 /* --- bytes ------------------------------------------------------------ */
@@ -800,7 +800,7 @@ static const uint8_t JZZ[64] = {
 
 /* Separable float IDCT of a dequantized block; output is level-shifted
  * (+128) and clamped to 0..255. Coefficients arrive in Zig-Zag order. */
-static void j_idct(const int* in, uint8_t* out)
+static inline void j_idct(const int* in, uint8_t* out)
 {
     float t[8][8];
     for (int u = 0; u < 8; ++u)
@@ -851,7 +851,7 @@ static int jpg_dims(const uint8_t* d, unsigned n, int* w, int* h)
     return -1;
 }
 
-static int px_jpg_decode(const uint8_t* d, unsigned n,
+static inline int px_jpg_decode(const uint8_t* d, unsigned n,
                          int* w, int* h, uint8_t* rgb)
 {
     int qtab[4][64];
@@ -1203,7 +1203,7 @@ static int px_probe(const uint8_t* d, unsigned n, int* w, int* h)
     return PX_NONE;
 }
 
-static int px_decode(int fmt, const uint8_t* d, unsigned n,
+static inline int px_decode(int fmt, const uint8_t* d, unsigned n,
                      int w, int h, uint8_t* rgb)
 {
     int dw = 0, dh = 0;

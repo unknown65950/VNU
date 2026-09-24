@@ -21,11 +21,16 @@ fi
 if [[ $VNU_CROSS_MODE -eq 1 ]]; then
     CC="${VNU_CC:-clang}"
     TARGET=("--target=i386-none-elf")
+    ARCH_FLAGS=()
 else
     CC="${VNU_CC:-gcc}"
     TARGET=()
+    # Native x86_64 host: plain gcc with -m32 (multilib) targets the
+    # 32-bit VNU ABI. The cross path exists only for ARM hosts (Termux)
+    # where gcc multilib is unavailable.
+    ARCH_FLAGS=(-m32)
 fi
-CFLAGS_DEFAULT=(${TARGET[@]:-} -std=c99 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -mno-sse -mno-sse2 -mno-avx -Wall -Wextra -DVLIBC_TARGET_VNU=1)
+CFLAGS_DEFAULT=(${TARGET[@]:-} ${ARCH_FLAGS[@]:-} -std=c99 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -mno-sse -mno-sse2 -mno-avx -Wall -Wextra -DVLIBC_TARGET_VNU=1)
 INCLUDES=(-I"$VLIBC_DIR/include")
 
 usage() {
@@ -166,7 +171,7 @@ build_vlibc() {
 
     run "$CC" "${CFLAGS_DEFAULT[@]}" "${INCLUDES[@]}" \
         -c "$VLIBC_DIR/src/crt/crt0_vnu.c" -o "$PREFIX/tmp-obj/crt0_vnu_c.o"
-    run "$CC" "${TARGET[@]:-}" -c "$VLIBC_DIR/src/crt/crt0_vnu.S" -o "$PREFIX/tmp-obj/crt0_vnu_S.o"
+    run "$CC" "${TARGET[@]}" "${ARCH_FLAGS[@]}" -c "$VLIBC_DIR/src/crt/crt0_vnu.S" -o "$PREFIX/tmp-obj/crt0_vnu_S.o"
     run ld -m elf_i386 -r "$PREFIX/tmp-obj/crt0_vnu_S.o" "$PREFIX/tmp-obj/crt0_vnu_c.o" \
         -o "$PREFIX/lib/crt0.o"
 

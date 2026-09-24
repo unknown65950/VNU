@@ -18,11 +18,14 @@ fi
 if [[ $VNU_CROSS_MODE -eq 1 ]]; then
     CXX="${VNU_CXX:-clang++}"
     TARGET=("--target=i386-none-elf")
+    ARCH_FLAGS=()
 else
     CXX="${VNU_CXX:-g++}"
     TARGET=()
+    # Native x86_64 host: g++ with -m32 (multilib), same as vcc.
+    ARCH_FLAGS=(-m32)
 fi
-CFLAGS_DEFAULT=(${TARGET[@]:-} -std=c++17 -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+CFLAGS_DEFAULT=(${TARGET[@]:-} ${ARCH_FLAGS[@]:-} -std=c++17 -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
                 -fno-stack-protector -fno-pic -Wall -Wextra -DVLIBC_TARGET_VNU=1)
 INCLUDES=(-I"$VLIBC_DIR/include")
 
