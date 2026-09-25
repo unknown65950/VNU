@@ -2,20 +2,32 @@
  * files — graphical file manager for the VNU desktop.
  *
  * Browses the kernel's in-memory VFS (/, /bin, /apps, /dev, /proc,
- * /home, /tmp, ...). Rows are drawn in the crisp 8x16 VGA face with a
- * coloured type tile per entry; the selected row gets a full-width
- * light-blue bar, clicking a directory enters it and ".." walks back
- * up. Opening a .png/.jpg/.jpeg picture (Enter or double-click) hands
- * it to picview, which takes over this window and returns it on Esc.
- * The path is shown in the header, the item count in the status
- * strip.
+ * /home, /tmp, ...). Two views, toggled with 'v' like a desktop file
+ * manager:
  *
- * Own-house flat look: dark header/status bars, accent tiles, exactly
- * one glyph height per row — no bevels, no legacy window dressing.
+ *   list view   — rows in the crisp 8x16 VGA face, each with a
+ *                 coloured type tile and the entry size; the selected
+ *                 row gets a full-width light-blue bar.
  *
- * Keys: j/k select, Enter open, Esc close. Mouse: click to select,
- * release on the same row to open it. Opening a picture (png/jpg/jpeg)
- * runs it in picview inside this window; Esc returns to the manager.
+ *   icon view   — a grid of flat 32px icons (yellow folder / white
+ *                 document / picture-embossed document for images),
+ *                 name underneath each, selection as a light-blue
+ *                 cell highlight. The parent entry is a magenta
+ *                 folder in both views.
+ *
+ * Clicking a directory enters it and ".." walks back up. Opening a
+ * .png/.jpg/.jpeg picture (Enter, double-click or click-and-release)
+ * hands it to picview, which takes over this window and returns it
+ * on Esc. The path is shown in the header, the item count in the
+ * status strip.
+ *
+ * Own-house flat look: dark header/status bars, accent tiles, no
+ * bevels, no legacy window dressing.
+ *
+ * Keys: j/k select (h/l too in icon view), Enter open, v toggle view,
+ * Esc close. Mouse: click to select, release on the same entry to
+ * open it. Opening a picture (png/jpg/jpeg) runs it in picview inside
+ * this window; Esc returns to the manager.
  */
 #include <vlibc/vgfx.h>
 #include <vlibc/dirent.h>
@@ -37,6 +49,16 @@
 #define TILE 8
 #define TILE_Y(r) (HEAD_H + (r) * ROW_PITCH + (ROW_PITCH - TILE) / 2)
 
+/* Icon-view grid: 32px icons on a PITCH_X x PITCH_Y lattice, label in
+ * the 8x16 face below each icon, light-blue selection behind the cell. */
+#define GRID_MX 24
+#define GRID_MY 22
+#define PITCH_X 72
+#define PITCH_Y 56
+#define GRID_C ((VGFX_W - 2 * GRID_MX) / PITCH_X)
+#define GRID_R ((STATUS_Y - HEAD_H - GRID_MY) / PITCH_Y)
+#define GRID_SLOTS (GRID_C * GRID_R)
+
 struct ent {
     char name[NAME_LEN];
     unsigned long size;
@@ -46,10 +68,12 @@ struct ent {
 static char cwd[PATH_LEN] = "/";
 static struct ent list[MAX_ENTS];
 static int list_n = 0;
-static int scroll = 0;
-static int sel = 0;
+static int list_scroll = 0;   /* list view: first entry under ".." */
+static int iscroll = 0;       /* icon view: first item (0 = "..") */
+static int sel = 0;           /* selected item: 0 = "..", n = n-th entry */
 static int error_flag = 0;
-static int press_row = -1;
+static int press_item = -1;
+static int view_icons = 0;
 
 static void pcat(char* dst, const char* a, const char* b)
 {
@@ -66,7 +90,8 @@ static void pcat(char* dst, const char* a, const char* b)
 static int load_dir(const char* path)
 {
     list_n = 0;
-    scroll = 0;
+    list_scroll = 0;
+    iscroll = 0;
     sel = 0;
     error_flag = 0;
     DIR* d = opendir(path);
@@ -158,6 +183,12 @@ static int ends_with(const char* s, const char* suf)
     return 1;
 }
 
+static int is_image(const char* name)
+{
+    return ends_with(name, ".png") || ends_with(name, ".jpg") ||
+           ends_with(name, ".jpeg") || ends_with(name, ".bmp");
+}
+
 static void enter_sel(void)
 {
     if (sel == 0) {
@@ -166,7 +197,7 @@ static void enter_sel(void)
         enter_path(parent);
         return;
     }
-    int idx = scroll + sel - 1;
+    int idx = sel - 1;
     if (idx < 0 || idx >= list_n)
         return;
     struct ent* e = &list[idx];
@@ -176,8 +207,7 @@ static void enter_sel(void)
         /* Open pictures in the image viewer. picview is exec'd over this
          * task, showing the file in this very window; Esc brings the file
          * manager right back (the kernel reloads this app when it exits). */
-        if (ends_with(e->name, ".png") || ends_with(e->name, ".jpg") ||
-            ends_with(e->name, ".jpeg")) {
+        if (is_image(e->name)) {
             char* av[3];
             av[0] = "/apps/picview/bin";
             av[1] = fp;
@@ -221,65 +251,193 @@ static void itoa_ul(unsigned long v, char* out)
     out[j] = 0;
 }
 
-/* ---- layout ---- */
+/* ---- selection / scrolling (item 0 = "..", N = N-th entry) ---- */
 
-static int row_has(int r) /* visible row r has something to select? */
-{
-    if (r < 0 || r >= VIS_ROWS)
-        return 0;
-    if (r == 0)
-        return 1;
-    int idx = scroll + r - 1;
-    return idx >= 0 && idx < list_n;
-}
-
-static int sel_max(void)
-{
-    int m = list_n - scroll;
-    if (m < 0)
-        m = 0;
-    return m < VIS_ROWS - 1 ? m : VIS_ROWS - 1;
-}
-
-static int scroll_max(void)
+static int scroll_max_list(void)
 {
     int m = list_n - (VIS_ROWS - 1);
     return m < 0 ? 0 : m;
 }
 
-static void sel_down(void)
+/* Keep `sel` on screen in the list view (adjusts list_scroll). */
+static void list_vis(void)
 {
-    if (sel < sel_max())
-        ++sel;
-    else if (scroll < scroll_max())
-        ++scroll;
+    if (sel <= 0)
+        return;
+    if (sel - 1 < list_scroll)
+        list_scroll = sel - 1;
+    int row = sel - list_scroll;
+    if (row >= VIS_ROWS)
+        list_scroll = sel - (VIS_ROWS - 1);
+    int mx = scroll_max_list();
+    if (list_scroll > mx)
+        list_scroll = mx;
+    if (list_scroll < 0)
+        list_scroll = 0;
 }
 
-static void sel_up(void)
+/* Keep `sel` on screen in the icon view (adjusts iscroll). */
+static void icon_vis(void)
 {
+    if (sel < iscroll)
+        iscroll = sel;
+    int s = sel - iscroll;
+    if (s >= GRID_SLOTS)
+        iscroll = sel - (GRID_SLOTS - 1);
+    int mx = list_n + 1 - GRID_SLOTS;
+    if (mx < 0)
+        mx = 0;
+    if (iscroll > mx)
+        iscroll = mx;
+    if (iscroll < 0)
+        iscroll = 0;
+    if (sel < iscroll)
+        iscroll = sel;
+}
+
+/* Step the icon-grid selection by (dr, dc) rows/columns. Moving off the
+ * bottom of a page scrolls the grid down a page (top row, same column),
+ * moving off the top scrolls back up; sides do not wrap. */
+static void icon_step(int dr, int dc)
+{
+    int s = sel - iscroll;
+    int r = s / GRID_C;
+    int c = s - r * GRID_C;
+    if (dc != 0) {
+        int nc = c + dc;
+        if (nc < 0 || nc >= GRID_C)
+            return;
+        int nit = iscroll + r * GRID_C + nc;
+        if (nit > list_n)
+            return;
+        sel = nit;
+        return;
+    }
+    if (dr < 0) {
+        if (r > 0) {
+            sel = iscroll + (r - 1) * GRID_C + c;
+        } else if (iscroll > 0) {
+            iscroll -= GRID_C;
+            sel = iscroll + c;
+        } else {
+            return; /* already at the very top */
+        }
+        if (sel > list_n)
+            sel = list_n;
+        return;
+    }
+    /* moving down */
+    if (r >= GRID_R - 1) {
+        int mx = list_n + 1 - GRID_SLOTS;
+        if (mx < 0)
+            mx = 0;
+        if (iscroll < mx) {
+            iscroll += GRID_C;
+            if (iscroll > mx)
+                iscroll = mx;
+        }
+        sel = iscroll + c;
+        if (sel > list_n)
+            sel = list_n;
+    } else {
+        int nit = iscroll + (r + 1) * GRID_C + c;
+        if (nit > list_n)
+            return;
+        sel = nit;
+    }
+}
+
+static void sel_j(void)
+{
+    if (view_icons) {
+        icon_step(1, 0);
+        return;
+    }
+    if (sel == 0) {
+        if (list_n > 0)
+            sel = 1;
+    } else if (sel < list_n) {
+        ++sel;
+    }
+    list_vis();
+}
+
+static void sel_k(void)
+{
+    if (view_icons) {
+        icon_step(-1, 0);
+        return;
+    }
     if (sel > 0)
         --sel;
-    else if (scroll > 0)
-        --scroll;
+    list_vis();
 }
 
-static void draw(void)
+/* Toggle the view, carrying the selected entry across. */
+static void toggle_view(void)
 {
-    vgfx_clear(VGFX_LGRAY);
+    if (view_icons) {
+        view_icons = 0;
+        if (sel > 0)
+            list_scroll = sel - 1;
+        list_vis();
+    } else {
+        view_icons = 1;
+        iscroll = 0;
+        icon_vis();
+    }
+}
 
+/* ---- drawing ---- */
+
+/* Flat folder icon (32px box): tab + body, outlined dark. The parent
+ * entry reuses it in magenta. */
+static void draw_folder_icon(int x, int y, int color)
+{
+    vgfx_fill_rect(x + 7, y + 5, 11, 8, color);
+    vgfx_rect(x + 7, y + 5, 11, 8, VGFX_BLACK);
+    vgfx_fill_rect(x + 2, y + 12, 28, 17, color);
+    vgfx_rect(x + 2, y + 12, 28, 17, VGFX_BLACK);
+}
+
+/* Flat document icon: white page with a folded top-right corner and a
+ * few ruled lines; images get a little landscape instead of the lines. */
+static void draw_page_icon(int x, int y, int img)
+{
+    vgfx_fill_rect(x + 8, y + 2, 16, 29, VGFX_WHITE);
+    vgfx_rect(x + 8, y + 2, 16, 29, VGFX_BLACK);
+    /* folded corner */
+    int i;
+    for (i = 0; i < 5; ++i)
+        vgfx_put_pixel(x + 24 - i, y + 2 + i, VGFX_BLACK);
+    if (img) {
+        /* a miniature picture: sky, sun, ground */
+        vgfx_fill_rect(x + 11, y + 10, 10, 9, VGFX_LBLUE);
+        vgfx_put_pixel(x + 14, y + 12, VGFX_YELLOW);
+        vgfx_hline(x + 11, y + 16, 10, VGFX_LGREEN);
+        vgfx_rect(x + 11, y + 10, 10, 9, VGFX_BLACK);
+    } else {
+        vgfx_hline(x + 11, y + 8, 10, VGFX_LGRAY);
+        vgfx_hline(x + 11, y + 13, 10, VGFX_LGRAY);
+        vgfx_hline(x + 11, y + 18, 6, VGFX_LGRAY);
+    }
+}
+
+static void draw_list(void)
+{
     /* header: current path on a dark bar with a location tile */
     vgfx_fill_rect(0, 0, VGFX_W, HEAD_H, VGFX_DGRAY);
     vgfx_hline(0, HEAD_H - 1, VGFX_W, VGFX_BLACK);
     draw_tile(4, (HEAD_H - TILE) / 2, VGFX_LBLUE);
     ncpy_draw(NAME_X, 1, cwd, (VGFX_W - NAME_X) / 8, VGFX_WHITE);
 
-    /* list rows: row 0 is the parent entry, then scroll..scroll+VIS */
+    /* rows: row 0 is the parent entry, then scroll..scroll+VIS entries */
     for (int r = 0; r < VIS_ROWS; ++r) {
-        if (!row_has(r))
+        int it = (r == 0) ? 0 : list_scroll + r;
+        if (it > list_n)
             continue;
         int y = HEAD_H + r * ROW_PITCH;
-        int idx = scroll + r - 1;
-        int is_sel = (r == sel);
+        int is_sel = (it == sel);
         int col = is_sel ? VGFX_BLACK : VGFX_WHITE;
         if (is_sel)
             vgfx_fill_rect(0, y, VGFX_W, ROW_PITCH, VGFX_LBLUE);
@@ -289,7 +447,7 @@ static void draw(void)
             vgfx_str(NAME_X, y, "..", col);
             vgfx_str(NAME_X + 16, y, "(parent)", col);
         } else {
-            struct ent* e = &list[idx];
+            struct ent* e = &list[it - 1];
             draw_tile(4, TILE_Y(r), e->is_dir ? VGFX_YELLOW : VGFX_LGREEN);
             int name_cap = (VGFX_W - NAME_X - 4) / 8;
             if (!e->is_dir)
@@ -303,6 +461,50 @@ static void draw(void)
             }
         }
     }
+}
+
+static void draw_icons(void)
+{
+    vgfx_fill_rect(0, 0, VGFX_W, HEAD_H, VGFX_DGRAY);
+    vgfx_hline(0, HEAD_H - 1, VGFX_W, VGFX_BLACK);
+    draw_tile(4, (HEAD_H - TILE) / 2, VGFX_LBLUE);
+    ncpy_draw(NAME_X, 1, cwd, (VGFX_W - NAME_X) / 8, VGFX_WHITE);
+
+    for (int s = 0; s < GRID_SLOTS; ++s) {
+        int it = iscroll + s;
+        if (it < 0 || it > list_n)
+            continue;
+        int c = s % GRID_C;
+        int r = s / GRID_C;
+        int x = GRID_MX + c * PITCH_X;
+        int y = HEAD_H + GRID_MY + r * PITCH_Y;
+        int is_sel = (it == sel);
+        int col = is_sel ? VGFX_BLACK : VGFX_WHITE;
+
+        if (is_sel)
+            vgfx_fill_rect(x - 4, y - 4, PITCH_X - 8, PITCH_Y - 4, VGFX_LBLUE);
+
+        if (it == 0) {
+            draw_folder_icon(x, y, VGFX_MAGENTA); /* parent */
+            ncpy_draw(x, y + 36, "..", PITCH_X / 8, col);
+        } else {
+            struct ent* e = &list[it - 1];
+            if (e->is_dir)
+                draw_folder_icon(x, y, VGFX_YELLOW);
+            else
+                draw_page_icon(x, y, is_image(e->name));
+            ncpy_draw(x, y + 36, e->name, PITCH_X / 8, col);
+        }
+    }
+}
+
+static void draw(void)
+{
+    vgfx_clear(VGFX_LGRAY);
+    if (view_icons)
+        draw_icons();
+    else
+        draw_list();
 
     /* status strip */
     vgfx_fill_rect(0, STATUS_Y, VGFX_W, VGFX_H - STATUS_Y, VGFX_DGRAY);
@@ -310,7 +512,12 @@ static void draw(void)
     if (error_flag) {
         vgfx_str(4, STATUS_Y + 1, "cannot open directory", VGFX_LRED);
     } else {
-        vgfx_str(4, STATUS_Y + 1, "j/k move  enter open", VGFX_WHITE);
+        if (view_icons)
+            vgfx_str(4, STATUS_Y + 1, "h/j/k/l move  enter open  v:list",
+                     VGFX_WHITE);
+        else
+            vgfx_str(4, STATUS_Y + 1, "j/k move  enter open  v:icons",
+                     VGFX_WHITE);
         char cnt[16];
         itoa_ul((unsigned long)list_n, cnt);
         int cw = vgfx_text_width(cnt);
@@ -320,14 +527,26 @@ static void draw(void)
     }
 }
 
-static int hit_row(int py)
+/* Map a client-area point to an item, or -1 for the empty gutter. */
+static int hit_item(int x, int y)
 {
-    if (py < HEAD_H || py >= STATUS_Y)
+    if (y < HEAD_H || y >= STATUS_Y)
         return -1;
-    int r = (py - HEAD_H) / ROW_PITCH;
+    if (view_icons) {
+        int c = (x - GRID_MX) / PITCH_X;
+        int r = (y - HEAD_H - GRID_MY) / PITCH_Y;
+        if (c < 0 || c >= GRID_C || r < 0 || r >= GRID_R)
+            return -1;
+        int it = iscroll + r * GRID_C + c;
+        return (it >= 0 && it <= list_n) ? it : -1;
+    }
+    int r = (y - HEAD_H) / ROW_PITCH;
     if (r < 0 || r >= VIS_ROWS)
         return -1;
-    return r;
+    if (r == 0)
+        return 0;
+    int it = list_scroll + r;
+    return (it <= list_n) ? it : -1;
 }
 
 int main(void)
@@ -343,29 +562,40 @@ int main(void)
             if (ev.key == 0x1B)
                 exit(0);
             else if (ev.key == 'j' || ev.key == 'J')
-                sel_down();
+                sel_j();
             else if (ev.key == 'k' || ev.key == 'K')
-                sel_up();
-            else if (ev.key == '\n' || ev.key == '\r') {
-                if (row_has(sel))
+                sel_k();
+            else if (ev.key == 'h' || ev.key == 'H') {
+                if (view_icons)
+                    icon_step(0, -1);
+            } else if (ev.key == 'l' || ev.key == 'L') {
+                if (view_icons)
+                    icon_step(0, 1);
+            } else if (ev.key == 'v' || ev.key == 'V') {
+                toggle_view();
+            } else if (ev.key == '\n' || ev.key == '\r') {
+                if (!error_flag)
                     enter_sel();
             }
             draw();
             vgfx_flush();
         } else if (ev.type == VGFX_EV_PRESS) {
-            int r = hit_row(ev.y);
-            if (r >= 0 && row_has(r)) {
-                sel = r;
-                press_row = r;
+            int it = hit_item(ev.x, ev.y);
+            if (it >= 0) {
+                sel = it;
+                if (view_icons)
+                    icon_vis();
+                else
+                    list_vis();
+                press_item = it;
             }
             draw();
             vgfx_flush();
         } else if (ev.type == VGFX_EV_RELEASE) {
-            if (press_row >= 0) {
-                int r = hit_row(ev.y);
-                if (r == press_row && row_has(r))
+            if (press_item >= 0) {
+                if (hit_item(ev.x, ev.y) == press_item)
                     enter_sel();
-                press_row = -1;
+                press_item = -1;
             }
             draw();
             vgfx_flush();

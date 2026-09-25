@@ -81,3 +81,9 @@ userspace, если `vnu/kernel/proc/embedded_*.h` ещё не сгенерир�
   `./vnu/build_iso.sh`). Artifacts already committed must be removed from
   the index (`git rm -r --cached`), never from disk.
 - Don't commit secrets.
+- **Commit after every change.** Each finished piece of work — a feature,
+  a fix, a refactor — is committed as soon as it builds, passes its
+  verification and the debug scaffolding has been removed. Do not let
+  uncommitted work pile up across sessions. Follow the repo's commit
+  style: one-line summary prefixed by the area (`gui:`, `net:`, ...),
+  details in the body when useful.

@@ -691,18 +691,27 @@ SYNOPSIS\n\
 \n\
 DESCRIPTION\n\
     A click-through directory browser over the in-memory VFS\n\
-    (/, /bin, /apps, /dev, /proc, /home, /tmp, ...). Each row\n\
-    shows a coloured type tile, the entry name and, for files, the\n\
-    size: yellow tiles for directories, green for files, magenta\n\
-    for the parent entry. The selected row is a full-width\n\
-    light-blue bar.\n\
+    (/, /bin, /apps, /dev, /proc, /home, /tmp, ...), in two views\n\
+    toggled with v.\n\
+\n\
+    List view: each row shows a coloured type tile, the entry name\n\
+    and, for files, the size: yellow tiles for directories, green\n\
+    for files, magenta for the parent entry. The selected row is a\n\
+    full-width light-blue bar.\n\
+\n\
+    Icon view: a grid of flat 32px icons — a yellow folder for\n\
+    directories (magenta for the parent), a white document for\n\
+    files, a picture-embossed document for images — with the name\n\
+    underneath each and the selection as a light-blue cell highlight.\n\
 \n\
 KEYS\n\
-    j/k      move up and down\n\
+    j/k      move down/up (list view)\n\
+    h/l      move left/right between icons (icon view)\n\
+    v        toggle between the list and icon views\n\
     Enter    open the selected directory, or a .png/.jpg/.jpeg\n\
              picture in picview (Esc hands the window back here)\n\
     Esc      close the window\n\
-    Mouse: click to select, release on the same row to open.\n\
+    Mouse: click to select, release on the same entry to open.\n\
     A GUI app (see man calc for how GUI apps are launched).\n"
 
 #define PREFS_PAGE "NAME\n\
