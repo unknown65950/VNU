@@ -25,7 +25,7 @@ constexpr int CON_ROWS = 24;
 constexpr int SCROLL_ROWS = 96; /* scrollback ring depth */
 constexpr int CELL_W = 8;       /* text cell pitch in pixels */
 constexpr int CELL_H = 16;      /* text cell height (8x16 VGA font) */
-constexpr int INPUT_QUEUE_CAP = 64;
+constexpr int INPUT_QUEUE_CAP = 128;
 constexpr int TITLE_CAP = 24;
 constexpr int MAX_TASKS = 6;
 using TaskHandle = int;
@@ -47,9 +47,14 @@ constexpr int GFX_H = 340;
 /* VNU mouse protocol (delivered over the stdin escape stream, one event
  * per message so a partially-queued press can't corrupt the next):
  *   ESC '[' 'M' <button> <xl> <xh> <yl> <yh>
- * where <button> is 1 (left pressed) / 2 (left released) and the
- * coordinates are little-endian 16-bit client-area pixels (a 480-wide
- * canvas no longer fits in one byte). */
+ * where <button> is 1 (left pressed) / 2 (left released) / 3 (Esc key)
+ * / 4 (drag cancelled: a click became a drag, no release will follow)
+ * and the coordinates are little-endian 16-bit client-area pixels (a
+ * 480-wide canvas no longer fits in one byte).
+ *
+ * Drag-and-drop: the GUI delivers the dropped item's path as
+ *   ESC '[' 'D' <len_lo> <len_hi> <path...>
+ * (little-endian 16-bit length; the payload is the full VFS path). */
 constexpr char MOUSE_ESC = 0x1B;
 constexpr int MOUSE_MSG_LEN = 8;
 
@@ -88,6 +93,18 @@ void init();
 // own storage, so `data` no longer needs to stay valid after returning.
 // `title` is copied into the console for the GUI to render.
 TaskHandle spawn(const char* argv0_path, const uint8_t* data, uint32_t size, const char* title);
+
+// spawn() variant with one extra argv entry: the windowed app starts
+// with argv[] = {argv0_path, arg1, NULL}. The GUI uses it to open a
+// dropped file in an app (drop a picture on the picview icon → the
+// viewer is launched with the file, exactly like the file manager's
+// execve path). arg1 is copied into the app's argv frame.
+TaskHandle spawn_argv(const char* argv0_path, const char* arg1, const uint8_t* data,
+                      uint32_t size, const char* title);
+
+// Handle of the currently executing windowed task, or NO_TASK when a
+// syscall runs from the console (non-windowed) track.
+int current_handle();
 
 // Tears down a task that is parked (blocked/waiting): frees its page
 // directory, root-image copy and slot. Must NOT be called for the task
@@ -128,8 +145,16 @@ void heartbeat_gfx_tasks();
 // stdin queue as a VNU mouse protocol message (MOUSE_MSG_LEN bytes).
 // All six bytes are enqueued atomically: if the queue doesn't have room
 // for the whole message, the event is silently dropped.
-// Button values: 1 = left press, 2 = left released.
+// Button values: 1 = left press, 2 = left released, 3 = Esc key,
+// 4 = drag cancelled (the click turned into a drag; no release follows).
 void feed_mouse(TaskHandle h, int button, int px, int py);
+
+// Delivers a drag-and-drop "you received this file" notification to a
+// task's stdin queue: ESC '[' 'D' <len_lo> <len_hi> <path...>, all
+// enqueued atomically (dropped when the queue can't fit it). `path` is
+// the full VFS path of the dropped item. The receiving app decides what
+// to do with it (picview loads the file; files refreshes its listing).
+void feed_drop(TaskHandle h, const char* path);
 
 // --- Gfx surface for fd 3 write/lseek (pixels → pixel buffer) ---
 // (operate on the currently executing task, see current_is_task())

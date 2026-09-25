@@ -279,7 +279,8 @@ void init()
     g_active_index = -1;
 }
 
-TaskHandle spawn(const char* argv0_path, const uint8_t* data, uint32_t size, const char* title)
+TaskHandle spawn_common(const char* argv0_path, const char* arg1, const uint8_t* data,
+                        uint32_t size, const char* title)
 {
     if (!data || size == 0 || !g_tasks)
         return NO_TASK;
@@ -332,7 +333,9 @@ TaskHandle spawn(const char* argv0_path, const uint8_t* data, uint32_t size, con
     t.child_running = false;
     t.brk = vnu::proc::BRK_MIN;
 
-    uint32_t user_esp = build_argv_frame_into(pgdir, STACK_TOP, 1, nullptr, argv0_path);
+    char* av[2] = {const_cast<char*>(argv0_path), const_cast<char*>(arg1)};
+    uint32_t user_esp = build_argv_frame_into(
+        pgdir, STACK_TOP, arg1 ? 2 : 1, arg1 ? av : nullptr, argv0_path);
     setup_switch_frame(pgdir, t);
 
     vnu_wintask_pending_entry = entry;
@@ -340,6 +343,22 @@ TaskHandle spawn(const char* argv0_path, const uint8_t* data, uint32_t size, con
 
     t.state = State::Runnable;
     return h;
+}
+
+TaskHandle spawn(const char* argv0_path, const uint8_t* data, uint32_t size, const char* title)
+{
+    return spawn_common(argv0_path, nullptr, data, size, title);
+}
+
+TaskHandle spawn_argv(const char* argv0_path, const char* arg1, const uint8_t* data,
+                      uint32_t size, const char* title)
+{
+    return spawn_common(argv0_path, arg1, data, size, title);
+}
+
+int current_handle()
+{
+    return g_active ? g_active_index : -1;
 }
 
 void close_task(TaskHandle h)
@@ -472,6 +491,30 @@ void feed_mouse(TaskHandle h, int button, int px, int py)
     push(static_cast<char>((px >> 8) & 0xFF));
     push(static_cast<char>(py & 0xFF));
     push(static_cast<char>((py >> 8) & 0xFF));
+}
+
+void feed_drop(TaskHandle h, const char* path)
+{
+    if (!is_running(h))
+        return;
+    int len = 0;
+    while (path && path[len] && len < 128)
+        ++len;
+    Console& c = g_tasks[h].con;
+    int free_space = (c.in_head + INPUT_QUEUE_CAP - c.in_tail - 1) % INPUT_QUEUE_CAP;
+    if (free_space < 5 + len)
+        return;
+    auto push = [&](char ch) {
+        c.input[c.in_tail] = ch;
+        c.in_tail = (c.in_tail + 1) % INPUT_QUEUE_CAP;
+    };
+    push(MOUSE_ESC);
+    push('[');
+    push('D');
+    push(static_cast<char>(len & 0xFF));        /* little-endian 16-bit */
+    push(static_cast<char>((len >> 8) & 0xFF));
+    for (int i = 0; i < len; ++i)
+        push(path[i]);
 }
 
 /* --- Gfx surface: fd 3 writes fill the pixel framebuffer --- */

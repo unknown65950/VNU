@@ -15,6 +15,7 @@
 #include <vlibc/vgfx.h>
 #include <vlibc/vgfx_font.h>
 #include <vlibc/unistd.h>
+#include <vlibc/sys/syscall.h>
 
 static unsigned char fb[VGFX_W * VGFX_H];
 
@@ -139,14 +140,28 @@ void vgfx_flush(void)
 
 /* --- Input: parse the ESC '[' 'M' btn xl xh yl yh stream on fd 0 --- */
 
+/* Drop payload space: the kernel reserves up to 128 path bytes; keep a
+ * little slack so a truncated path still NUL-terminates. */
+#define DROP_BUF 128
+static char drop_buf[DROP_BUF];
+
+/* dnd_declare(2): hand the GUI the draggable path of the pressed item. */
+int vnu_dnd_declare(const char* path)
+{
+    return (int)syscall(VNU_SYS_dnd_declare, (long)path);
+}
+
 int vgfx_poll(vgfx_event_t* ev)
 {
     enum { S_IDLE, S_ESC, S_BRACKET, S_M, S_BTN, S_XLO, S_XHI,
-           S_YLO } state = S_IDLE;
+           S_YLO, S_DLEN_LO, S_DLEN_HI, S_DROP } state = S_IDLE;
+    int drop_left = 0;
+    int drop_pos = 0;
     ev->type = VGFX_EV_NONE;
     ev->x = ev->y = 0;
     ev->button = 0;
     ev->key = 0;
+    ev->drop = 0;
 
     /* Because feed_mouse() enqueues all eight bytes of a message
      * atomically, a byte stream that starts "ESC [" always finishes. */
@@ -180,6 +195,8 @@ int vgfx_poll(vgfx_event_t* ev)
         case S_BRACKET:
             if (b == 'M')
                 state = S_M;
+            else if (b == 'D')
+                state = S_DLEN_LO; /* drop message: len_lo ... */
             else
                 state = S_IDLE; /* not our protocol; resync */
             break;
@@ -205,6 +222,8 @@ int vgfx_poll(vgfx_event_t* ev)
                 ev->type = VGFX_EV_PRESS;
             else if (ev->button == 2)
                 ev->type = VGFX_EV_RELEASE;
+            else if (ev->button == 4)
+                ev->type = VGFX_EV_DRAG_CANCEL;
             else {
                 /* Button 3: the GUI wraps a bare Esc keypress this way
                  * (a lone 0x1B byte would stall the parser). */
@@ -213,6 +232,28 @@ int vgfx_poll(vgfx_event_t* ev)
             }
             state = S_IDLE;
             return 1;
+        case S_DLEN_LO:
+            drop_left = (int)(unsigned char)b; /* length low byte */
+            state = S_DLEN_HI;
+            break;
+        case S_DLEN_HI:
+            drop_left |= (int)(unsigned char)b << 8; /* length high byte */
+            drop_pos = 0;
+            if (drop_left > DROP_BUF - 1)
+                drop_left = DROP_BUF - 1; /* truncate, keep NUL room */
+            state = (drop_left > 0) ? S_DROP : S_IDLE;
+            break;
+        case S_DROP:
+            drop_buf[drop_pos] = b;
+            ++drop_pos;
+            if (--drop_left == 0) {
+                drop_buf[drop_pos] = 0;
+                ev->type = VGFX_EV_DROP;
+                ev->drop = drop_buf;
+                state = S_IDLE;
+                return 1;
+            }
+            break;
         }
     }
 }

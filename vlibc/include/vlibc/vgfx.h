@@ -8,9 +8,14 @@
  *
  * Protocol (kernel → userspace, on fd 0):
  *   ESC '[' 'M' <button> <xl> <xh> <yl> <yh>
- *   <button>: 1 = left press, 2 = left released
+ *   <button>: 1 = left press, 2 = left released, 3 = Esc key,
+ *             4 = drag cancelled (the click turned into a drag and no
+ *                 release will ever come for it)
  *   <xl>/<xh>, <yl>/<yh>: little-endian 16-bit client-area pixel
  *   coordinates (0..479 / 0..339).
+ *   ESC '[' 'D' <len_lo> <len_hi> <path...> — drag-and-drop: the GUI
+ *   dropped the file at <path> (full VFS path, little-endian 16-bit
+ *   length) onto this window.
  *
  * Keyboard characters arrive as a single byte (no ESC prefix), except
  * Esc (0x1B) which is wrapped as button 3 so the parser never stalls
@@ -51,12 +56,15 @@
 #define VGFX_EV_KEY     1
 #define VGFX_EV_PRESS   2
 #define VGFX_EV_RELEASE 3
+#define VGFX_EV_DROP    4
+#define VGFX_EV_DRAG_CANCEL 5
 
 typedef struct {
     int type;     /* VGFX_EV_* */
     int x, y;    /* valid for PRESS / RELEASE */
-    int button;  /* always 1 (left) for now */
+    int button;  /* 1 = left press, 2 = release, 4 = drag cancelled */
     char key;    /* valid for KEY */
+    const char* drop; /* valid for DROP: full VFS path delivered onto us */
 } vgfx_event_t;
 
 #ifdef __cplusplus
@@ -88,6 +96,13 @@ void vgfx_flush(void);
  * loop on it.  Internally assembles the 6-byte mouse messages
  * incrementally so partial reads never produce garbage. */
 int  vgfx_poll(vgfx_event_t* ev);
+
+/* Announces to the GUI that the item under the current press is a
+ * draggable file at the given full VFS path. The window manager uses
+ * this to decide whether the press turns into a drag-and-drop (files.c
+ * calls it with the pressed entry on every PRESS over a file). Safe to
+ * call from any task; console tasks are a no-op. */
+int  vnu_dnd_declare(const char* path);
 
 #ifdef __cplusplus
 }

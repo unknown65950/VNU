@@ -712,6 +712,17 @@ KEYS\n\
              picture in picview (Esc hands the window back here)\n\
     Esc      close the window\n\
     Mouse: click to select, release on the same entry to open.\n\
+\n\
+    Drag-and-drop: press a file entry and drag the pointer away\n\
+    (the document cursor follows) and release to drop it:\n\
+\n\
+      on another gfx window      that window gets the file (picview\n\
+                                 opens it)\n\
+      on an app icon             that app opens the file\n\
+      on the bare desktop        the file moves to /root/desktop\n\
+      back onto the files window the drag is cancelled\n\
+\n\
+    Esc while dragging cancels it too.\n\
     A GUI app (see man calc for how GUI apps are launched).\n"
 
 #define PREFS_PAGE "NAME\n\
@@ -737,15 +748,17 @@ KEYS\n\
     picview - graphical image viewer\n\
 \n\
 SYNOPSIS\n\
-    picview [file]\n\
-\n\
-DESCRIPTION\n\
+picview [file]\n\
+ \n\
+ DESCRIPTION\n\
     A tiny image viewer for the VNU desktop. Without an argument it\n\
     walks the /pics directory; with a file argument (as the files\n\
     manager supplies when you open a .png/.jpg/.jpeg) it decodes and\n\
     shows just that file. Either way, BMP, PNG and JPEG are decoded\n\
     with the embedded px.h decoder and rendered, colour-quantised to\n\
     the 16 index Catppuccin palette, into the window's client area.\n\
+    A file dropped onto the window (drag it from the file manager)\n\
+    switches it to that file, like a file argument would.\n\
 \n\
 KEYS\n\
     [ ]   previous / next picture (gallery mode only)\n\

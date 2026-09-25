@@ -17,4 +17,11 @@ namespace vnu::gui {
 // Exit GUI). Safe to call repeatedly.
 void run();
 
+// Syscall-facing drag-and-drop hook: a gfx-windowed task announces the
+// VFS path of the item under the cursor for the press in flight, so the
+// GUI can treat that press as a drag candidate (files.c declares on
+// every press over a file). Called from the VNU_SYS_dnd_declare handler
+// while the windowed task is executing.
+void dnd_declare(const char* path);
+
 } // namespace vnu::gui

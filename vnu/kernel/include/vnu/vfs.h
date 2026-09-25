@@ -41,6 +41,7 @@ int mkdir(const char* path);
 int rmdir(const char* path);
 int unlink(const char* path);
 int remove(const char* path); /* file or empty dir */
+int move_file(const char* from, const char* to); /* file, copy+unlink across dirs */
 int read_path(const char* path, char* buf, uint32_t count);
 void list(char* buf, uint32_t count);
 int getdents(int fd, void* buf, uint32_t count);

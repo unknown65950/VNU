@@ -291,6 +291,20 @@ static void show(void)
     for (;;) {
         vgfx_event_t ev;
         vgfx_poll(&ev);
+        if (ev.type == VGFX_EV_DROP) {
+            /* A file was dropped onto us (drag from the file manager):
+             * show it and keep showing it until another drop or Esc. */
+            g_single = 1;
+            int i = 0;
+            while (ev.drop && ev.drop[i] && i < PATH_CAP - 1) {
+                g_single_path[i] = ev.drop[i];
+                ++i;
+            }
+            g_single_path[i] = 0;
+            g_n = 1;
+            refresh();
+            continue;
+        }
         if (ev.type != VGFX_EV_KEY)
             continue;
         int k = (int)(unsigned char)ev.key;

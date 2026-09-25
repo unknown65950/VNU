@@ -69,6 +69,7 @@ must never be renumbered.
 | 54 | audio_pending |
 | 55 | audio_pause |
 | 56 | audio_reset |
+| 57 | dnd_declare |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
@@ -194,9 +195,15 @@ with `-1` leaves a field unchanged; only root may chown.
 
 Not applicable — numbers are never reused; old gaps stay reserved.
 
-### Future (append-only, start at 57)
+### Future (append-only, start at 58)
 
 Unsupported calls return `-VNU_ENOSYS`.
+
+`dnd_declare(ebx=path)` (57) is called by a gfx-windowed app (the file
+manager) when the left button is pressed over one if its files: it hands
+the kernel the full VFS path of that item so the GUI can arm a drag. The
+kernel tracks the press only while the button is held and the item
+belongs to that press, so misshots never stick.
 
 ### Errors added with networking
 

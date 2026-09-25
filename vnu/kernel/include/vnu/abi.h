@@ -58,6 +58,7 @@
 #define VNU_SYS_audio_pending 54
 #define VNU_SYS_audio_pause   55
 #define VNU_SYS_audio_reset   56
+#define VNU_SYS_dnd_declare  57
 
 #define VNU_EPERM 1
 #define VNU_ENOENT 2

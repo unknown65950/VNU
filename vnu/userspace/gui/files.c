@@ -26,8 +26,11 @@
  *
  * Keys: j/k select (h/l too in icon view), Enter open, v toggle view,
  * Esc close. Mouse: click to select, release on the same entry to
- * open it. Opening a picture (png/jpg/jpeg) runs it in picview inside
- * this window; Esc returns to the manager.
+ * open it. Drag-and-drop: press a file and drag it away — onto another
+ * gfx window (picview opens it), onto an app icon (that app opens it)
+ * or onto the bare desktop (the file moves into /root/desktop). Opening
+ * a picture (png/jpg/jpeg) runs it in picview inside this window; Esc
+ * returns to the manager.
  */
 #include <vlibc/vgfx.h>
 #include <vlibc/dirent.h>
@@ -588,6 +591,13 @@ int main(void)
                 else
                     list_vis();
                 press_item = it;
+                /* Arm a drag for file entries: the GUI turns this press
+                 * into a drag-and-drop once the pointer wanders off. */
+                if (it > 0 && it <= list_n && !list[it - 1].is_dir) {
+                    char fp[PATH_LEN];
+                    pcat(fp, cwd, list[it - 1].name);
+                    vnu_dnd_declare(fp);
+                }
             }
             draw();
             vgfx_flush();
@@ -597,6 +607,17 @@ int main(void)
                     enter_sel();
                 press_item = -1;
             }
+            draw();
+            vgfx_flush();
+        } else if (ev.type == VGFX_EV_DRAG_CANCEL) {
+            /* The click became a drag; no release will follow, so a
+             * stale press_item must not be re-read as a click-open. */
+            press_item = -1;
+        } else if (ev.type == VGFX_EV_DROP) {
+            /* The window manager dropped a file we dragged onto the
+             * desktop (or otherwise consumed it): refresh so the entry
+             * disappears along with the moved file. */
+            load_dir(cwd);
             draw();
             vgfx_flush();
         }

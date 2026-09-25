@@ -612,6 +612,24 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
          * later write starts fresh. 0 or -errno. */
         return static_cast<std::uint32_t>(vnu::audio::reset_device());
 
+    case VNU_SYS_dnd_declare:
+        /* dnd_declare(ebx=path). A gfx-windowed task announces the VFS
+         * path of the item under the cursor for the press in flight, so
+         * the GUI can turn that press into a drag-and-drop. No-op for
+         * console tasks. Copies the caller's buffer; returns 0. */
+        {
+            char path[96];
+            int i = 0;
+            const char* p = reinterpret_cast<const char*>(tf->ebx);
+            while (p && p[i] && i < static_cast<int>(sizeof(path)) - 1) {
+                path[i] = p[i];
+                ++i;
+            }
+            path[i] = 0;
+            vnu::gui::dnd_declare(path);
+        }
+        return 0;
+
     default:
         return static_cast<std::uint32_t>(-VNU_ENOSYS);
     }

@@ -732,6 +732,25 @@ void reboot_now()
 
 namespace vnu::gui {
 
+/* Drag-and-drop state, written by the dnd_declare syscall (a windowed
+ * task announces the file under the cursor for the press in flight) and
+ * consumed by run()'s mouse handling below. The path stays valid only
+ * while the declaring press is held; a fresh press, Esc or a release
+ * disarms it. */
+static char drag_path[96];
+static vnu::wintask::TaskHandle drag_src = vnu::wintask::NO_TASK;
+
+void dnd_declare(const char* path)
+{
+    drag_src = vnu::wintask::current_handle();
+    int i = 0;
+    while (path && path[i] && i < static_cast<int>(sizeof(drag_path)) - 1) {
+        drag_path[i] = path[i];
+        ++i;
+    }
+    drag_path[i] = 0;
+}
+
 void run()
 {
     vnu::vgfx::enter_gfx_mode();
@@ -851,6 +870,68 @@ void run()
         raise_window(h);
     };
 
+    /* Drop targets for an in-flight drag-and-drop, hit in order: the
+     * window under the pointer (deliver a DROP message / no-op for the
+     * source window), an app icon (launch that app with the file), or
+     * the bare desktop (move the file into /root/desktop). */
+    auto resolve_drop = [&](int x, int y) {
+        if (!drag_path[0])
+            return;
+        for (int i = order_len - 1; i >= 0; --i) {
+            TaskHandle h = order[i];
+            if (!window_exists(h) || minimized[h])
+                continue;
+            const Window& win = geom[h];
+            if (!win.w || !win.h)
+                continue;
+            if (x < win.x || x >= win.x + win.w || y < win.y || y >= win.y + win.h)
+                continue;
+            if (h == drag_src)
+                return; /* dropped back where it came from: no-op */
+            vnu::wintask::Console* con = vnu::wintask::console(h);
+            if (con && con->gfx)
+                vnu::wintask::feed_drop(h, drag_path);
+            return;
+        }
+        int hit = hit_test_icon(apps, app_count, x, y);
+        if (hit >= 0) {
+            uint32_t n = vnu::apps::read_bin(apps[hit].name, load_buf, sizeof(load_buf));
+            if (n != 0) {
+                TaskHandle h = vnu::wintask::spawn_argv(apps[hit].name, drag_path,
+                                                        load_buf, n, apps[hit].name);
+                if (h != NO_TASK) {
+                    int cx = 36 + (cascade % 6) * 26;
+                    int cy = PANEL_H + 8 + (cascade % 6) * 22;
+                    ++cascade;
+                    geom[h] = size_app_window(cx, cy, vnu::wintask::console(h));
+                    clamp_to_desktop(geom[h]);
+                    minimized[h] = false;
+                    raise_window(h);
+                }
+            }
+            return;
+        }
+        if (y >= PANEL_H) {
+            /* The bare desktop: move the file there. /root/desktop is
+             * created on demand; a name clash or the rare I/O error is
+             * silently a no-op. */
+            vnu::vfs::mkdir("/root/desktop");
+            const char* base = drag_path;
+            for (const char* p = drag_path; *p; ++p)
+                if (*p == '/')
+                    base = p + 1;
+            char dst[128];
+            int di = 0;
+            for (const char* d = "/root/desktop/"; *d && di < 127; ++d)
+                dst[di++] = *d;
+            for (const char* s = base; *s && di < 127; ++s)
+                dst[di++] = *s;
+            dst[di] = 0;
+            if (vnu::vfs::move_file(drag_path, dst) == 0)
+                vnu::wintask::feed_drop(drag_src, drag_path); /* source refreshes */
+        }
+    };
+
     int mx = vnu::vgfx::WIDTH / 2;
     int my = vnu::vgfx::HEIGHT / 2;
     DragOp drag_op = DragOp::None;
@@ -861,6 +942,8 @@ void run()
     TaskHandle gfx_press_h = NO_TASK;
     int gfx_press_px = 0, gfx_press_py = 0;
     bool have_gfx_press = false;
+    bool dnd_active = false;
+    int press_gx = 0, press_gy = 0;
 
     PBtn panel_btns[24];
     int panel_n = 0;
@@ -883,11 +966,15 @@ void run()
 
         int key = vnu::kbd::poll_char();
         if (key >= 0) {
-            if (key == 27 && focused == NO_TASK) {
+            if (dnd_active && key == 27) {
+                /* Esc cancels an in-flight drag-and-drop. */
+                dnd_active = false;
+                drag_path[0] = 0;
+                drag_src = NO_TASK;
+            } else if (key == 27 && focused == NO_TASK) {
                 /* Esc with no windows open leaves the desktop. */
                 break;
-            }
-            if (focused != NO_TASK && vnu::wintask::is_running(focused)) {
+            } else if (focused != NO_TASK && vnu::wintask::is_running(focused)) {
                 vnu::wintask::Console* con = vnu::wintask::console(focused);
                 if (con) {
                     con->scroll_off = 0;
@@ -916,6 +1003,11 @@ void run()
             left_was_down = left_down;
 
             if (just_pressed) {
+                /* A fresh click disarms whatever the previous press
+                 * declared as draggable. */
+                drag_path[0] = 0;
+                drag_src = NO_TASK;
+                dnd_active = false;
                 panel_n = layout_panel(panel_btns, focused, apps, app_count);
                 int pb = hit_panel(panel_btns, panel_n, mx, my);
                 if (pb >= 0) {
@@ -947,7 +1039,6 @@ void run()
                     int hit = hit_test_icon(apps, app_count, mx, my);
                     if (hit >= 0) {
                         spawn_from_icon(hit);
-                    } else {
                         /* Click in a window: topmost first. */
                         for (int i = order_len - 1; i >= 0; --i) {
                             TaskHandle h = order[i];
@@ -988,6 +1079,8 @@ void run()
                                 gfx_press_px = px;
                                 gfx_press_py = py;
                                 have_gfx_press = true;
+                                press_gx = mx;
+                                press_gy = my;
                             } else if (hit_test_scrollbar(win, mx, my)) {
                                 if (con && !con->gfx && con->hist_n > 0) {
                                     int top = win.y + TITLE_H + 2;
@@ -1010,7 +1103,29 @@ void run()
                 }
             }
 
+            /* A press armed a draggable item and the pointer wanders
+             * at least ~8px with the button held: that press is now a
+             * drag of drag_path. Tell the source app immediately
+             * (mouse button 4 = "your click became a drag", no
+             * release follows) so it doesn't read the release as a
+             * click. */
+            if (left_down && !dnd_active && drag_path[0] &&
+                gfx_press_h == drag_src &&
+                vnu::wintask::is_running(gfx_press_h) &&
+                (mx - press_gx) * (mx - press_gx) +
+                        (my - press_gy) * (my - press_gy) >= 64) {
+                dnd_active = true;
+                vnu::wintask::feed_mouse(gfx_press_h, 4, gfx_press_px, gfx_press_py);
+                have_gfx_press = false;
+            }
+
             if (!left_down) {
+                if (dnd_active) {
+                    resolve_drop(mx, my);
+                }
+                dnd_active = false;
+                drag_path[0] = 0;
+                drag_src = NO_TASK;
                 drag_op = DragOp::None;
                 drag_h = NO_TASK;
                 if (have_gfx_press && gfx_press_h != NO_TASK &&
@@ -1139,6 +1254,23 @@ void run()
 
         panel_n = layout_panel(panel_btns, focused, apps, app_count);
         draw_panel(panel_btns, panel_n, apps, app_count);
+
+        if (dnd_active && drag_path[0]) {
+            /* Drag ghost: a little document page riding the cursor, with
+             * the dragged file's bare name beside it. */
+            int gx = mx - 10, gy = my - 4;
+            vnu::vgfx::fill_rect(gx, gy, 13, 16, vnu::vgfx::COLOR_WHITE);
+            vnu::vgfx::rect(gx, gy, 13, 16, vnu::vgfx::COLOR_BLACK);
+            vnu::vgfx::hline(gx + 2, gy + 5, 9, vnu::vgfx::COLOR_DGRAY);
+            vnu::vgfx::hline(gx + 2, gy + 10, 9, vnu::vgfx::COLOR_DGRAY);
+            const char* base = drag_path;
+            for (const char* p = drag_path; *p; ++p)
+                if (*p == '/')
+                    base = p + 1;
+            int lx = gx + 17, ly = gy + 3;
+            vnu::vgfx::draw_string8(lx + 1, ly + 1, base, vnu::vgfx::COLOR_BLACK);
+            vnu::vgfx::draw_string8(lx, ly, base, vnu::vgfx::COLOR_WHITE);
+        }
 
         vnu::vgfx::CursorShape cursor = vnu::vgfx::CursorShape::Arrow;
         if (drag_op != DragOp::None && drag_h != NO_TASK) {

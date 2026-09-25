@@ -1040,6 +1040,33 @@ int remove(const char* path)
     return unlink(abs);
 }
 
+int move_file(const char* from, const char* to)
+{
+    char af[PATH_CAP], at[PATH_CAP];
+    normalize(from, af, PATH_CAP);
+    normalize(to, at, PATH_CAP);
+    Node* n = find(af);
+    if (!n)
+        return -VNU_ENOENT;
+    if (n->dir)
+        return -VNU_EISDIR;
+    if (find(at))
+        return -VNU_EEXIST;
+    if (!parent_dir(at))
+        return -VNU_ENOENT;
+    Node* dst = add(at, false);
+    if (!dst)
+        return -VNU_ENOSPC;
+    dst->size = n->size;
+    dst->perm = n->perm;
+    dst->uid = n->uid;
+    dst->gid = n->gid;
+    for (uint32_t i = 0; i < n->size; ++i)
+        dst->data[i] = n->data[i];
+    n->used = false;
+    return 0;
+}
+
 int read_path(const char* path, char* buf, uint32_t count)
 {
     char abs[PATH_CAP];
