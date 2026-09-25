@@ -71,7 +71,7 @@ int main(int argc, char** argv)
     }
     if (parse_ip(argv[1], &ip) != 0) {
         /* Not a dotted quad: resolve the name (hosts, then DNS). */
-        unsigned long resolved = 0;
+        uint32_t resolved = 0;
         if (gethostbyname(argv[1], &resolved) != 0) {
             we("ping: unknown host\n");
             return 2;
