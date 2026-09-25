@@ -58,10 +58,10 @@ void line(int x0, int y0, int x1, int y1, uint8_t color);
 void circle(int cx, int cy, int r, uint8_t color);        // outline only
 void fill_circle(int cx, int cy, int r, uint8_t color);
 
-// Nearest-neighbour upscale of an 8-bpp surface into the backbuffer
-// (gfx apps draw a native 480x340 canvas shown 1:1; scale > 1 only for
-// large-display resizing).
-void blit_scaled(const uint8_t* src, int sw, int sh, int dx, int dy, int scale);
+// Nearest-neighbour stretch of an 8-bpp source into a destination
+// rectangle of any size (the fixed gfx canvas resized to the window's
+// current client area, so windows resize freely like native ones).
+void blit_scale(const uint8_t* src, int sw, int sh, int dx, int dy, int dw, int dh);
 
 // Procedural desktop wallpaper (sky + sun + clouds + hills), drawn each
 // frame in place of the plain gradient.
@@ -75,6 +75,16 @@ int text_width(const char* s);  // in pixels (8 per glyph)
 void draw_char8(int x, int y, char c, uint8_t fg);
 void draw_string8(int x, int y, const char* s, uint8_t fg);
 int text_width8(const char* s);  // in pixels (8 per glyph, 8-row height)
+
+// Pickable mouse pointer shapes for the window manager: the classic
+// arrow, the four-way move cursor and the resize double-arrows. The
+// non-arrow shapes render as a white glyph with a black outline so they
+// read on any background.
+enum class CursorShape { Arrow, Move, SizeH, SizeV, SizeDiagL, SizeDiagR };
+
+// Draw a non-arrow cursor shape with its hotspot centred at (x, y)
+// (the icon is 16x16, the arrow stays a legacy single-colour pointer).
+void draw_cursor_at(int x, int y, CursorShape shape);
 
 // Simple filled arrow mouse cursor.
 void draw_cursor(int x, int y, uint8_t color = COLOR_BLACK);

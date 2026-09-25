@@ -30,31 +30,36 @@ constexpr int ICON_ORIGIN_X = 8;
 /* Icons live below the taskbar now. */
 constexpr int ICON_ORIGIN_Y = PANEL_H + 8;
 
-constexpr int GFX_MIN_SCALE = 1;
-constexpr int GFX_MAX_SCALE = 4;
-/* Native 1:1: the 480x340 canvas is the same physical size as an 8x16
- * text grid, so gfx text matches the console windows exactly. Resize
- * upward for large displays. */
-constexpr int GFX_DEFAULT_SCALE = 1;
+/* Gfx windows stretch their fixed 480x340 canvas to whatever client
+ * area the window ends up with, so resizing is free-form just like the
+ * text windows. These lower bounds keep a window far enough above a
+ * meaningless sliver (~a third of native was about the point where the
+ * app chrome stops being usable). */
+constexpr int GFX_MIN_CLIENT_W = 160;
+constexpr int GFX_MIN_CLIENT_H = 112;
 
-/* Resize grip band width, in pixels, along the window's right/bottom. */
+/* Resize grip band width, in pixels, along the window's right/bottom
+ * and along the left edge. The top band is thinner so the title bar
+ * keeps most of its drag-to-move area. */
 constexpr int RESIZE_W = 12;
+constexpr int RESIZE_TOP = 6;
 
 struct Window {
     int x, y, w, h;
 };
 
-enum class DragOp { None, Move, ResizeCorner, ResizeRight, ResizeBottom };
-
-int gfx_scale_for(int w)
-{
-    int s = (w - 8) / vnu::wintask::GFX_W;
-    if (s < GFX_MIN_SCALE)
-        s = GFX_MIN_SCALE;
-    if (s > GFX_MAX_SCALE)
-        s = GFX_MAX_SCALE;
-    return s;
-}
+enum class DragOp {
+    None,
+    Move,
+    ResizeCorner, /* bottom-right: resizes both axes */
+    ResizeTop,
+    ResizeLeft,
+    ResizeRight,
+    ResizeBottom,
+    ResizeTopLeft,
+    ResizeTopRight,
+    ResizeBottomLeft,
+};
 
 void icon_rect(int index, int& x, int& y)
 {
@@ -361,30 +366,36 @@ void draw_console_window(const Window& win, const vnu::wintask::Console& con, bo
     }
 }
 
-void draw_gfx_window(const Window& win, const vnu::wintask::Console& con, bool active, int scale)
+void draw_gfx_window(const Window& win, const vnu::wintask::Console& con, bool active)
 {
     draw_chrome(win, active);
     using namespace vnu::vgfx;
     draw_string(win.x + 4, win.y + 2, con.title, active ? COLOR_BLACK : COLOR_WHITE);
+    int cw = win.w - 8;
+    int ch = win.h - (TITLE_H + 12);
+    if (cw < 1)
+        cw = 1;
+    if (ch < 1)
+        ch = 1;
     int origin_x = win.x + 2;
     int origin_y = win.y + TITLE_H + 2;
-    blit_scaled(con.pixel, vnu::wintask::GFX_W, vnu::wintask::GFX_H,
-                origin_x, origin_y, scale);
-    rect(origin_x - 1, origin_y - 1, vnu::wintask::GFX_W * scale + 2,
-         vnu::wintask::GFX_H * scale + 2, COLOR_BLACK);
+    blit_scale(con.pixel, vnu::wintask::GFX_W, vnu::wintask::GFX_H,
+               origin_x, origin_y, cw, ch);
+    rect(origin_x - 1, origin_y - 1, cw + 2, ch + 2, COLOR_BLACK);
 }
 
 /* Client-area size for a task's window: adapts to the console's mode
- * (text grid vs gfx framebuffer at `scale`). */
-Window size_app_window(int x, int y, const vnu::wintask::Console* con, int gfx_scale)
+ * (text grid vs gfx framebuffer). Gfx windows start at the native 1:1
+ * canvas size; text windows at the full 80x24 grid. */
+Window size_app_window(int x, int y, const vnu::wintask::Console* con)
 {
     Window w;
     w.x = x;
     w.y = y;
     bool gfx = con && con->gfx;
     if (gfx) {
-        w.w = vnu::wintask::GFX_W * gfx_scale + 8;
-        w.h = TITLE_H + vnu::wintask::GFX_H * gfx_scale + 12;
+        w.w = vnu::wintask::GFX_W + 8;
+        w.h = TITLE_H + vnu::wintask::GFX_H + 12;
     } else {
         w.w = CON_COLS * CELL_W + 8;
         w.h = TITLE_H + CON_ROWS * CELL_H + 12;
@@ -399,13 +410,47 @@ bool hit_test_titlebar(const Window& win, int mx, int my)
 
 DragOp hit_test_resize(const Window& win, int mx, int my)
 {
-    if (mx >= win.x + win.w - RESIZE_W && my >= win.y + win.h - RESIZE_W)
-        return DragOp::ResizeCorner;
-    if (mx >= win.x + win.w - RESIZE_W && my >= win.y + TITLE_H)
-        return DragOp::ResizeRight;
-    if (my >= win.y + win.h - RESIZE_W && mx >= win.x)
-        return DragOp::ResizeBottom;
+    if (mx < win.x || mx >= win.x + win.w || my < win.y || my >= win.y + win.h)
+        return DragOp::None;
+    const int R = RESIZE_W;
+    const int TR = RESIZE_TOP;
+    bool onL = mx - win.x < R;
+    bool onR = win.x + win.w - mx <= R;
+    bool onT = my - win.y < TR;
+    bool onB = win.y + win.h - my <= R;
+    if (onL && onT) return DragOp::ResizeTopLeft;
+    if (onR && onT) return DragOp::ResizeTopRight;
+    if (onL && onB) return DragOp::ResizeBottomLeft;
+    if (onR && onB) return DragOp::ResizeCorner;
+    if (onL && my >= win.y + TITLE_H) return DragOp::ResizeLeft;
+    if (onR && my >= win.y + TITLE_H) return DragOp::ResizeRight;
+    if (onB) return DragOp::ResizeBottom;
+    if (onT) return DragOp::ResizeTop;
     return DragOp::None;
+}
+
+/* Which mouse pointer the window manager should show for a drag/hover
+ * drawn from the hit-test result. */
+vnu::vgfx::CursorShape mouse_shape_for(DragOp op)
+{
+    switch (op) {
+    case DragOp::Move:
+        return vnu::vgfx::CursorShape::Move;
+    case DragOp::ResizeLeft:
+    case DragOp::ResizeRight:
+        return vnu::vgfx::CursorShape::SizeH;
+    case DragOp::ResizeTop:
+    case DragOp::ResizeBottom:
+        return vnu::vgfx::CursorShape::SizeV;
+    case DragOp::ResizeTopLeft:
+    case DragOp::ResizeCorner:
+        return vnu::vgfx::CursorShape::SizeDiagL;
+    case DragOp::ResizeTopRight:
+    case DragOp::ResizeBottomLeft:
+        return vnu::vgfx::CursorShape::SizeDiagR;
+    default:
+        return vnu::vgfx::CursorShape::Arrow;
+    }
 }
 
 bool hit_test_scrollbar(const Window& win, int mx, int my)
@@ -705,10 +750,7 @@ void run()
     int order_len = 0;
     TaskHandle focused = NO_TASK;
     int cascade = 0;
-    int gfx_scale[MAX_TASKS] = {};
     bool was_gfx[MAX_TASKS] = {};
-    for (int i = 0; i < MAX_TASKS; ++i)
-        gfx_scale[i] = GFX_DEFAULT_SCALE;
 
     static uint8_t load_buf[65536];
 
@@ -803,8 +845,7 @@ void run()
         int cx = 36 + (cascade % 6) * 26;
         int cy = PANEL_H + 8 + (cascade % 6) * 22;
         ++cascade;
-        gfx_scale[h] = GFX_DEFAULT_SCALE;
-        geom[h] = size_app_window(cx, cy, vnu::wintask::console(h), gfx_scale[h]);
+        geom[h] = size_app_window(cx, cy, vnu::wintask::console(h));
         clamp_to_desktop(geom[h]);
         minimized[h] = false;
         raise_window(h);
@@ -815,7 +856,7 @@ void run()
     DragOp drag_op = DragOp::None;
     TaskHandle drag_h = NO_TASK;
     int drag_off_x = 0, drag_off_y = 0;
-    int rs_orig_w = 0, rs_orig_h = 0, rs_mx = 0, rs_my = 0;
+    int rs_orig_x = 0, rs_orig_y = 0, rs_orig_w = 0, rs_orig_h = 0, rs_mx = 0, rs_my = 0;
     bool left_was_down = false;
     TaskHandle gfx_press_h = NO_TASK;
     int gfx_press_px = 0, gfx_press_py = 0;
@@ -924,16 +965,24 @@ void run()
                             if (op != DragOp::None) {
                                 drag_op = op;
                                 drag_h = h;
+                                rs_orig_x = win.x;
+                                rs_orig_y = win.y;
                                 rs_orig_w = win.w;
                                 rs_orig_h = win.h;
                                 rs_mx = mx;
                                 rs_my = my;
                             } else if (con && con->gfx && mx >= win.x + 2 &&
-                                       mx < win.x + 2 + vnu::wintask::GFX_W * gfx_scale[h] &&
+                                       mx < win.x + 2 + (win.w - 8) &&
                                        my >= win.y + TITLE_H + 2 &&
-                                       my < win.y + TITLE_H + 2 + vnu::wintask::GFX_H * gfx_scale[h]) {
-                                int px = (mx - (win.x + 2)) / gfx_scale[h];
-                                int py = (my - (win.y + TITLE_H + 2)) / gfx_scale[h];
+                                       my < win.y + TITLE_H + 2 + (win.h - TITLE_H - 12)) {
+                                int cw = win.w - 8;
+                                int ch = win.h - TITLE_H - 12;
+                                if (cw < 1)
+                                    cw = 1;
+                                if (ch < 1)
+                                    ch = 1;
+                                int px = (mx - (win.x + 2)) * vnu::wintask::GFX_W / cw;
+                                int py = (my - (win.y + TITLE_H + 2)) * vnu::wintask::GFX_H / ch;
                                 vnu::wintask::feed_mouse(h, 1, px, py);
                                 gfx_press_h = h;
                                 gfx_press_px = px;
@@ -976,54 +1025,65 @@ void run()
             if (drag_op != DragOp::None && drag_h != NO_TASK) {
                 Window& win = geom[drag_h];
                 vnu::wintask::Console* con = vnu::wintask::console(drag_h);
+                bool g = con && con->gfx;
+                int minw = g ? GFX_MIN_CLIENT_W + 8 : 20 * CELL_W + 8;
+                int maxw = g ? vnu::vgfx::WIDTH - 8 : CON_COLS * CELL_W + 8;
+                int minh = g ? TITLE_H + GFX_MIN_CLIENT_H + 12
+                             : TITLE_H + 3 * CELL_H + 12;
+                int maxh = g ? vnu::vgfx::HEIGHT - (PANEL_H + 8)
+                             : TITLE_H + CON_ROWS * CELL_H + 12;
+                auto cw = [&](int v) -> int { return v < minw ? minw : (v > maxw ? maxw : v); };
+                auto ch = [&](int v) -> int { return v < minh ? minh : (v > maxh ? maxh : v); };
                 switch (drag_op) {
                 case DragOp::Move:
                     win.x = mx - drag_off_x;
                     win.y = my - drag_off_y;
                     break;
-                case DragOp::ResizeCorner:
                 case DragOp::ResizeRight:
-                    if (con && con->gfx) {
-                        int w = win.w + (mx - rs_mx);
-                        if (w < vnu::wintask::GFX_W * GFX_MIN_SCALE + 8)
-                            w = vnu::wintask::GFX_W * GFX_MIN_SCALE + 8;
-                        if (w > vnu::wintask::GFX_W * GFX_MAX_SCALE + 8)
-                            w = vnu::wintask::GFX_W * GFX_MAX_SCALE + 8;
-                        gfx_scale[drag_h] = gfx_scale_for(w);
-                        win.w = vnu::wintask::GFX_W * gfx_scale[drag_h] + 8;
-                    } else {
-                        int w = rs_orig_w + (mx - rs_mx);
-                        if (w < 20 * CELL_W + 8)
-                            w = 20 * CELL_W + 8;
-                        if (w > CON_COLS * CELL_W + 8)
-                            w = CON_COLS * CELL_W + 8;
-                        win.w = w;
-                    }
-                    if (drag_op == DragOp::ResizeCorner) {
-                        if (con && con->gfx) {
-                            win.h = vnu::wintask::GFX_H * gfx_scale[drag_h] + 12;
-                        } else {
-                            int hh = rs_orig_h + (my - rs_my);
-                            if (hh < TITLE_H + 3 * CELL_H + 12)
-                                hh = TITLE_H + 3 * CELL_H + 12;
-                            if (hh > TITLE_H + CON_ROWS * CELL_H + 12)
-                                hh = TITLE_H + CON_ROWS * CELL_H + 12;
-                            win.h = hh;
-                        }
-                    }
+                    win.w = cw(rs_orig_w + (mx - rs_mx));
                     break;
                 case DragOp::ResizeBottom:
-                    if (con && con->gfx) {
-                        win.h = vnu::wintask::GFX_H * gfx_scale[drag_h] + 12;
-                    } else {
-                        int hh = rs_orig_h + (my - rs_my);
-                        if (hh < TITLE_H + 3 * CELL_H + 12)
-                            hh = TITLE_H + 3 * CELL_H + 12;
-                        if (hh > TITLE_H + CON_ROWS * CELL_H + 12)
-                            hh = TITLE_H + CON_ROWS * CELL_H + 12;
-                        win.h = hh;
-                    }
+                    win.h = ch(rs_orig_h + (my - rs_my));
                     break;
+                case DragOp::ResizeCorner:
+                    win.w = cw(rs_orig_w + (mx - rs_mx));
+                    win.h = ch(rs_orig_h + (my - rs_my));
+                    break;
+                case DragOp::ResizeLeft: {
+                    int right = rs_orig_x + rs_orig_w;
+                    win.w = cw(rs_orig_w - (mx - rs_mx));
+                    win.x = right - win.w;
+                    break;
+                }
+                case DragOp::ResizeTop: {
+                    int bottom = rs_orig_y + rs_orig_h;
+                    win.h = ch(rs_orig_h - (my - rs_my));
+                    win.y = bottom - win.h;
+                    break;
+                }
+                case DragOp::ResizeTopLeft: {
+                    int right = rs_orig_x + rs_orig_w;
+                    int bottom = rs_orig_y + rs_orig_h;
+                    win.w = cw(rs_orig_w - (mx - rs_mx));
+                    win.x = right - win.w;
+                    win.h = ch(rs_orig_h - (my - rs_my));
+                    win.y = bottom - win.h;
+                    break;
+                }
+                case DragOp::ResizeTopRight: {
+                    int bottom = rs_orig_y + rs_orig_h;
+                    win.w = cw(rs_orig_w + (mx - rs_mx));
+                    win.h = ch(rs_orig_h - (my - rs_my));
+                    win.y = bottom - win.h;
+                    break;
+                }
+                case DragOp::ResizeBottomLeft: {
+                    int right = rs_orig_x + rs_orig_w;
+                    win.w = cw(rs_orig_w - (mx - rs_mx));
+                    win.x = right - win.w;
+                    win.h = ch(rs_orig_h + (my - rs_my));
+                    break;
+                }
                 default:
                     break;
                 }
@@ -1065,14 +1125,14 @@ void run()
             bool g = con->gfx;
             if (g != was_gfx[h]) {
                 was_gfx[h] = g;
-                Window sized = size_app_window(geom[h].x, geom[h].y, con, gfx_scale[h]);
+                Window sized = size_app_window(geom[h].x, geom[h].y, con);
                 geom[h].w = sized.w;
                 geom[h].h = sized.h;
                 clamp_to_desktop(geom[h]);
             }
             const Window& win = geom[h];
             if (con->gfx)
-                draw_gfx_window(win, *con, h == focused, gfx_scale[h]);
+                draw_gfx_window(win, *con, h == focused);
             else
                 draw_console_window(win, *con, h == focused);
         }
@@ -1080,7 +1140,30 @@ void run()
         panel_n = layout_panel(panel_btns, focused, apps, app_count);
         draw_panel(panel_btns, panel_n, apps, app_count);
 
-        vnu::vgfx::draw_cursor(mx, my, vnu::vgfx::COLOR_BLACK);
+        vnu::vgfx::CursorShape cursor = vnu::vgfx::CursorShape::Arrow;
+        if (drag_op != DragOp::None && drag_h != NO_TASK) {
+            cursor = mouse_shape_for(drag_op);
+        } else if (!left_was_down) {
+            /* Hover: point at the topmost window under the pointer and
+             * show the resize arrows while it is on a resizable edge. */
+            for (int i = order_len - 1; i >= 0; --i) {
+                TaskHandle h = order[i];
+                if (!window_exists(h) || minimized[h])
+                    continue;
+                const Window& win = geom[h];
+                if (mx >= win.x && mx < win.x + win.w &&
+                    my >= win.y && my < win.y + win.h) {
+                    DragOp op = hit_test_resize(win, mx, my);
+                    if (op != DragOp::None)
+                        cursor = mouse_shape_for(op);
+                    break;
+                }
+            }
+        }
+        if (cursor == vnu::vgfx::CursorShape::Arrow)
+            vnu::vgfx::draw_cursor(mx, my, vnu::vgfx::COLOR_BLACK);
+        else
+            vnu::vgfx::draw_cursor_at(mx - 8, my - 8, cursor);
         vnu::vgfx::present();
     }
 

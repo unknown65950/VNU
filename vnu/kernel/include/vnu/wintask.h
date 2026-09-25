@@ -39,8 +39,8 @@ constexpr TaskHandle NO_TASK = -1;
  *
  * The canvas is a native 8x16 two-column pitch: 480x340 = 60 cols x 21
  * rows of the VGA text face, so a gfx app's text renders at the same
- * physical size as every console window. The GUI displays it 1:1
- * (gfx_scale 1); higher scales exist only for large screens. */
+ * physical size as every console window. The GUI stretches it to the
+ * window's client area, so a gfx window behaves like any other one. */
 constexpr int GFX_W = 480;
 constexpr int GFX_H = 340;
 

@@ -515,33 +515,30 @@ void fill_circle(int cx, int cy, int r, uint8_t color)
     }
 }
 
-void blit_scaled(const uint8_t* src, int sw, int sh, int dx, int dy, int scale)
+void blit_scale(const uint8_t* src, int sw, int sh, int dx, int dy, int dw, int dh)
 {
-    if (!src || scale < 1) {
-        if (src)
-            scale = 1;
-        else
-            return;
-    }
-    for (int j = 0; j < sh; ++j) {
-        const uint8_t* row = src + j * sw;
-        for (int i = 0; i < sw; ++i) {
-            int x0 = dx + i * scale;
-            int y0 = dy + j * scale;
-            int x1 = x0 + scale;
-            int y1 = y0 + scale;
-            if (x0 < 0 || y0 < 0 || x0 >= WIDTH || y0 >= HEIGHT)
+    if (!src || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0)
+        return;
+    for (int j = 0; j < dh; ++j) {
+        int y = dy + j;
+        if (y < 0 || y >= HEIGHT)
+            continue;
+        int sy = (j * sh) / dh;
+        if (sy < 0)
+            sy = 0;
+        if (sy >= sh)
+            sy = sh - 1;
+        const uint8_t* row = src + sy * sw;
+        for (int i = 0; i < dw; ++i) {
+            int x = dx + i;
+            if (x < 0 || x >= WIDTH)
                 continue;
-            if (x1 > WIDTH)
-                x1 = WIDTH;
-            if (y1 > HEIGHT)
-                y1 = HEIGHT;
-            uint8_t c = row[i];
-            for (int yy = y0; yy < y1; ++yy) {
-                uint8_t* dst = g_backbuf + yy * WIDTH;
-                for (int xx = x0; xx < x1; ++xx)
-                    dst[xx] = c;
-            }
+            int sx = (i * sw) / dw;
+            if (sx < 0)
+                sx = 0;
+            if (sx >= sw)
+                sx = sw - 1;
+            put_pixel(x, y, row[sx]);
         }
     }
 }
@@ -628,6 +625,104 @@ void draw_cursor(int x, int y, uint8_t color)
                 put_pixel(x + col, y + r, color);
         }
     }
+}
+
+namespace {
+
+/* Rasterisers for the move/resize cursors. Each cursor is a 16x16 icon
+ * with its two centre rows/columns (7 and 8) as the axis of symmetry,
+ * so the hotspots sit in the middle of the glyph. */
+
+/* Filled arrowhead pointing along a horizontal axis. `tip` is the col
+ * where the point sits, `dir` (+1 / -1) which way the head opens,
+ * `len` its length in columns and `w` its max half-height. */
+void cone_h(int x, int y, int tip, int dir, int len, int w, uint8_t c)
+{
+    for (int d = 0; d <= len; ++d) {
+        int px = tip + dir * d;
+        int hh = d < w ? d : w;
+        for (int r = 7 - hh; r <= 8 + hh; ++r)
+            put_pixel(x + px, y + r, c);
+    }
+}
+
+/* Same, pointing along a vertical axis (row `tip`, centre columns 7-8). */
+void cone_v(int x, int y, int tip, int dir, int len, int w, uint8_t c)
+{
+    for (int d = 0; d <= len; ++d) {
+        int py = tip + dir * d;
+        int hh = d < w ? d : w;
+        for (int cc = 7 - hh; cc <= 8 + hh; ++cc)
+            put_pixel(x + cc, y + py, c);
+    }
+}
+
+void blit_cursor_shape(int x, int y, CursorShape shape, uint8_t c)
+{
+    switch (shape) {
+    case CursorShape::SizeH:
+        cone_h(x, y, 0, 1, 4, 3, c);
+        cone_h(x, y, 15, -1, 4, 3, c);
+        fill_rect(x + 5, y + 7, 6, 2, c);
+        break;
+    case CursorShape::SizeV:
+        cone_v(x, y, 0, 1, 4, 3, c);
+        cone_v(x, y, 15, -1, 4, 3, c);
+        fill_rect(x + 7, y + 5, 2, 6, c);
+        break;
+    case CursorShape::Move:
+        cone_v(x, y, 0, 1, 3, 3, c);
+        cone_v(x, y, 15, -1, 3, 3, c);
+        cone_h(x, y, 0, 1, 3, 3, c);
+        cone_h(x, y, 15, -1, 3, 3, c);
+        fill_rect(x + 7, y + 7, 2, 2, c);
+        break;
+    case CursorShape::SizeDiagL:
+        /* Double arrow along the top-left-to-bottom-right diagonal. */
+        for (int t = 0; t <= 5; ++t) {
+            int hh = t < 3 ? t : 3;
+            for (int u = -hh; u <= hh; ++u) {
+                put_pixel(x + t + u, y + t - u, c);            /* NW head */
+                put_pixel(x + 15 - t - u, y + 15 - t + u, c);  /* SE head */
+            }
+        }
+        for (int d = 6; d <= 9; ++d) {
+            put_pixel(x + d, y + d, c);
+            put_pixel(x + d, y + d + 1, c);
+        }
+        break;
+    case CursorShape::SizeDiagR:
+        /* Double arrow along the top-right-to-bottom-left diagonal. */
+        for (int t = 0; t <= 5; ++t) {
+            int hh = t < 3 ? t : 3;
+            for (int u = -hh; u <= hh; ++u) {
+                put_pixel(x + 15 - (t + u), y + t - u, c);     /* NE head */
+                put_pixel(x + t + u, y + 15 - t + u, c);       /* SW head */
+            }
+        }
+        for (int d = 6; d <= 9; ++d) {
+            put_pixel(x + 15 - d, y + d, c);
+            put_pixel(x + 15 - d, y + d + 1, c);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+} // namespace
+
+void draw_cursor_at(int x, int y, CursorShape shape)
+{
+    if (shape == CursorShape::Arrow)
+        return;
+    static const int off[8][2] = {
+        {-1, -1}, {0, -1}, {1, -1}, {-1, 0},
+        {1, 0},   {-1, 1}, {0, 1},  {1, 1},
+    };
+    for (int i = 0; i < 8; ++i)
+        blit_cursor_shape(x + off[i][0], y + off[i][1], shape, COLOR_BLACK);
+    blit_cursor_shape(x, y, shape, COLOR_WHITE);
 }
 
 void present()

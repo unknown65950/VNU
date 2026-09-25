@@ -699,7 +699,8 @@ DESCRIPTION\n\
 \n\
 KEYS\n\
     j/k      move up and down\n\
-    Enter    open the selected directory\n\
+    Enter    open the selected directory, or a .png/.jpg/.jpeg\n\
+             picture in picview (Esc hands the window back here)\n\
     Esc      close the window\n\
     Mouse: click to select, release on the same row to open.\n\
     A GUI app (see man calc for how GUI apps are launched).\n"
@@ -727,19 +728,21 @@ KEYS\n\
     picview - graphical image viewer\n\
 \n\
 SYNOPSIS\n\
-    picview\n\
+    picview [file]\n\
 \n\
 DESCRIPTION\n\
-    A tiny image viewer for the VNU desktop. Walks the /pics\n\
-    directory, decodes each BMP, PNG or JPEG with the embedded\n\
-    px.h decoder and renders it, colour-quantised to the 16\n\
-    index Catppuccin palette, into the window's client area.\n\
+    A tiny image viewer for the VNU desktop. Without an argument it\n\
+    walks the /pics directory; with a file argument (as the files\n\
+    manager supplies when you open a .png/.jpg/.jpeg) it decodes and\n\
+    shows just that file. Either way, BMP, PNG and JPEG are decoded\n\
+    with the embedded px.h decoder and rendered, colour-quantised to\n\
+    the 16 index Catppuccin palette, into the window's client area.\n\
 \n\
 KEYS\n\
-    [ ]   previous / next picture\n\
+    [ ]   previous / next picture (gallery mode only)\n\
     z     toggle zoom (fit window / 1:1)\n\
     d     toggle ordered dithering\n\
-    Esc   close the window\n\
+    Esc   close the window (opened from the file manager: return to it)\n\
 \n\
 FILES\n\
     /pics   directory of embedded demo pictures\n\

@@ -5,14 +5,17 @@
  * /home, /tmp, ...). Rows are drawn in the crisp 8x16 VGA face with a
  * coloured type tile per entry; the selected row gets a full-width
  * light-blue bar, clicking a directory enters it and ".." walks back
- * up. The path is shown in the header, the item count in the status
+ * up. Opening a .png/.jpg/.jpeg picture (Enter or double-click) hands
+ * it to picview, which takes over this window and returns it on Esc.
+ * The path is shown in the header, the item count in the status
  * strip.
  *
  * Own-house flat look: dark header/status bars, accent tiles, exactly
  * one glyph height per row — no bevels, no legacy window dressing.
  *
  * Keys: j/k select, Enter open, Esc close. Mouse: click to select,
- * release on the same row to open it.
+ * release on the same row to open it. Opening a picture (png/jpg/jpeg)
+ * runs it in picview inside this window; Esc returns to the manager.
  */
 #include <vlibc/vgfx.h>
 #include <vlibc/dirent.h>
@@ -132,6 +135,29 @@ static void up_dir(char* out)
     out[j] = 0;
 }
 
+/* Case-insensitive name suffix match ("sunset.PNG" → image too). */
+static int ends_with(const char* s, const char* suf)
+{
+    int i = 0, j = 0;
+    while (s && s[i])
+        ++i;
+    while (suf && suf[j])
+        ++j;
+    if (j > i)
+        return 0;
+    i -= j;
+    for (int k = 0; k < j; ++k) {
+        char a = s[i + k], b = suf[k];
+        if (a >= 'A' && a <= 'Z')
+            a = (char)(a + ('a' - 'A'));
+        if (b >= 'A' && b <= 'Z')
+            b = (char)(b + ('a' - 'A'));
+        if (a != b)
+            return 0;
+    }
+    return 1;
+}
+
 static void enter_sel(void)
 {
     if (sel == 0) {
@@ -144,10 +170,23 @@ static void enter_sel(void)
     if (idx < 0 || idx >= list_n)
         return;
     struct ent* e = &list[idx];
-    if (!e->is_dir)
-        return;
     char fp[PATH_LEN];
     pcat(fp, cwd, e->name);
+    if (!e->is_dir) {
+        /* Open pictures in the image viewer. picview is exec'd over this
+         * task, showing the file in this very window; Esc brings the file
+         * manager right back (the kernel reloads this app when it exits). */
+        if (ends_with(e->name, ".png") || ends_with(e->name, ".jpg") ||
+            ends_with(e->name, ".jpeg")) {
+            char* av[3];
+            av[0] = "/apps/picview/bin";
+            av[1] = fp;
+            av[2] = 0;
+            execve(av[0], av, 0);
+            /* not reached on success; a failed exec just keeps browsing */
+        }
+        return;
+    }
     enter_path(fp);
 }
 

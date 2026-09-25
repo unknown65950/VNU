@@ -4,6 +4,7 @@
 #include <vnu/process.h>
 #include <vnu/paging.h>
 #include <vnu/pmm.h>
+#include <vnu/vfs.h>
 
 extern "C" void vnu_swtch_pd(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_wintask_trampoline();
@@ -610,10 +611,47 @@ bool exec_current(const char* path, char* const* argv, uint32_t& out_eip, uint32
 {
     uint32_t size = 0;
     const uint8_t* data = vnu::proc::find_embedded_data(path, size);
-    if (!data)
-        return false;
 
-    char arg_store[8][96];
+    /* Not one of the pre-embedded programs (e.g. an /apps/<name>/bin app
+     * the VFS hosts as a real file — which is how the file manager opens
+     * a picture): read the ELF bytes straight out of the VFS instead.
+     * The bytes go in a PMM frame, not a kernel .bss array: .bss ends just
+     * under 4 MiB, and this task's private app image is exactly there, so
+     * a bss-resident buffer would be invisible (worse, aliased by app
+     * code) from inside the task's page directory. */
+    uint32_t vfs_buf_base = 0;
+    uint32_t vfs_buf_pages = 0;
+    if (!data) {
+        const uint32_t VFS_MAX = 65536;
+        vfs_buf_pages = (VFS_MAX + 0xFFFu) >> 12;
+        vfs_buf_base = vnu::pmm::alloc_contig(vfs_buf_pages);
+        if (!vfs_buf_base)
+            return false;
+        int fd = vnu::vfs::open(path, vnu::posix::O_RDONLY);
+        if (fd < 0) {
+            vnu::pmm::free_contig(vfs_buf_base, vfs_buf_pages);
+            return false;
+        }
+        auto* buf = reinterpret_cast<uint8_t*>(vfs_buf_base);
+        uint32_t total = 0;
+        for (;;) {
+            int r = vnu::vfs::read(fd, buf + total, VFS_MAX - total);
+            if (r <= 0)
+                break;
+            total += static_cast<uint32_t>(r);
+            if (total >= VFS_MAX)
+                break;
+        }
+        vnu::vfs::close(fd);
+        if (total == 0) {
+            vnu::pmm::free_contig(vfs_buf_base, vfs_buf_pages);
+            return false;
+        }
+        data = buf;
+        size = total;
+    }
+
+    char arg_store[8][128];
     char* arg_ptrs[9];
     int argc = 0;
     if (argv) {
@@ -634,6 +672,8 @@ bool exec_current(const char* path, char* const* argv, uint32_t& out_eip, uint32
     str_copy(path_copy, path, sizeof(path_copy));
 
     uint32_t entry = vnu::elf::load(data, size);
+    if (vfs_buf_base)
+        vnu::pmm::free_contig(vfs_buf_base, vfs_buf_pages);
     if (!entry)
         return false;
 

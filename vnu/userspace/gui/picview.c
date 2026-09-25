@@ -1,23 +1,29 @@
 /*
  * picview — tiny image viewer for the VNU desktop.
  *
- * Walks the kernel VFS directory /pics the same way the files app walks
- * its cwd (opendir/readdir, struct dirent, d_type[1] == 8 for regular
- * files), reads each picture's bytes with open/read/close (the pattern
- * prefs.c uses), decodes BMP / PNG / JPEG with the self-contained px.h
- * decoder and renders the picture cropped/scaled to the window's client
- * area (VGFX_W x VGFX_H) by colour-quantising each RGB888 pixel to the
- * nearest of the 16 Catppuccin DAC palette indices with an optional
- * ordered dither mask.
+ * Two ways to get content. As a desktop app it walks the kernel VFS
+ * directory /pics the same way the files app walks its cwd (opendir/
+ * readdir, struct dirent, d_type[1] == 8 for regular files); it can
+ * also be opened on a single file, which is what the files manager
+ * does when you open a .png/.jpg — the manager execs picview with the
+ * file's path, the picture is shown in-place and Esc hands the window
+ * straight back to the manager.
+ *
+ * Either way it reads the picture's bytes with open/read/close (the
+ * pattern prefs.c uses), decodes BMP / PNG / JPEG with the self-contained
+ * px.h decoder and renders the picture cropped/scaled to the window's
+ * client area (VGFX_W x VGFX_H) by colour-quantising each RGB888 pixel
+ * to the nearest of the 16 Catppuccin DAC palette indices with an
+ * optional ordered dither mask.
  *
  * The window is pre-created by the desktop (title = app name); we never
  * call vgfx_open — just draw, vgfx_flush and service events via
  * vgfx_poll, exactly like calc/files/prefs.
  *
  * Keys:
- *   [  previous picture    ]  next picture
+ *   [  previous picture    ]  next picture   (gallery only)
  *   z  toggle zoom (fit / 1:1)   d  toggle dither
- *   Esc  close the window
+ *   Esc  close the window (or return to the file manager)
  */
 #include <vlibc/vgfx.h>
 #include <vlibc/dirent.h>
@@ -37,13 +43,17 @@ static int       g_pic_w, g_pic_h;
 
 #define MAX_PICS 16
 #define NAME_CAP 32
-#define PATH_CAP 64
+#define PATH_CAP 128 /* fits any path the file manager can open */
 #define DATA_CAP 20480
 
 static char  g_names[MAX_PICS][NAME_CAP];
+static char  g_single_path[PATH_CAP]; /* file opened via the file manager */
+static char  g_label[NAME_CAP];       /* name shown for the current picture */
 static int   g_n;
 static int   g_sel;
-static int   g_loaded = -1;
+static int   g_single;                /* single-file mode (no prev/next) */
+static int   g_have;                  /* g_pic_rgb holds a decoded image */
+static int   g_err;                   /* the last load attempt failed */
 static int   g_zoom;
 static int   g_dither = 1;
 
@@ -99,10 +109,31 @@ static void enumerate(void)
     closedir(d);
 }
 
-static int load_sel(void)
+/* Bare file name (everything after the last '/'), for the status label. */
+static const char* base_of(const char* p)
 {
-    char path[PATH_CAP];
-    pcat(path, PATH_CAP, "/pics", g_names[g_sel]);
+    const char* b = p;
+    for (const char* q = p; *q; ++q)
+        if (*q == '/')
+            b = q + 1;
+    return b;
+}
+
+static void set_label(const char* src)
+{
+    int i = 0;
+    while (src && src[i] && i < NAME_CAP - 1) {
+        g_label[i] = src[i];
+        ++i;
+    }
+    g_label[i] = 0;
+}
+
+/* Decode the image file at `path`, replacing the current picture. Also
+ * sets g_label to the file's bare name. Returns 0 on success. */
+static int load_file(const char* path)
+{
+    set_label(base_of(path));
 
     uint8_t data[DATA_CAP];
     int fd = open(path, 0);
@@ -142,8 +173,18 @@ static int load_sel(void)
     g_pic_rgb = rgb;
     g_pic_w = w;
     g_pic_h = h;
-    g_loaded = g_sel;
     return 0;
+}
+
+/* Load whatever the current selection is: the single file opened from
+ * the file manager, or /pics/<g_sel> in the gallery. */
+static int load_current(void)
+{
+    if (g_single)
+        return load_file(g_single_path);
+    char path[PATH_CAP];
+    pcat(path, PATH_CAP, "/pics", g_names[g_sel]);
+    return load_file(path);
 }
 
 /* Colour-quantise one source pixel of the decoded RGB picture to the
@@ -179,9 +220,9 @@ static int map_color(int sx, int sy)
 static void draw(void)
 {
     vgfx_clear(VGFX_BLACK);
-    if (g_loaded != g_sel) {
-        vgfx_str8((VGFX_W - vgfx_text_width8(g_names[g_sel])) / 2,
-                  VGFX_H / 2 - 4, g_names[g_sel], VGFX_WHITE);
+    if (!g_have) {
+        vgfx_str8((VGFX_W - vgfx_text_width8(g_label)) / 2,
+                  VGFX_H / 2 - 4, g_label, g_err ? VGFX_LRED : VGFX_WHITE);
         vgfx_flush();
         return;
     }
@@ -216,16 +257,20 @@ static void draw(void)
         }
     }
 
-    char name[NAME_CAP + 8];
-    int i = 0;
-    while (g_names[g_sel][i] && i < NAME_CAP - 1) {
-        name[i] = g_names[g_sel][i];
-        ++i;
-    }
-    name[i++] = ' ';
-    name[i] = 0;
-    vgfx_str8(4, VGFX_H - 12, name, VGFX_DGRAY);
+    vgfx_str8(4, VGFX_H - 12, g_label, VGFX_DGRAY);
     vgfx_flush();
+}
+
+/* (Re)load the current selection and repaint. */
+static void refresh(void)
+{
+    g_have = 0;
+    g_err = 1;
+    if (load_current() == 0) {
+        g_have = 1;
+        g_err = 0;
+    }
+    draw();
 }
 
 static void show(void)
@@ -243,7 +288,6 @@ static void show(void)
         }
         return;
     }
-    draw();
     for (;;) {
         vgfx_event_t ev;
         vgfx_poll(&ev);
@@ -252,9 +296,9 @@ static void show(void)
         int k = (int)(unsigned char)ev.key;
         if (k == 0x1B)
             return;
-        if (k == '[')
+        if (!g_single && k == '[')
             g_sel = (g_sel - 1 + g_n) % g_n;
-        else if (k == ']')
+        else if (!g_single && k == ']')
             g_sel = (g_sel + 1) % g_n;
         else if (k == 'z')
             g_zoom = !g_zoom;
@@ -262,16 +306,31 @@ static void show(void)
             g_dither = !g_dither;
         else
             continue;
-        load_sel();
-        draw();
+        refresh();
     }
 }
 
-int main(void)
+int main(int argc, char** argv)
 {
+    if (argc >= 2 && argv[1] && argv[1][0]) {
+        /* Opened from the file manager: show just that one file, in this
+         * window. The [ ] prev/next cycling makes no sense, so only
+         * zoom/dither remain; Esc closes back to the file manager. */
+        g_single = 1;
+        int i = 0;
+        while (argv[1][i] && i < PATH_CAP - 1) {
+            g_single_path[i] = argv[1][i];
+            ++i;
+        }
+        g_single_path[i] = 0;
+        g_n = 1;
+        refresh();
+        show();
+        return 0;
+    }
     enumerate();
     g_sel = 0;
-    load_sel();
+    refresh();
     show();
     return 0;
 }
