@@ -575,6 +575,47 @@ EXAMPLES\n\
     df -h /proc/version\n\
     df -T -t vfs\n"
 
+#define VCC_PAGE "NAME\n\
+    vcc - the VNU C compiler\n\
+\n\
+SYNOPSIS\n\
+    vcc [-c] [-o out] [-I dir] file.c [file.o] [file.a]\n\
+\n\
+DESCRIPTION\n\
+    Compiles and links C programs for VNU: a preprocessor, a compiler\n\
+    for a strict i386 C subset into ELF relocatable objects, and a\n\
+    linker that links against the standard library (crt0.o plus\n\
+    libvlibc.a, read from /lib). The whole compiler runs inside the OS\n\
+    and writes its output to the VFS, so a simple\n\
+        vcc hello.c -o a.out\n\
+    produces a VNU executable.\n\
+\n\
+    Flags are appended in any order. With -c only the relocatable\n\
+    object is written (default file a.o); without it vcc compiles the\n\
+    single .c file and links it with crt0.o and the whole libvlibc.a\n\
+    into a full VNU ELF (default a.out). Object files may be linked\n\
+    individually through a lib.a archive.\n\
+\n\
+    Input sources are read from the VFS; no files larger than memory\n\
+    are expected. vcc is itself compiled with vcc (it is self-hosting).\n\
+\n\
+OPTIONS\n\
+    -c            compile only, write the object file\n\
+    -o out        output file (default a.o with -c, else a.out)\n\
+    -I dir        add dir to the include search path\n\
+\n\
+EXAMPLES\n\
+    vcc -c hello.c -o hello.o\n\
+    vcc main.c libfoo.a -o app          link app from main.c and the\n\
+                                        archive\n\
+\n\
+FILES\n\
+    /lib/crt0.o     startup object\n\
+    /lib/libvlibc.a standard C library archive\n\
+\n\
+EXIT STATUS\n\
+    0 on success, 1 on any compile, link or I/O error.\n"
+
 #define PING_PAGE "NAME\n\
     ping - send ICMP echo requests (network test)\n\
 \n\
@@ -986,6 +1027,8 @@ static const char* const aliases[] = { "a", "all", "list", "-l", "--list", NULL 
 static const struct Page pages[] = {
     {"man",      "display reference manual pages",
      MAN_PAGE},
+    {"vcc",      "the VNU C compiler",
+     VCC_PAGE},
     {"vash",     "VNU login shell",
      VASH_PAGE},
     {"sh",       "the standard shell (synonym for vash)",

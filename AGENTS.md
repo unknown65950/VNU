@@ -58,6 +58,14 @@ userspace, если `vnu/kernel/proc/embedded_*.h` ещё не сгенерир�
   appended in `vnu/kernel/include/vnu/abi.h` and mirrored to
   `vlibc/include/vnu/abi.h`; `vnu/abi/ABI.md` must be updated in the
   same change.
+- **Host vcc == guest vcc.** The `vcc` binary (`vnu/userspace/vcc/vcc.c`)
+  compiled with `tools/vcc` on the build host is functionally equivalent
+  to the guest `vcc` embedded into the kernel and run inside VNU: the
+  same source, the same feature set, the same output. Do not let the two
+  diverge — a change to the compiler is verified host-side first
+  (byte-identical `-c` object and full-link vs. the reference outputs)
+  and must keep working in-guest via `./vnu/run.sh`; if a feature or bug
+  fix is only possible in one environment, it is incomplete.
 - **New devices must surface through `/dev`.** When support for a new
   device is added (sound, network, disk, HID, ...), the attached device
   MUST be accessible from userspace as a node in `/dev` — a character or
