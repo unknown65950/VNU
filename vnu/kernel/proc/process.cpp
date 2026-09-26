@@ -50,6 +50,9 @@ extern "C" void vnu_proc_switch(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_proc_trampoline();
 extern "C" uint32_t vnu_proc_pending_entry, vnu_proc_pending_stack;
 extern "C" uint32_t vnu_proc_new_pd, vnu_proc_old_pd;
+extern "C" void vnu_proc_preempt(uint32_t sched_esp);
+extern "C" void vnu_proc_resume_preempted(uint32_t* old_esp_out, uint32_t new_esp);
+extern "C" void vnu_timer_init();
 
 extern "C" void* vnu_kalloc(unsigned long n);
 extern "C" void vnu_kfree(void* p);
@@ -1013,6 +1016,42 @@ void yield_current()
     switch_to_scheduler(true);
 }
 
+/* PIT IRQ0 entry (see ctxswitch.s's vnu_timer_isr). Returns 0 when the
+ * tick must not switch (scheduler itself running, or nothing else to
+ * run); on a real preemption it parks the CURRENT process — full
+ * interrupt frame pointer into coro_esp, preempted=true — and hops to
+ * the scheduler coroutine, so the return is never reached. */
+extern "C" uint32_t vnu_timer_tick(uint32_t frame_esp)
+{
+    if (current_idx == 0)
+        return 0;
+    Process& cur = table[current_idx];
+    if (!cur.coro)
+        return 0;
+
+    /* Round-robin: only preempt if some OTHER process is on the ready
+     * list (blocked processes keep their Runnable state and are
+     * re-visited exactly like they are today, on every pass). A single
+     * busy process otherwise just churns through pointless timer-driven
+     * switches; it gets the CPU back the instant a second one appears. */
+    bool other = false;
+    for (int k = 1; k < MAX_PROCS; ++k) {
+        int idx = (current_idx + k) % MAX_PROCS;
+        if (table[idx].coro && table[idx].state == State::Runnable) {
+            other = true;
+            break;
+        }
+    }
+    if (!other)
+        return 0;
+
+    cur.coro_esp = frame_esp;
+    cur.preempted = true;
+    vnu_proc_new_pd = g_sched_pgdir;
+    vnu_proc_preempt(g_sched_esp);
+    return 0; /* not reached */
+}
+
 void run_slice(int i)
 {
     if (i <= 0 || i >= MAX_PROCS)
@@ -1030,9 +1069,17 @@ void run_slice(int i)
         p.started = true;
     }
     vnu_proc_new_pd = p.pgdir_phys;
-    vnu_proc_switch(&g_sched_esp, p.coro_esp);
+    if (p.preempted) {
+        /* The timer parked this process with its whole register state:
+         * popad+iret back into whatever instruction it was interrupted
+         * in, instead of the cooperative callee-saved switch. */
+        p.preempted = false;
+        vnu_proc_resume_preempted(&g_sched_esp, p.coro_esp);
+    } else {
+        vnu_proc_switch(&g_sched_esp, p.coro_esp);
+    }
     /* Resumed here (on the scheduler's own stack) once the process has
-     * yielded or exited. */
+     * yielded, been preempted, or exited. */
     current_idx = 0;
 
     if (p.state == State::Zombie && p.ppid == 0) {
@@ -1047,6 +1094,11 @@ void run_slice(int i)
 
 int run_scheduler(const char* primary, const char* fallback)
 {
+    /* The PIT timer is what makes the round-robin preemptive: IRQ0
+     * (100 Hz) seizes the CPU from a running process and falls back to
+     * this loop. Init it once, before any process gets its first slice
+     * (the loop may otherwise exit into kernel_main directly). */
+    vnu_timer_init();
     g_sched_pgdir = vnu::paging::current_pgdir();
     const char* next = primary;
     int init_slot = -1;

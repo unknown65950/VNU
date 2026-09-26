@@ -82,6 +82,7 @@ __asm__(
  * instead of the BIOS-default 0x08-0x0F/0x70-0x77, which collide with
  * CPU exception vectors (0x08 = #DF, 0x0D = #GP, 0x0E = #PF, ...).
  * MUST run before the first `sti` anywhere in the kernel. */
+extern "C" void vnu_timer_isr(); /* PIT IRQ0 -> preemptive scheduler */
 extern "C" void vnu_pic_remap()
 {
     std::uint8_t mask1 = inb(0x21);
@@ -105,8 +106,11 @@ void vnu_syscall_install(vnu_idt_gate* /*unused*/)
     for (int i = 0; i < 256; ++i)
         set_gate(i, vnu_ignore_irq, 0x8E); /* present, DPL0, 32-bit interrupt gate */
 
-    /* Hardware IRQs, now remapped to 0x20-0x2F by vnu_pic_remap(). */
-    for (int i = 0x20; i <= 0x27; ++i)
+    /* Hardware IRQs, now remapped to 0x20-0x2F by vnu_pic_remap().
+     * IRQ0 (the PIT timer) gets its own handler — it drives the
+     * preemptive round-robin scheduler, see kernel/proc/ctxswitch.s. */
+    set_gate(0x20, vnu_timer_isr, 0x8E);
+    for (int i = 0x21; i <= 0x27; ++i)
         set_gate(i, vnu_irq_master_ack, 0x8E);
     for (int i = 0x28; i <= 0x2F; ++i)
         set_gate(i, vnu_irq_slave_ack, 0x8E);
@@ -118,6 +122,23 @@ void vnu_syscall_install(vnu_idt_gate* /*unused*/)
     ptr.limit = static_cast<std::uint16_t>(sizeof(idt) - 1);
     ptr.base = reinterpret_cast<std::uint32_t>(&idt[0]);
     asm volatile("lidt %0" : : "m"(ptr));
+}
+
+/* PIT channel 0 -> IRQ0, the preemptive scheduler's quantum clock.
+ * Rate-generator mode with reload 11931 gives ~100 Hz (a 10 ms slice);
+ * channel 2 stays untouched (the e1000 driver's polling ms clock).
+ * IRQ0 is the only IRQ ever enabled — keyboard/mouse/etc. keep their
+ * BIOS-disable masks and continue to be polled. Called by
+ * proc::run_scheduler() just before the loop, i.e. after the GDT/IDT/
+ * PIC are up and paging/VFS are initialized. */
+extern "C" void vnu_timer_init()
+{
+    constexpr std::uint16_t PIT_RELOAD =
+        static_cast<std::uint16_t>(1193182 / 100); /* ~100 Hz */
+    outb(0x43, 0x36); /* ch0, LSB then MSB, mode 3, binary */
+    outb(0x40, static_cast<std::uint8_t>(PIT_RELOAD & 0xFF));
+    outb(0x40, static_cast<std::uint8_t>(PIT_RELOAD >> 8));
+    outb(0x21, inb(0x21) & static_cast<std::uint8_t>(~0x01u)); /* unmask IRQ0 */
 }
 
 extern "C" void vnu_idt_init()

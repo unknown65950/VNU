@@ -35,6 +35,11 @@ struct Process {
      * below are only meaningful for coro processes. */
     bool coro;          // managed by the classic-process scheduler
     bool started;       // first switch has happened (trampoline consumed)
+    bool preempted;     // parked by the timer ISR: coro_esp holds a full
+                        // pushad+hardware interrupt frame, and run_slice
+                        // must resume it with popad+iretd rather than the
+                        // cooperative yield's callee-saved switch (see
+                        // kernel/proc/ctxswitch.s)
     uint32_t coro_esp;  // suspended stack pointer (switch frame, or mid-
                         // syscall stack once blocked and resumed)
     uint32_t entry;     // ELF entry point, for the first-run trampoline
