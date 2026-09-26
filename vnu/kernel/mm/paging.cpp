@@ -46,7 +46,10 @@ constexpr int MAX_ADDRESS_SPACES = 16;
  * stack (16) + heap (BRK 1 MiB = 256) = 336, with a little headroom.
  * Each entry is a 4-byte frame number, so the meta table below stays
  * well under a page. */
-constexpr int MAX_FRAMES_PER_SPACE = 512;
+/* Per-space frame budget. The app-image region is sized from the ELF
+ * (up to 1 MiB -> 256 frames), the heap is 1 MiB (256) and the stack 16:
+ * bigger guest binaries (a guest C compiler!) need the headroom. */
+constexpr int MAX_FRAMES_PER_SPACE = 1024;
 constexpr int MAX_PRIVATE_PDES_PER_SPACE = 4;
 
 struct AddrSpaceMeta {
@@ -221,6 +224,66 @@ uint32_t create_address_space(const MapRange* ranges, int count)
     }
 
     return pgdir_phys;
+}
+
+/* Adds `num_pages` more mapped pages to an existing private address
+ * space, starting at vaddr_start. Used by execve() when the new image
+ * (e.g. a large guest-compiled binary) needs a bigger app region than
+ * the process was spawned with. Mirrors the mapping loop of
+ * create_address_space(): PDEs that are still shared identity entries
+ * first get a private table seeded with the identity mapping. */
+bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages)
+{
+    AddrSpaceMeta* meta = find_meta(pgdir_phys);
+    if (!meta)
+        return false;
+
+    uint32_t* pgdir = reinterpret_cast<uint32_t*>(pgdir_phys);
+    for (uint32_t p = 0; p < num_pages; ++p) {
+        uint32_t vaddr = vaddr_start + p * PAGE_SIZE;
+        uint32_t pde_idx = vaddr >> 22;
+        uint32_t pte_idx = (vaddr >> 12) & 0x3FF;
+
+        uint32_t* pt;
+        uint32_t pde_val = pgdir[pde_idx];
+        bool is_private = false;
+        for (int k = 0; k < meta->pt_frame_count; ++k) {
+            if ((meta->pt_frames[k] & ~0xFFFu) == (pde_val & ~0xFFFu)) {
+                is_private = true;
+                break;
+            }
+        }
+        if (!is_private) {
+            if (meta->pt_frame_count >= MAX_PRIVATE_PDES_PER_SPACE)
+                return false;
+            uint32_t pt_phys = vnu::pmm::alloc_frame();
+            if (!pt_phys)
+                return false;
+            meta->pt_frames[meta->pt_frame_count++] = pt_phys;
+            pgdir[pde_idx] = pt_phys | PDE_PRESENT | PDE_RW;
+            uint32_t* seed_pt = reinterpret_cast<uint32_t*>(pt_phys);
+            if (pde_idx < NUM_IDENTITY_PDES) {
+                for (int k = 0; k < 1024; ++k)
+                    seed_pt[k] = g_identity_pt[pde_idx][k];
+            } else {
+                for (int k = 0; k < 1024; ++k)
+                    seed_pt[k] = 0;
+            }
+        }
+        pt = reinterpret_cast<uint32_t*>(pgdir[pde_idx] & ~0xFFFu);
+
+        uint32_t pte = pt[pte_idx];
+        if (pte & PTE_PRESENT)
+            continue; /* already mapped by an earlier range in this exec */
+        if (meta->data_frame_count >= MAX_FRAMES_PER_SPACE)
+            return false;
+        uint32_t frame = vnu::pmm::alloc_frame();
+        if (!frame)
+            return false;
+        meta->data_frames[meta->data_frame_count++] = frame;
+        pt[pte_idx] = frame | PTE_PRESENT | PTE_RW;
+    }
+    return true;
 }
 
 void destroy_address_space(uint32_t pgdir_phys)

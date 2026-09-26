@@ -76,6 +76,13 @@ and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
 with `-1` leaves a field unchanged; only root may chown.
 
 ### Notes on argument shapes
+- `execve(ebx, ecx)` — replaces the current process image with the ELF
+  found at path `ebx` (argv `ecx`). Resolution order: the embedded
+  `/bin` table first, then a real VFS file — a guest-compiled binary in
+  `/tmp`, say — which is read into a kernel staging buffer and executed
+  like any other ELF. The process's app-image region grows on demand to
+  fit the new image (cap 1 MiB). Errors: `-VNU_ENOENT`, `-VNU_ENOEXEC`,
+  `-VNU_ENOMEM`.
 - `blkcount(ebx)` — returns the number of ATA disks the installer sees.
 - `install(ebx, ecx)` — `ebx` is the target ATA disk index; `ecx` is the
   partition size in MiB (0 = as much as the disk/FAT16 allows). Returns 0

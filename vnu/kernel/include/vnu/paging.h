@@ -42,6 +42,10 @@ uint32_t kernel_pgdir_phys();
 // range. Returns the new directory's physical address (suitable for
 // loading into CR3), or 0 on allocation failure.
 uint32_t create_address_space(const MapRange* ranges, int count);
+/* Adds more mapped pages to an existing private address space (see
+ * paging.cpp). Returns false on out-of-memory; already-present pages
+ * are left untouched. */
+bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages);
 
 // Frees every private frame `create_address_space` allocated for
 // `pgdir_phys` (the ranges it was built with), plus the directory and

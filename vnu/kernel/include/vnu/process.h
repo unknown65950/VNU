@@ -41,6 +41,7 @@ struct Process {
     uint32_t argv_esp;  // freshly built argc/argv stack for that entry
     uint32_t brk;       // per-process heap break (coro processes only,
                         // so parallel services don't stomp a shared g_brk)
+    uint32_t app_pages; // pages mapped in the 0x400000 app region
 };
 
 void init();
