@@ -113,6 +113,10 @@ int decode_scancode(uint8_t s, DecoderState& st)
         case 0x47: return static_cast<uint8_t>(K_HOME);
         case 0x4F: return static_cast<uint8_t>(K_END);
         case 0x53: return static_cast<uint8_t>(K_DEL);
+        /* The keypad's own Enter is E0 1C (the main block's Enter is a
+         * plain 1C and decodes below). Without this the shell never sees
+         * a newline from a numeric-keypad Enter. */
+        case 0x1C: return '\n';
         default: return -1;
         }
     }
