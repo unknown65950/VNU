@@ -7,21 +7,16 @@
 namespace {
 
 constexpr int MAX_FD = 64;
-/* Every Node carries a full DATA_CAP buffer, so this is the dominant
- * consumer of kernel .bss (MAX_N * ~64 KiB). Boot alone registers
- * ~117 nodes (static /bin+proc+dev tree plus the /apps tiles, the
- * /pics pack and the /sounds clips), so the remaining heads-up room is
- * for anything the runtime creates (/tmp/.session, redirections, ...)
- * — an exhausted table makes those add() calls return ENOSPC and
- * shells lose their session file. */
+/* The node table is bounded by metadata, not content: every slot holds
+ * a path, some flags and a pointer to its content buffer (see node_reserve
+ * below), so a full table costs a couple of words per node rather than
+ * megabytes of .bss. Boot alone registers ~117 nodes (static
+ * /bin+proc+dev tree plus the /apps tiles, the /pics pack and the
+ * /sounds clips), so the remaining heads-up room is for anything the
+ * runtime creates (/tmp/.session, redirections, ...) — an exhausted
+ * table makes those add() calls return ENOSPC and shells lose their
+ * session file. */
 constexpr int MAX_N = 128;
-/* Every Node carries a full DATA_CAP buffer. 65536 fits the largest
- * embedded GUI binary (picview is ~37 KiB of ELF; the older 20480 cap
- * silently truncated it, so the launched image was garbage and the app
- * "crashed" on entry). With 128 nodes this is ~8 MiB of kernel .bss,
- * which lives at 0xA00000 (linker.ld) — far below the 0x910000 top of
- * the user app/stack window. */
-constexpr int DATA_CAP = 65536; /* big enough to hold any embedded ELF binary */
 constexpr int PATH_CAP = 64;
 
 /* Which /proc file a node synthesizes, if any. Content is regenerated
@@ -36,7 +31,13 @@ struct Node {
     vnu::vfs::DevKind dev;
     SynthKind synth;
     char path[PATH_CAP];
-    char data[DATA_CAP];
+    /* File content. Unlike a fixed per-node data[DATA_CAP] array, live
+     * bytes live in a page-grained contiguous pmm run grown on demand
+     * (node_reserve), so a single file may exceed 64 KiB and memory is
+     * only paid for what the file actually holds. Buffers are released
+     * back to the pool when a node is removed. */
+    uint8_t* buf;    /* may be null while cap == 0 (empty file) */
+    uint32_t cap;    /* allocation size, always a multiple of 4096 */
     uint32_t size;
     /* Multiuser metadata: 9 rwx bits + owner/group. Layout mirrors
      * POSIX: uid 0 (root) bypasses all checks. */
@@ -178,6 +179,64 @@ Node* add(const char* p, bool d)
         }
     }
     return nullptr;
+}
+
+/* --- growable node content buffers ---
+ * Backed by contiguous pmm frames (vnu::pmm::alloc_contig), identity-
+ * mapped so the physical address doubles as the virtual one. Pages are
+ * released to the pool on node removal; nothing below reads a buffer
+ * without bounds-checking against cap. */
+
+constexpr uint32_t PAGE_BYTES = 4096;
+
+void node_release(Node& n)
+{
+    if (n.buf) {
+        vnu::pmm::free_contig(reinterpret_cast<uint32_t>(n.buf), n.cap >> 12);
+        n.buf = nullptr;
+    }
+    n.cap = 0;
+    n.size = 0;
+}
+
+/* Make sure the node holds at least `need` bytes, growing the run
+ * geometrically to amortize the copy. Returns false only on pool
+ * exhaustion (alloc_contig failing), leaving the node untouched. */
+bool node_reserve(Node& n, uint32_t need)
+{
+    if (need <= n.cap)
+        return true;
+    uint32_t old_pages = n.cap >> 12;
+    uint32_t pages = (need + PAGE_BYTES - 1) >> 12;
+    if (pages < old_pages * 2)
+        pages = old_pages * 2;
+    uint32_t phys = vnu::pmm::alloc_contig(pages);
+    if (!phys)
+        return false;
+    uint8_t* nb = reinterpret_cast<uint8_t*>(phys);
+    for (uint32_t i = 0; i < n.size; ++i)
+        nb[i] = n.buf[i];
+    if (n.buf)
+        vnu::pmm::free_contig(reinterpret_cast<uint32_t>(n.buf), old_pages);
+    n.buf = nb;
+    n.cap = pages << 12;
+    return true;
+}
+
+/* Replace the node's content with the first `len` bytes of `src`
+ * (typically a regenerated /proc page or a boot-time embedded blob). */
+void node_set(Node& n, const uint8_t* src, uint32_t len)
+{
+    if (!node_reserve(n, len))
+        return;
+    for (uint32_t i = 0; i < len; ++i)
+        n.buf[i] = src[i];
+    n.size = len;
+}
+
+void node_set_cstr(Node& n, const char* s)
+{
+    node_set(n, reinterpret_cast<const uint8_t*>(s), static_cast<uint32_t>(strlen_local(s)));
 }
 
 /* --- multiuser permission helpers --- */
@@ -346,7 +405,8 @@ void cpu_vendor(char out[13])
 
 void regen_synth(Node& n)
 {
-    Appender a{n.data, DATA_CAP, 0};
+    char tmp[4096];
+    Appender a{tmp, sizeof(tmp), 0};
     switch (n.synth) {
     case SynthKind::Version:
         a.str("VNU version 0.5 (vibe) i386\n");
@@ -412,16 +472,19 @@ void regen_synth(Node& n)
         break;
     case SynthKind::DfStat: {
         /* Space report for df(1). The only real filesystem is the
-         * in-memory VFS: every node owns a fixed DATA_CAP buffer, so
-         * "total" is the whole node table's backing store and "used" is
-         * the sum of the live bytes in it. /dev and /proc are pure
-         * pseudo-filesystems with nothing to account. Lines are
+         * in-memory VFS: "total" is the sum of the nodes' currently
+         * allocated content buffers and "used" is the live bytes in
+         * them (the gap is the geometric headroom node_reserve keeps),
+         * so df grows and shrinks with real usage. /dev and /proc are
+         * pure pseudo-filesystems with nothing to account. Lines are
          * `source fstype mountpoint total_bytes used_bytes`. */
-        uint32_t total = static_cast<uint32_t>(MAX_N) * DATA_CAP;
+        uint32_t total = 0;
         uint32_t used = 0;
         for (int i = 0; i < MAX_N; ++i)
-            if (nodes[i].used)
+            if (nodes[i].used) {
+                total += nodes[i].cap;
                 used += nodes[i].size;
+            }
         a.str("vfs vfs / ");
         a.num(total);
         a.str(" ");
@@ -445,6 +508,7 @@ void regen_synth(Node& n)
         break;
     }
     n.size = a.len;
+    node_set(n, reinterpret_cast<const uint8_t*>(tmp), a.len);
 }
 
 } // namespace
@@ -481,8 +545,7 @@ void init()
     add("/", true);
     add("/etc", true);
     auto* m = add("/etc/motd", false);
-    copy(m->data, "Welcome to VNU\n", DATA_CAP);
-    m->size = 15;
+    node_set_cstr(*m, "Welcome to VNU\n");
     add("/etc/initialD", true);
 
     /* --- name resolution ---
@@ -496,19 +559,12 @@ void init()
             "127.0.0.1   localhost\n"
             "10.0.2.2    gateway\n"
             "10.0.2.15   vnu\n";
-        int i = 0;
-        for (; h[i] && i < DATA_CAP - 1; ++i)
-            hosts->data[i] = h[i];
-        hosts->size = static_cast<uint32_t>(i);
+        node_set_cstr(*hosts, h);
         hosts->perm = 0644u;
     }
     auto* resolv = add("/etc/resolv.conf", false);
     if (resolv) {
-        const char* r = "nameserver 1.1.1.1\n";
-        int i = 0;
-        for (; r[i] && i < DATA_CAP - 1; ++i)
-            resolv->data[i] = r[i];
-        resolv->size = static_cast<uint32_t>(i);
+        node_set_cstr(*resolv, "nameserver 1.1.1.1\n");
         resolv->perm = 0644u;
     }
 
@@ -523,19 +579,12 @@ void init()
         const char* accounts =
             "root:7c9d79a9:0:0:root:/root:/bin/vash\n"
             "guest:0f88c14d:1000:100:guest:/home/guest:/bin/vash\n";
-        int i = 0;
-        for (; accounts[i] && i < DATA_CAP - 1; ++i)
-            pw->data[i] = accounts[i];
-        pw->size = static_cast<uint32_t>(i);
+        node_set_cstr(*pw, accounts);
         pw->perm = 0644u;
     }
     auto* grp = add("/etc/group", false);
     if (grp) {
-        const char* groups = "root:x:0:\nusers:x:100:\n";
-        int i = 0;
-        for (; groups[i] && i < DATA_CAP - 1; ++i)
-            grp->data[i] = groups[i];
-        grp->size = static_cast<uint32_t>(i);
+        node_set_cstr(*grp, "root:x:0:\nusers:x:100:\n");
         grp->perm = 0644u;
     }
     add("/sbin", true);
@@ -583,12 +632,8 @@ void init()
     if (tmp)
         tmp->perm = 0777u; /* world-writable scratch space */
     auto* notes = add("/tmp/notes.txt", false);
-    if (notes) {
-        const char* msg = "Hello from VEDIT\nEdit me!\n";
-        int i = 0;
-        for (; msg[i]; ++i) notes->data[i] = msg[i];
-        notes->size = (uint32_t)i;
-    }
+    if (notes)
+        node_set_cstr(*notes, "Hello from VEDIT\nEdit me!\n");
 
     /* --- FHS: /dev character devices --- */
     add("/dev", true);
@@ -735,6 +780,8 @@ int read(int fd, void* buf, uint32_t count)
     if (files[fd].node < 0)
         return -VNU_EBADF;
     Node& n = nodes[files[fd].node];
+    if (!n.used)
+        return -VNU_EBADF;
     if (n.dir)
         return -VNU_EISDIR;
     if (!have_access(n, A_R))
@@ -769,8 +816,8 @@ int read(int fd, void* buf, uint32_t count)
 
     uint32_t avail = n.size > files[fd].position ? n.size - files[fd].position : 0;
     uint32_t take = avail < count ? avail : count;
-    for (uint32_t i = 0; i < take; ++i)
-        out[i] = n.data[files[fd].position + i];
+    for (uint32_t i = 0; i < take && n.buf; ++i)
+        out[i] = n.buf[files[fd].position + i];
     files[fd].position += take;
     return static_cast<int>(take);
 }
@@ -784,6 +831,8 @@ int write(int fd, const void* buf, uint32_t count)
     if (files[fd].node < 0)
         return -VNU_EBADF;
     Node& n = nodes[files[fd].node];
+    if (!n.used)
+        return -VNU_EBADF;
     if (n.dir)
         return -VNU_EISDIR;
     if (!have_access(n, A_W))
@@ -813,13 +862,22 @@ int write(int fd, const void* buf, uint32_t count)
     if (files[fd].flags & vnu::posix::O_APPEND)
         files[fd].position = n.size;
     uint32_t pos = files[fd].position;
-    uint32_t written = 0;
-    for (; written < count && pos < DATA_CAP; ++written, ++pos)
-        n.data[pos] = in[written];
-    if (pos > n.size)
-        n.size = pos;
-    files[fd].position = pos;
-    return static_cast<int>(written);
+    /* Overflow guard, then grow the node hole to fit the write. On pool
+     * exhaustion the write degrades to whatever fits in the current
+     * allocation (zero if the position is already past cap). */
+    if (count > UINT32_MAX - pos)
+        count = UINT32_MAX - pos;
+    if (!node_reserve(n, pos + count)) {
+        uint32_t room = pos < n.cap ? n.cap - pos : 0;
+        if (count > room)
+            count = room;
+    }
+    for (uint32_t i = 0; i < count; ++i)
+        n.buf[pos + i] = in[i];
+    if (pos + count > n.size)
+        n.size = pos + count;
+    files[fd].position = pos + count;
+    return static_cast<int>(count);
 }
 
 int lseek(int fd, int32_t offset, int whence)
@@ -829,6 +887,8 @@ int lseek(int fd, int32_t offset, int whence)
     if (files[fd].node < 0)
         return 0;
     Node& n = nodes[files[fd].node];
+    if (!n.used)
+        return -VNU_EBADF;
     int32_t base = 0;
     if (whence == 1)
         base = static_cast<int32_t>(files[fd].position);
@@ -885,6 +945,8 @@ int fstat(int fd, vnu::posix::Stat* st)
         return 0;
     }
     Node& n = nodes[files[fd].node];
+    if (!n.used)
+        return -VNU_EBADF;
     if (n.dev != DevKind::None) {
         st->mode = vnu::posix::S_IFCHR | 0666;
         st->size = 0;
@@ -1006,6 +1068,7 @@ int rmdir(const char* path)
     for (int i = 0; i < MAX_N; ++i)
         if (nodes[i].used && is_prefix_child(abs, nodes[i].path))
             return -VNU_ENOTEMPTY;
+    node_release(*n);
     n->used = false;
     return 0;
 }
@@ -1024,6 +1087,7 @@ int unlink(const char* path)
         return -VNU_ENOENT;
     if (!have_access(*par, A_W))
         return -VNU_EACCES;
+    node_release(*n);
     n->used = false;
     return 0;
 }
@@ -1057,13 +1121,17 @@ int move_file(const char* from, const char* to)
     Node* dst = add(at, false);
     if (!dst)
         return -VNU_ENOSPC;
-    dst->size = n->size;
     dst->perm = n->perm;
     dst->uid = n->uid;
     dst->gid = n->gid;
+    if (!node_reserve(*dst, n->size)) {
+        dst->used = false;
+        return -VNU_ENOSPC;
+    }
     for (uint32_t i = 0; i < n->size; ++i)
-        dst->data[i] = n->data[i];
-    n->used = false;
+        dst->buf[i] = n->buf[i];
+    dst->size = n->size;
+    node_release(*n);
     return 0;
 }
 
@@ -1075,8 +1143,8 @@ int read_path(const char* path, char* buf, uint32_t count)
     if (!n || n->dir)
         return -VNU_ENOENT;
     uint32_t z = n->size < count ? n->size : count;
-    for (uint32_t i = 0; i < z; ++i)
-        buf[i] = n->data[i];
+    for (uint32_t i = 0; i < z && n->buf; ++i)
+        buf[i] = n->buf[i];
     return static_cast<int>(z);
 }
 
@@ -1102,6 +1170,8 @@ int getdents(int fd, void* buf, uint32_t count)
     if (files[fd].node < 0)
         return -VNU_EBADF;
     Node& dir = nodes[files[fd].node];
+    if (!dir.used)
+        return -VNU_EBADF;
     if (!dir.dir)
         return -VNU_ENOTDIR;
     if (!have_access(dir, A_R))

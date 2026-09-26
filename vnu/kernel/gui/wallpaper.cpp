@@ -3,7 +3,8 @@
  * stretched over the whole desktop, quantized to the 16 Catppuccin DAC
  * colors the GUI actually displays.
  *
- * The VFS caps a single file at 64 KiB (DATA_CAP), and a full 1024x768
+ * The VFS no longer caps a single file at 64 KiB (each node's content
+ * grows on demand), and a full 1024x768
  * 24-bit BMP would be ~2.4 MiB, so the shipped wallpaper is a small
  * 512x384 PNG (designed *in* the palette, ~4 KiB) that the desktop
  * nearest-neighbour-upscales 2x onto the whole screen. The /wallpaper

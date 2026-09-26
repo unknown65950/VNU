@@ -6,8 +6,10 @@
 // own memory: the kernel image sits at 1-3 MiB and the (identity-mapped)
 // BSS -- wallpaper buffers, embedded userspace blobs, the pmm bitmap,
 // the identity page tables, the kernel page directory, the TCP socket
-// buffers and the VFS node table (128 * 64 KiB DATA_CAP with the /sounds
-// clips mounted) -- extends to ~0x1615614 (__bss_end, MAX_N=128).
+// buffers -- extends to ~0xA00000 (__bss_end). VFS file contents are no
+// longer a fixed 128*64 KiB BSS array either: each node's bytes live in
+// this same pool as a growable contiguous run (see vfs.cpp node_reserve,
+// with the /sounds clips and /pics mounted from it).
 // The former POOL_BASE = 0x01520000 (21.125 MiB) overlapped that BSS
 // region again once the node table grew past 112 entries: alloc_frame()'s
 // zeroing memset was wiping g_bitmap/g_identity_pt/g_kernel_pgdir, the

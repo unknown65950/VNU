@@ -84,8 +84,10 @@ void install_one(const char* name, uint8_t color, uint8_t glyph,
 }
 
 /* Big enough for the largest embedded binary we ship (picview, ~37 KiB
- * of ELF); matches vnu::vfs's own per-file DATA_CAP. */
-constexpr uint32_t LOAD_BUF_SIZE = 65536;
+ * of ELF). The VFS is now growable beyond any per-file cap, so this is
+ * purely the launcher's read window; files bigger than it are refused
+ * (returned total >= cap) rather than silently truncated. */
+constexpr uint32_t LOAD_BUF_SIZE = 262144;
 uint8_t g_load_buf[LOAD_BUF_SIZE];
 
 } // namespace
@@ -146,8 +148,8 @@ void install_demo_pics()
 }
 
 /* Mount the demo WAV clips under /sounds so the play app has content:
- * one VFS node per clip, filled with the embedded bytes (each file
- * stays well inside vfs's 64 KiB per-file DATA_CAP). */
+ * one VFS node per clip, filled with the embedded bytes (files may now
+ * exceed 64 KiB; the VFS grows each node's buffer on demand). */
 void install_demo_sounds()
 {
     struct Clip {
@@ -239,7 +241,7 @@ uint32_t read_bin(const char* name, uint8_t* buf, uint32_t cap)
             break;
         total += static_cast<uint32_t>(r);
         if (total >= cap)
-            break;
+            return 0; /* file bigger than the launcher window: refuse */
     }
     vnu::vfs::close(fd);
     return total;
