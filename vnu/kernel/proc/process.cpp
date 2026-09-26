@@ -311,6 +311,16 @@ uint32_t g_sched_esp = 0;   /* scheduler coroutine's parked stack (in its
 uint32_t g_sched_pgdir = 0; /* page directory the scheduler runs in */
 char g_spawn_path[96];
 int g_last_slot = -1;       /* slot the most recent spawn() used */
+uint32_t g_jiffies = 0;     /* 100 Hz tick counter (advanced by PIT IRQ0) */
+
+/* Wait channels of the waitpid() blocking: a parent parks on either the
+ * broadcast "any child exited" channel (pid == -1 waits) or the channel
+ * keyed by the specific awaited child's pid. sys_exit() wakes both. */
+constexpr uint32_t WAIT_ZOMBIE_ANY = 0x01000000u;
+constexpr uint32_t wait_chan_of_child(int pid)
+{
+    return WAIT_ZOMBIE_ANY | (static_cast<uint32_t>(pid) & 0xFFFFu);
+}
 
 /* Park the current coro process (park=true) and swap to the scheduler
  * coroutine, or (park=false, exit path) abandon its stack for good. */
@@ -524,8 +534,12 @@ void sys_exit(int status)
     if (p.coro) {
         /* Scheduler-managed process: turn into a zombie for the parent
          * (init) to reap via waitpid, and hand control back to the
-         * scheduler coroutine — its stack is abandoned for good. */
+         * scheduler coroutine — its stack is abandoned for good. Wake
+         * any parent blocked in waitpid on this child, or on "any
+         * child", so the reaper runs on the next pass. */
         p.state = State::Zombie;
+        wakeup(WAIT_ZOMBIE_ANY);
+        wakeup(wait_chan_of_child(p.pid));
         switch_to_scheduler(false);
         return; /* not reached */
     }
@@ -607,7 +621,14 @@ int sys_waitpid(int pid, int* status, int options)
             return 0;
         if (!table[current_idx].coro)
             return -VNU_ECHILD;
-        yield_current();
+        /* Block properly instead of poll-yielding every pass: the child
+         * wakes us from sys_exit() on this channel the moment it turns
+         * into a zombie. Spurious wakeups (a sibling's exit on the
+         * "any child" channel) are harmless — the loop just re-scans. */
+        uint32_t chan = (pid == -1)
+                            ? WAIT_ZOMBIE_ANY
+                            : wait_chan_of_child(static_cast<int>(pid));
+        sleep_on(chan, 0);
         /* resumed by the scheduler → loop and look for a zombie again */
     }
 }
@@ -1016,6 +1037,65 @@ void yield_current()
     switch_to_scheduler(true);
 }
 
+/* --- Common wait mechanism (see vnu/process.h) ------------------------
+ * All block/wake transitions happen inside cli'd syscall handlers on a
+ * single CPU, so checking a predicate and registering the block in
+ * sleep_on() is atomic w.r.t. wakeup() producers — no lost wakeups. */
+
+uint32_t now_jiffies()
+{
+    return g_jiffies;
+}
+
+void sleep_on(uint32_t chan, uint32_t until_jiffies)
+{
+    Process& p = table[current_idx];
+    if (!p.coro) /* legacy one-way path: no scheduler to come back to */
+        return;
+    p.state = State::Blocked;
+    p.wait_chan = chan;
+    p.sleep_until = until_jiffies;
+    yield_current();
+    /* Woken (by wakeup() or the deadline scan): back inside this syscall
+     * handler; drop the stale wait bookkeeping and let the caller's
+     * re-check loop decide whether to wait again. */
+    p.wait_chan = 0;
+    p.sleep_until = 0;
+}
+
+void wakeup(uint32_t chan)
+{
+    for (int i = 1; i < MAX_PROCS; ++i) {
+        Process& p = table[i];
+        if (p.state == State::Blocked && p.wait_chan == chan) {
+            p.state = State::Runnable;
+            p.wait_chan = 0;
+            p.sleep_until = 0;
+        }
+    }
+}
+
+void wakeup_one(uint32_t chan)
+{
+    for (int i = 1; i < MAX_PROCS; ++i) {
+        Process& p = table[i];
+        if (p.state == State::Blocked && p.wait_chan == chan) {
+            p.state = State::Runnable;
+            p.wait_chan = 0;
+            p.sleep_until = 0;
+            return;
+        }
+    }
+}
+
+int sys_sleep(uint32_t ms)
+{
+    if (!table[current_idx].coro)
+        return -VNU_EAGAIN; /* windowed/legacy: no scheduler to wait on */
+    sleep_ms(ms);
+    return 0;
+}
+
 /* PIT IRQ0 entry (see ctxswitch.s's vnu_timer_isr). Returns 0 when the
  * tick must not switch (scheduler itself running, or nothing else to
  * run); on a real preemption it parks the CURRENT process — full
@@ -1023,6 +1103,9 @@ void yield_current()
  * the scheduler coroutine, so the return is never reached. */
 extern "C" uint32_t vnu_timer_tick(uint32_t frame_esp)
 {
+    /* The scheduler clock: every IRQ0 advances jiffies, whether or not
+     * this tick preempts anyone (it is what wakes timed sleepers). */
+    ++g_jiffies;
     if (current_idx == 0)
         return 0;
     Process& cur = table[current_idx];
@@ -1105,6 +1188,28 @@ int run_scheduler(const char* primary, const char* fallback)
 
     for (;;) {
         current_idx = 0;
+
+        /* Park the CPU until the next PIT tick (100 Hz) before every
+         * scheduling pass. IRQ0 is what advances g_jiffies — the clock
+         * timed sleepers and mutex waiters are woken from — and the
+         * scheduler spends its time between processes with interrupts
+         * off, so without this window the tick is rarely ever taken
+         * and a sleeping process can wait forever while the machine
+         * spins. hlt() returns immediately when the tick is already
+         * pending, so a busy pass costs nothing. */
+        asm volatile("sti; hlt; cli");
+
+        /* Wake timed sleepers whose deadline has passed (the 100 Hz
+         * jiffies clock advanced while they were parked). Signed
+         * compare handles the 32-bit tick counter wrapping. */
+        for (int i = 1; i < MAX_PROCS; ++i) {
+            Process& p = table[i];
+            if (p.state == State::Blocked && p.sleep_until &&
+                (static_cast<int32_t>(g_jiffies - p.sleep_until) >= 0)) {
+                p.state = State::Runnable;
+                p.sleep_until = 0;
+            }
+        }
 
         if (init_slot < 0 || table[init_slot].state == State::Unused) {
             /* A previous session may have left a redirection (> file) on

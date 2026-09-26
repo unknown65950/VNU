@@ -487,6 +487,11 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
         /* Monotonic-ish uptime (RTC delta, 1 s resolution). */
         return static_cast<std::uint32_t>(vnu::vfs::uptime_seconds());
 
+    case VNU_SYS_sleep:
+        /* Block for ebx milliseconds on the PIT clock (100 Hz jiffies);
+         * see vnu::proc::sys_sleep. */
+        return static_cast<std::uint32_t>(vnu::proc::sys_sleep(tf->ebx));
+
     case VNU_SYS_ping:
         /* RTT to an IPv4 address (ebx, big-endian uint32); ecx is the
          * timeout in ms. Returns RTT ms or -VNU_EHOSTUNREACH/-VNU_ETIMEDOUT. */

@@ -120,6 +120,7 @@ build_vlibc() {
         src/unistd/fork.c src/unistd/execve.c
         src/unistd/waitpid.c src/unistd/pipe.c src/unistd/dup.c src/unistd/kill.c
         src/unistd/mkdir.c src/unistd/stat.c
+        src/unistd/usleep.c
         src/unistd/getppid.c src/unistd/isatty.c
         src/unistd/spawn.c
         src/dirent/dirent.c

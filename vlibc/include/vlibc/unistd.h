@@ -35,6 +35,11 @@ int kill(int pid, int sig);
 unsigned long getppid(void);
 /* 1 if fd refers to a terminal (stdio, /dev/tty, /dev/console), else 0. */
 int isatty(int fd);
+/* Sleep for usec/seconds. Blocks on the PIT clock (see SYS_sleep);
+ * returns 0 on success (after the full interval). Milliseconds are
+ * exposed by usleep() so sub-second intervals stay accurate. */
+int usleep(unsigned long usec);
+unsigned int sleep(unsigned int seconds);
 /* Start `path` as a new process in parallel with the caller (cooperative
  * scheduler) and return its pid, or a negative error. Does not replace
  * the caller. */

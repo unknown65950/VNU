@@ -134,6 +134,7 @@ add_executable(kernel.elf
     proc/mboot.cpp
     proc/switch.s
     proc/ctxswitch.s
+    sync/locking.cpp
 )
 add_dependencies(kernel.elf install_blobs)
 

@@ -40,6 +40,7 @@ set(VLIBC_SOURCES
     src/unistd/getcwd.c
     src/unistd/fork.c
     src/unistd/execve.c
+    src/unistd/usleep.c
     src/stdio/putchar.c
     src/stdio/puts.c
     src/stdio/printf.c

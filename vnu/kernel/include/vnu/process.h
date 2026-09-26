@@ -8,7 +8,7 @@ constexpr int MAX_PROCS = 8;
 constexpr uint32_t USER_STACK_BASE = 0x00600000;
 constexpr uint32_t USER_STACK_SIZE = 0x10000;
 
-enum class State : uint8_t { Unused=0, Runnable, Running, Zombie };
+enum class State : uint8_t { Unused=0, Runnable, Running, Blocked, Zombie };
 
 struct Registers {
     uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
@@ -40,6 +40,11 @@ struct Process {
                         // must resume it with popad+iretd rather than the
                         // cooperative yield's callee-saved switch (see
                         // kernel/proc/ctxswitch.s)
+    uint32_t wait_chan;   // event wait channel while Blocked (0 = none);
+                          // a wakeup(chan) call marks the process Runnable
+    uint32_t sleep_until; // jiffies deadline while Blocked (0 = no timed
+                          // wake); the scheduler wakes the process when
+                          // now_jiffies() passes it
     uint32_t coro_esp;  // suspended stack pointer (switch frame, or mid-
                         // syscall stack once blocked and resumed)
     uint32_t entry;     // ELF entry point, for the first-run trampoline
@@ -57,6 +62,10 @@ int sys_execve(Registers* trap, const char* path, char* const* argv);
 void sys_exit(int status);
 int sys_getpid();
 int sys_waitpid(int pid, int* status, int options);
+/* Sleep for `ms` milliseconds. Blocks the current coro process (the PIT
+ * timer runs it back at the deadline); returns -EAGAIN for the legacy
+ * one-way / windowed path that has no scheduler to come back to. */
+int sys_sleep(uint32_t ms);
 int sys_kill(int pid, int sig);
 /* User identity. uid 0 (root) bypasses VFS permission checks. setuid/
  * setgid are only allowed for root or to keep your own ids. */
@@ -80,6 +89,23 @@ bool can_yield();
  * control to the scheduler coroutine. The syscall handler that called
  * this resumes in place on the next scheduler pass over this process. */
 void yield_current();
+/* --- The common wait mechanism (locks, pipes, blocking I/O) ----------
+ * jiffies: 100 Hz tick counter advanced by the PIT IRQ0 handler.
+ * sleep_on() blocks the current coro process until wakeup() on `chan`
+ * runs OR the jiffies deadline `until_jiffies` passes (0 = event only).
+ * Woken waiters are made Runnable and the caller's loop re-checks its
+ * predicate — there are no lost wakeups on this single CPU because the
+ * entire check+sleep sequence runs under a cli'd syscall handler and
+ * wakeup() is only reachable from another process's syscall, which
+ * cannot run in the middle of it. Non-coro processes cannot block and
+ * return immediately. wakeup()/wakeup_one() are the interrupt-decoupled
+ * producers (any process may wake a sleeper). */
+uint32_t now_jiffies();
+inline uint32_t ms_to_jiffies(uint32_t ms) { return ms ? (ms + 9) / 10 : 0; }
+void sleep_on(uint32_t chan, uint32_t until_jiffies);
+void wakeup(uint32_t chan);
+void wakeup_one(uint32_t chan);
+inline void sleep_ms(uint32_t ms) { sleep_on(0, now_jiffies() + ms_to_jiffies(ms)); }
 /* Cooperative scheduler + init respawn loop. Enters the scheduler
  * coroutine (never returns on success): lazily spawns `primary` (or
  * `fallback` if that path isn't embedded), then round-robins one slice

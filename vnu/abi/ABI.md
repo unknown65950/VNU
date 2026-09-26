@@ -70,6 +70,7 @@ must never be renumbered.
 | 55 | audio_pause |
 | 56 | audio_reset |
 | 57 | dnd_declare |
+| 58 | sleep |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
@@ -95,6 +96,12 @@ with `-1` leaves a field unchanged; only root may chown.
   `time()` against a boot-time snapshot (so it wraps every local midnight;
   one-second resolution, no timer interrupt). Backs the analog-clock GUI
   apps' stopwatch/timer elapsed-time readings.
+- `sleep(ebx)` — blocks the calling scheduler-managed process for `ebx`
+  milliseconds on the PIT clock (100 Hz jiffies), letting other processes
+  run meanwhile; returns 0, or `-VNU_EAGAIN` on the legacy one-way /
+  windowed path that has no scheduler to come back to. Backs the kernel's
+  wakeup-based wait mechanism (`waitpid` blocking, future pipes/blocking
+  I/O) with a precise, timer-driven timeout.
 - `ping(ebx, ecx)` — `ebx` is the target IPv4 address as a
   big-endian uint32 (10.0.2.2 = `0x0A000202`), `ecx` the timeout in
   milliseconds (kernel clamps to 10..2000).
