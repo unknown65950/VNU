@@ -47,6 +47,8 @@ for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wc head tail grep sort cp mv basename dirname seq df ping; do
   "$VCC" "$ROOT/vnu/userspace/vibecoreutils/$c.c" -o "$ROOT/sysroot/bin/$c"
 done
+# the compiler itself (runs inside the guest and links against /lib).
+"$VCC" "$ROOT/vnu/userspace/vcc/vcc.c" -o "$ROOT/sysroot/bin/vcc"
 # account/install tools: one separate binary per command.
 for c in id whoami groups useradd passwd su install; do
   "$VCC" "$ROOT/vnu/userspace/usertools/$c.c" -o "$ROOT/sysroot/bin/$c"
@@ -77,6 +79,10 @@ embed "$ROOT/sysroot/bin/echoserver" echoserver
 embed "$ROOT/sysroot/bin/tlsserver" tlsserver
 embed "$ROOT/sysroot/bin/ttytest" ttytest
 embed "$ROOT/sysroot/bin/man" man
+embed "$ROOT/sysroot/bin/vcc" vcc
+# the guest compiler's link inputs (mounted as /lib/crt0.o, /lib/libvlibc.a).
+embed "$ROOT/sysroot/lib/crt0.o" lib_crt0
+embed "$ROOT/sysroot/lib/libvlibc.a" lib_vlibc
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wc head tail grep sort cp mv basename dirname seq df ping; do
   embed "$ROOT/sysroot/bin/$c" "$c"

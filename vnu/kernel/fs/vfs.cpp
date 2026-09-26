@@ -3,6 +3,8 @@
 #include <vnu/pmm.h>
 #include <vnu/process.h>
 #include <vnu/ata.h>
+#include "../proc/embedded_lib_crt0.h"
+#include "../proc/embedded_lib_vlibc.h"
 
 namespace {
 
@@ -16,7 +18,7 @@ constexpr int MAX_FD = 64;
  * runtime creates (/tmp/.session, redirections, ...) — an exhausted
  * table makes those add() calls return ENOSPC and shells lose their
  * session file. */
-constexpr int MAX_N = 128;
+constexpr int MAX_N = 1024;
 constexpr int PATH_CAP = 64;
 
 /* Which /proc file a node synthesizes, if any. Content is regenerated
@@ -627,6 +629,7 @@ void init()
     add("/bin/install", false);
     add("/bin/echoserver", false);
     add("/bin/tlsserver", false);
+    add("/bin/vcc", false);
     add("/tmp", true);
     auto* tmp = find_index("/tmp") >= 0 ? &nodes[find_index("/tmp")] : nullptr;
     if (tmp)
@@ -686,6 +689,17 @@ void init()
     add("/usr/bin", true);
     add("/var", true);
     add("/var/log", true);
+    /* --- /lib: the guest compiler's link inputs ---
+     * crt0.o and libvlibc.a, the exact archive the /bin/vcc guest build
+     * itself was linked against, so the in-VNU compiler links new
+     * programs against the same standard library bytes. */
+    add("/lib", true);
+    auto* lib_crt0 = add("/lib/crt0.o", false);
+    if (lib_crt0)
+        node_set(*lib_crt0, embedded_lib_crt0_elf, embedded_lib_crt0_elf_size);
+    auto* lib_vlibc = add("/lib/libvlibc.a", false);
+    if (lib_vlibc)
+        node_set(*lib_vlibc, embedded_lib_vlibc_elf, embedded_lib_vlibc_elf_size);
     add("/home", true);
     auto* root_home = add("/root", true);
     if (root_home)

@@ -3,6 +3,7 @@
 #include <vnu/abi.h>
 #include <vnu/paging.h>
 #include <vnu/vfs.h>
+#include <vnu/posix.h>
 #include "embedded_vash.h"
 #include "embedded_hello.h"
 #include "embedded_vedit.h"
@@ -43,11 +44,18 @@
 #include "embedded_tlsdemo.h"
 #include "embedded_echoserver.h"
 #include "embedded_tlsserver.h"
+#include "embedded_vcc.h"
 
 extern "C" void vnu_proc_switch(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_proc_trampoline();
 extern "C" uint32_t vnu_proc_pending_entry, vnu_proc_pending_stack;
 extern "C" uint32_t vnu_proc_new_pd, vnu_proc_old_pd;
+
+extern "C" void* vnu_kalloc(unsigned long n);
+extern "C" void vnu_kfree(void* p);
+
+/* Largest image the execve-from-VFS path will load (the app region cap). */
+constexpr uint32_t EXEC_FILE_CAP = 0x100000u;
 
 namespace {
 
@@ -107,9 +115,11 @@ const EmbeddedProg embedded[] = {
     {"/bin/tlsdemo", embedded_tlsdemo_elf, embedded_tlsdemo_elf_size},
     {"/bin/echoserver", embedded_echoserver_elf, embedded_echoserver_elf_size},
     {"/bin/tlsserver", embedded_tlsserver_elf, embedded_tlsserver_elf_size},
+    {"/bin/vcc", embedded_vcc_elf, embedded_vcc_elf_size},
     /* short names for convenience */
     {"hello", embedded_hello_elf, embedded_hello_elf_size},
     {"echo", embedded_echo_elf, embedded_echo_elf_size},
+    {"vcc", embedded_vcc_elf, embedded_vcc_elf_size},
     {nullptr, nullptr, 0},
 };
 
@@ -385,11 +395,13 @@ int sys_fork(Registers* trap)
     return child.pid;
 }
 
+/* How many 4 KiB pages does an ELF payload span in the app region,
+ * starting at 0x400000? */
+uint32_t elf_need_pages(const uint8_t* image, uint32_t size);
+
 int sys_execve(Registers* trap, const char* path, char* const* argv)
 {
     const EmbeddedProg* prog = find_embedded(path);
-    if (!prog)
-        return -VNU_ENOENT;
 
     /* Snapshot argv strings BEFORE load() overwrites userspace at 0x400000. */
     char arg_store[8][96];
@@ -424,7 +436,55 @@ int sys_execve(Registers* trap, const char* path, char* const* argv)
         path_copy[j] = 0;
     }
 
-    uint32_t entry = vnu::elf::load(prog->data, prog->size);
+    /* execve of a real VFS file — a guest-compiled binary, for example.
+     * Read it into a kernel staging buffer (grown into the process's
+     * app region first if the new image is bigger than the old one),
+     * then load it in place just like the embedded path. */
+    uint8_t* image = nullptr;
+    uint32_t size = 0;
+    if (!prog) {
+        int fd = vnu::vfs::open(path, static_cast<int>(vnu::posix::O_RDONLY));
+        if (fd < 0)
+            return -VNU_ENOENT;
+        image = static_cast<uint8_t*>(vnu_kalloc(EXEC_FILE_CAP));
+        if (!image) {
+            vnu::vfs::close(fd);
+            return -VNU_ENOMEM;
+        }
+        uint32_t n = 0;
+        for (;;) {
+            int r = vnu::vfs::read(fd, image + n, EXEC_FILE_CAP - n);
+            if (r <= 0)
+                break;
+            n += static_cast<uint32_t>(r);
+            if (n >= EXEC_FILE_CAP)
+                break;
+        }
+        vnu::vfs::close(fd);
+        if (n < sizeof(vnu::elf::Ehdr)) {
+            vnu_kfree(image);
+            return -VNU_ENOEXEC;
+        }
+        size = n;
+        Process& cp = table[current_idx];
+        uint32_t need = elf_need_pages(image, size);
+        if (cp.pgdir_phys && need > cp.app_pages) {
+            if (!vnu::paging::extend_address_space(
+                    cp.pgdir_phys,
+                    0x400000u + cp.app_pages * vnu::paging::PAGE_SIZE,
+                    need - cp.app_pages)) {
+                vnu_kfree(image);
+                return -VNU_ENOMEM;
+            }
+            cp.app_pages = need;
+        }
+    }
+
+    uint32_t entry;
+    if (prog)
+        entry = vnu::elf::load(prog->data, prog->size);
+    else
+        entry = vnu::elf::load(image, size);
     if (!entry)
         return -VNU_ENOEXEC;
 
@@ -753,8 +813,9 @@ int run_program_from_memory(const char* argv0_path, const uint8_t* data, uint32_
      * "graphics breaks"/only-one-app-at-a-time: two processes' virtual
      * 0x400000 (and heap, and stack) are physically different memory,
      * instead of all racing to use the same RAM. */
+    uint32_t app_pages = elf_need_pages(data, size);
     vnu::paging::MapRange ranges[3] = {
-        {0x00400000, 24},
+        {0x00400000, app_pages},
         {stack_base, USER_STACK_SIZE / vnu::paging::PAGE_SIZE},
         {BRK_MIN, (BRK_MAX - BRK_MIN) / vnu::paging::PAGE_SIZE},
     };
@@ -771,6 +832,7 @@ int run_program_from_memory(const char* argv0_path, const uint8_t* data, uint32_
     p.gid = table[current_idx].gid;
     p.pgdir_phys = pgdir;
     p.user_stack_top = stack_base + USER_STACK_SIZE;
+    p.app_pages = app_pages;
 
     table[0].state = State::Runnable;
     current_idx = slot;
@@ -845,6 +907,44 @@ int run_program(const char* path)
     return enter_program(path, 0);
 }
 
+/* How many 4 KiB pages does an ELF payload span in the app region,
+ * starting at 0x400000? Sized from the program headers so each process
+ * only maps as much as its image really needs (a guest C compiler needs
+ * a lot more than hello.c). The app region must stay below the user
+ * stack slots (USER_STACK_BASE), so the biggest useful image is
+ * (0x600000 - 0x400000) / 4K = 512 pages (2 MiB); beyond that the
+ * loader would fault in the .bss memset of load() (see elf.cpp). */
+uint32_t elf_need_pages(const uint8_t* image, uint32_t size)
+{
+    if (!image || size < sizeof(vnu::elf::Ehdr))
+        return 1;
+    auto* eh = reinterpret_cast<const vnu::elf::Ehdr*>(image);
+    if (eh->e_ident[0] != 0x7f || eh->e_ident[1] != 'E' ||
+        eh->e_ident[2] != 'L' || eh->e_ident[3] != 'F' || eh->e_type != 2)
+        return 1;
+    uint32_t top = 0;
+    for (uint16_t i = 0; i < eh->e_phnum; ++i) {
+        if (eh->e_phoff + static_cast<uint32_t>(i + 1) * eh->e_phentsize > size)
+            break;
+        auto* ph = reinterpret_cast<const vnu::elf::Phdr*>(
+            image + eh->e_phoff + i * eh->e_phentsize);
+        if (ph->p_type != vnu::elf::PT_LOAD)
+            continue;
+        uint32_t end = ph->p_vaddr + ph->p_memsz;
+        if (end > top)
+            top = end;
+    }
+    if (top <= 0x400000u)
+        return 1;
+    uint32_t pages = (top - 0x400000u + vnu::paging::PAGE_SIZE - 1) / vnu::paging::PAGE_SIZE;
+    /* Keep the image clear of the stack slots (USER_STACK_BASE) and, a
+     * fortiori, of the heap (0x700000). */
+    uint32_t max_app_pages = (USER_STACK_BASE - 0x400000u) / vnu::paging::PAGE_SIZE;
+    if (pages > max_app_pages)
+        pages = max_app_pages;
+    return pages;
+}
+
 int sys_spawn(const char* path)
 {
     int i = 0;
@@ -861,8 +961,9 @@ int sys_spawn(const char* path)
         return -VNU_ENOMEM;
 
     uint32_t stack_base = USER_STACK_BASE + static_cast<uint32_t>(slot * USER_STACK_SIZE);
+    uint32_t app_pages = elf_need_pages(prog->data, prog->size);
     vnu::paging::MapRange ranges[3] = {
-        {0x00400000, 24},
+        {0x00400000, app_pages},
         {stack_base, USER_STACK_SIZE / vnu::paging::PAGE_SIZE},
         {BRK_MIN, (BRK_MAX - BRK_MIN) / vnu::paging::PAGE_SIZE},
     };
@@ -894,6 +995,7 @@ int sys_spawn(const char* path)
     p.entry = entry;
     p.argv_esp = argv_esp;
     p.brk = BRK_MIN;
+    p.app_pages = app_pages;
     g_last_slot = slot;
     return p.pid;
 }
