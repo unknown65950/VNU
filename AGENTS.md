@@ -14,14 +14,33 @@ consistent.
   kernel via generated `vnu/kernel/proc/embedded_*.h`.
 
 ## Build
+Основной интерфейс — корневой `Makefile` (`make help` печатает все
+цели):
+```bash
+make doctor        # проверить инструменты на хосте
+make iso           # userspace + ядро -> vnu/vnu.iso
+make run           # QEMU с окном; make run-headless / run-gpu — варианты
+make vhd           # создать тестовый диск vnu/vnu.vhd
+make test          # автотесты в QEMU (tools/qemu_test.py)
+make clean         # сборочные каталоги; make distclean — всё пересобираемое
+```
+Makefile — тонкая обёртка над скриптами, сама логика сборки живёт в
+них, поэтому они тоже остаются рабочим путём:
 ```bash
 ./tools/build_userspace.sh   # compile userspace + regenerate embedded_*.h
 ./vnu/build_iso.sh           # cmake kernel build + grub-mkrescue -> vnu/vnu.iso
 ```
-`./vnu/build_iso.sh` (и `./vnu/run.sh`) сами запускают сборку
-userspace, если `vnu/kernel/proc/embedded_*.h` ещё не сгенерированы
-(свежий клон), так что с нуля достаточно одной команды
-`./vnu/build_iso.sh`.
+`./vnu/build_iso.sh` (и `./vnu/run.sh`, и `make iso`) сами запускают
+сборку userspace, если `vnu/kernel/proc/embedded_*.h` ещё не
+сгенерированы (свежий клон), так что с нуля достаточно одной команды
+`make iso`.
+
+## Tests
+`tools/qemu_test.py` загружает образ в QEMU без графики, печатает в гостя
+через QMP `sendkey` (драйвер клавиатуры читает PS/2, а не COM1) и
+проверяет вывод гостя. Новую проверку добавлять записью
+`(name, command, expected, forbidden)` в таблицу `SUITE` этого файла;
+цели — `make test`, `make test-gpu`, `make test-install`, `make test-all`.
 
 ## Rules
 - **Mandatory man pages.** Every user-visible command — vash builtins,

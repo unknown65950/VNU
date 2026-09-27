@@ -66,7 +66,8 @@ External `/bin/*` (each a standalone binary):
 
 ```
 AGENTS.md                       development rules (read this first)
-tools/                          vcc, v++, vld, build_userspace.sh
+tools/                          vcc, v++, vld, build_userspace.sh,
+                                qemu_test.py (guest test harness)
 vlibc/                          freestanding C library and its headers
 vnu/
 ├── kernel/                     the kernel (freestanding C++20, build/ via CMake)
@@ -84,6 +85,24 @@ sysroot/                        built userspace ELFs (built there)
 
 ## Build and run
 
+Everything is driven from the top-level `Makefile` (`make help` lists all
+targets):
+
+```bash
+make doctor        # check the host has everything needed
+make iso           # userspace + kernel + vnu/vnu.iso
+make run           # boot it in QEMU (window)
+make run-headless  # boot without graphics, serial console in this terminal
+make run-gpu       # window, but the desktop goes through virtio-gpu
+make vhd           # create the test disk vnu/vnu.vhd
+make test          # automated guest tests in QEMU
+make clean         # drop build dirs and stray objects
+```
+
+The Makefile is a thin front-end: the build itself still lives in
+`tools/build_userspace.sh` and `vnu/build_iso.sh`, so the plain script
+sequence below keeps working (and is what the Makefile calls).
+
 Dependencies (Debian/Ubuntu):
 
 ```bash
@@ -91,7 +110,7 @@ apt-get install -y build-essential cmake nasm gcc-multilib g++-multilib \
     qemu-system-x86 grub-pc-bin grub-common xorriso mtools
 ```
 
-Build and run:
+Build and run without make:
 
 ```bash
 ./tools/build_userspace.sh   # compile userspace + regenerate embedded_*.h
@@ -99,6 +118,10 @@ cd vnu && ./build_iso.sh      # cmake kernel build + grub-mkrescue -> vnu.iso
 ./run.sh                      # QEMU with a window
 ./run.sh --headless           # QEMU without graphics (output via serial)
 ```
+
+Note: `make run virtio-gpu` would ask make for *two* goals (QEMU would
+start twice), so variants have their own targets: `make run-gpu`,
+`make run-headless-gpu`, or `make run RUN_ARGS=virtio-gpu`.
 
 ### Cross-building on Termux (ARM/Android)
 
@@ -144,12 +167,26 @@ After boot: log in as `root`/`root` (guest `guest`/`guest`). Then `help`,
 
 ## Testing
 
-Automated tests drive QEMU headless: `qemu-system-i386 -cdrom vnu.iso -m 32
--display none -serial file:<log> -monitor none -qmp unix:<sock>,server,nowait`
-and send keystrokes via QMP `human-monitor-command sendkey`. Example
-harnesses live in `/tmp/opencode/` (multi-user 24/24, `man` 17/17, split
-binaries 36/36). Kernel output (and userspace fd1/fd2) is mirrored to COM1 —
-that is the serial log the assertions read.
+`tools/qemu_test.py` boots the ISO headless (`-serial file:<log>`,
+`-qmp unix:<sock>`), types into the guest through QMP
+`human-monitor-command sendkey` — the keyboard driver reads PS/2, not COM1,
+so a test has to press real keys — and asserts on what the session prints.
+Kernel output and userspace fd1/fd2 are mirrored to COM1, which is the log
+the assertions read.
+
+```bash
+make test                      # 37 cases: vnu, /proc, uname, coreutils, man
+make test-gpu                  # the same suite on a virtio-gpu display
+make test-install              # install 0 to a fresh disk, boot that disk,
+                               #   and check /proc/boot reports installed ata0
+make test-all                  # ISO + virtio-gpu + install in one go
+TEST_ARGS="--only vnu -v" make test      # filter cases, verbose
+./tools/qemu_test.py --list               # case names
+```
+
+The harness is the place for a new check: add a `(name, command, expected,
+forbidden)` entry to its `SUITE` table, where the patterns are regular
+expressions matched against the output of that one command.
 
 ## Development rules
 
