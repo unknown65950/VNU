@@ -16,15 +16,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Внимание: это НЕ настоящий кросс-компилятор. Мы используем обычный
-# хостовый g++ с флагом -m32 и freestanding-окружением — этого
-# достаточно для x86-ядра, пока мы не трогаем ничего из libc/host ABI.
-# Для "по-настоящему правильной" сборки в будущем стоит завести
-# отдельный toolchain i686-elf-gcc (см. wiki.osdev.org/GCC_Cross-Compiler).
+# Note: this is NOT a real cross-compiler. We use the ordinary host
+# g++ with -m32 and a freestanding environment, which is enough for an
+# x86 kernel as long as nothing of the libc/host ABI is touched. For a
+# "properly correct" build in the future it would be worth setting up a
+# separate i686-elf-gcc toolchain (see wiki.osdev.org/GCC_Cross-Compiler).
 #
-# На ARM/aarch64-хостах (например Termux) multilib gcc для -m32 нет;
-# там компилируем clang'ом под голый i386-триплет. Остальные флаги
-# (freestanding, запрет SSE/FPU и т.п.) общие для обоих путей.
+# On ARM/aarch64 hosts (Termux, say) there is no multilib gcc for -m32;
+# there we compile with clang against a bare i386 triple. The other flags
+# (freestanding, no SSE/FPU, ...) are shared by both paths.
 
 set(VNU_ARCH_FLAG -m32)
 set(VNU_KERNEL_LIBS -lgcc)
@@ -32,16 +32,16 @@ set(VNU_USING_CLANG_CROSS OFF)
 if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|armv8)")
     set(VNU_USING_CLANG_CROSS ON)
     set(VNU_ARCH_FLAG "-target" "i386-none-elf")
-    # Для голого i386 libgcc из хоста нет — если ядру понадобятся
-    # компiler-rt-подобные хелперы (udivdi3 и т.п.), они добавляются
-    # отдельным TU в runtime/ (runtime/libgcc_shim.cpp).
+    # A host libgcc has nothing for a bare i386 - if the kernel ever
+    # needs compiler-rt-like helpers (udivdi3 and friends) they are added
+    # as a separate TU under runtime/ (runtime/libgcc_shim.cpp).
     set(VNU_KERNEL_LIBS "")
-    # Termux'овский clang не имеет линкер-драйвера для «голого» i386
-    # (команда линковки сводится к /usr/bin/false), поэтому в режиме
-    # кросс-сборки линкуем напрямую ld.lld. <LINK_FLAGS> несёт только
-    # target_link_options ниже — глобальные -O2 -g от драйвера не нужны.
-    # Автогенерируемый CMake --dependency-file проскакивает как -Xlinker,
-    # чего ld.lld не понимает, так что эту фичу тоже отключаем.
+    # The Termux clang has no linker driver for a bare i386 (linking
+    # collapses to /usr/bin/false), so in cross mode we drive ld.lld
+    # directly. <LINK_FLAGS> then only carries the target_link_options
+    # below - the driver's global -O2 -g are not needed. CMake's
+    # auto-generated --dependency-file arrives as -Xlinker, which ld.lld
+    # does not understand, so that feature is disabled as well.
     find_program(VNU_LD_LLD ld.lld REQUIRED)
     set(CMAKE_CXX_LINK_EXECUTABLE
         "${VNU_LD_LLD} -m elf_i386 <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
@@ -145,9 +145,9 @@ target_compile_options(kernel.elf PRIVATE
 
 set_target_properties(kernel.elf PROPERTIES LINKER_LANGUAGE CXX)
 
-# В кросс-режиме (прямой ld.lld) флаги — только «настоящие» линкер-флаги;
-# в нативный ld через драйвер gcc опции-пробросы идут как -Wl,-T,...,
-# плюс там подцепляется хостовый libgcc.
+# In cross mode (ld.lld called directly) these are plain linker flags;
+# with the native gcc driver they become -Wl,-T,... pass-through options,
+# and the host libgcc is pulled in there as well.
 if(VNU_USING_CLANG_CROSS)
     target_link_options(kernel.elf PRIVATE
         -static

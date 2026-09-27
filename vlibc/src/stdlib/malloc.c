@@ -15,15 +15,15 @@ static Block* heap_start = NULL;
 void* malloc(unsigned long size) {
     if (size == 0) return NULL;
     
-    size = (size + 7) & ~7;  // Выравнивание до 8 байт
+    size = (size + 7) & ~7;  // round up to 8 bytes
     
-    // Если куча ещё не инициализирована
+    // if the heap is not up yet
     if (heap_start == NULL) {
-        // Получаем текущий break
+        // read the current break
         void* heap_end = (void*)syscall(SYS_brk, 0);
         if (heap_end == (void*)-1) return NULL;
         
-        // Запрашиваем 1MB
+        // ask for 1MB
         void* new_heap = (char*)heap_end + (1024 * 1024);
         void* result = (void*)syscall(SYS_brk, new_heap);
         if (result != new_heap) return NULL;
@@ -34,11 +34,11 @@ void* malloc(unsigned long size) {
         heap_start->free = 1;
     }
     
-    // Поиск свободного блока
+    // find a free block
     Block* current = heap_start;
     while (current) {
         if (current->free && current->size >= size) {
-            // Разбиваем блок если он большой
+            // split the block when it is too big
             if (current->size > size + BLOCK_SIZE + MIN_ALLOC) {
                 Block* new_block = (Block*)((char*)current + BLOCK_SIZE + size);
                 new_block->size = current->size - size - BLOCK_SIZE;

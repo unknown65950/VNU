@@ -1,6 +1,6 @@
-/* linker.ld — размещаем ядро по адресу 1 MiB, как ожидает Multiboot2. */
-/* Форма без BLOCK()/ALIGN(...)-в-адресной-экспрессии совместима и с
- * GNU ld, и с lld (Termux). */
+/* linker.ld — place the kernel at 1 MiB, as Multiboot2 expects. */
+/* The form without BLOCK()/an ALIGN() inside the address expression
+ * works with both GNU ld and lld (Termux). */
 
 ENTRY(_start)
 

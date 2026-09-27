@@ -1,35 +1,66 @@
-# VNU (Vibe's Not UNIX!) — kernel skeleton
+# VNU (Vibe's Not UNIX!) — the OS tree
 
-Минимальный, но по-настоящему рабочий скелет ядра: Multiboot2-заголовок,
-загрузка через GRUB, переход в 32-битный protected mode и код ядра на
-freestanding C++20, который печатает приветствие в VGA text mode и в
-serial-порт (COM1).
+Everything that ends up in a running VNU lives under this directory: the
+kernel, the userspace sources, the ABI description and the two scripts
+that build and launch the image. For the current feature set and the
+development rules, read the top-level `README.md` and `AGENTS.md`; this
+file describes how the pieces fit together.
 
-Это **проверено вживую** — собрано и загружено в QEMU в процессе
-подготовки этого скелета:
-
-```
-VNU (Vibe's Not UNIX!) booted.
-multiboot2 magic OK
-kernel is alive. halting.
-```
-
-## Структура
+## Layout
 
 ```
 vnu/
-├── kernel/
-│   ├── CMakeLists.txt          # сборка kernel.elf
-│   ├── linker.ld               # размещение ядра по адресу 1 MiB
-│   ├── arch/i386/boot/boot.s   # Multiboot2-заголовок + _start (NASM)
-│   └── kernel/kernel.cpp       # kernel_main: VGA + serial вывод
-├── iso/boot/grub/grub.cfg      # конфиг GRUB для ISO
-├── build_iso.sh                # cmake build + grub-mkrescue -> vnu.iso
-├── run.sh                      # запуск vnu.iso в QEMU
+├── kernel/                     the kernel: freestanding C++20, CMake build
+│   ├── CMakeLists.txt          builds kernel.elf
+│   ├── linker.ld               places the kernel at 1 MiB
+│   ├── arch/i386/boot/boot.s   Multiboot2 header + _start (NASM)
+│   ├── arch/i386/              GDT/IDT, PIC, paging, syscall entry
+│   ├── console/ drv/ mm/ proc/ gui/ install/ fs/
+│   ├── kernel/kernel.cpp       kernel_main: bring-up order
+│   └── proc/embedded_*.h       userspace ELFs embedded into kernel.elf
+├── userspace/                  sources compiled by tools/vcc
+│   ├── vash/                   the shell
+│   ├── vibecoreutils/          one .c per coreutils command
+│   ├── usertools/              id, whoami, su, install, ...
+│   ├── gui/                    desktop apps, picview, prefs, ...
+│   ├── editors/                vedit
+│   ├── man/                    the manual (self-contained, one binary)
+│   ├── vcc/                    the compiler that also runs inside VNU
+│   ├── vnu/                    system information (fetch/version/size)
+│   ├── examples/               hello, echoserver, tlsserver, ...
+│   └── rootfs/                 /etc, /root, /home shipped into the VFS
+├── abi/ABI.md                  the syscall ABI, one entry per call
+├── build_iso.sh                cmake build + grub-mkrescue -> vnu.iso
+├── run.sh                      launch vnu.iso in QEMU
 └── README.md
 ```
 
-## Зависимости (Ubuntu/Debian)
+## Build and run
+
+From the repository root, through the Makefile:
+
+```bash
+make doctor        # check the host has what it needs
+make iso           # userspace + kernel -> vnu/vnu.iso
+make run           # QEMU window
+make run-headless  # no graphics, serial console in the terminal
+make run-gpu       # the desktop on a virtio-gpu display
+make test          # automated guest tests (tools/qemu_test.py)
+```
+
+The scripts stay a working path of their own, and are what the Makefile
+calls:
+
+```bash
+./build_iso.sh     # cmake build + grub-mkrescue -> vnu.iso
+./run.sh           # launch in QEMU
+./run.sh --headless
+./run.sh --help
+```
+
+Ctrl+C or closing the QEMU window stops the emulation.
+
+## Dependencies (Ubuntu/Debian)
 
 ```bash
 apt-get install -y build-essential cmake nasm \
@@ -37,133 +68,49 @@ apt-get install -y build-essential cmake nasm \
     gcc-multilib g++-multilib
 ```
 
-`gcc-multilib`/`g++-multilib` нужны, чтобы обычный хостовый g++ на
-64-битной машине умел собирать 32-битный код (`-m32`). Это **не**
-настоящий кросс-компилятор — для x86-ядра на x86-хосте этого достаточно,
-пока код ядра не трогает ничего из host libc/ABI (см. предупреждение в
+`gcc-multilib`/`g++-multilib` let the ordinary 64-bit host g++ build
+32-bit code (`-m32`). This is **not** a real cross-compiler — it is enough
+for an x86 kernel on an x86 host as long as the kernel code touches
+nothing of the host libc/ABI (see the warning at the top of
 `kernel/CMakeLists.txt`).
 
-## Сборка и запуск
+## How a boot works
+
+1. GRUB finds the Multiboot2 header in `arch/i386/boot/boot.s` (magic
+   number, checksum, tags), switches the CPU into 32-bit protected mode
+   and jumps to `_start` with `eax` = the Multiboot2 magic and `ebx` =
+   pointer to the multiboot info.
+2. `_start` sets up a stack, zeroes `.bss` and calls
+   `kernel_main(magic, mbi)`.
+3. `kernel_main` brings the machine up in a fixed order — GDT, IDT, PIC
+   remap, paging, PMM, heap, console, drivers, VFS, processes — because
+   everything after the first `sti` assumes all of it is in place.
+4. The first user process is `/sbin/init` (an alias of `vash`), which
+   prints the login prompt and starts the session.
+5. The kernel also mirrors its output to COM1 (`0x3F8`), which is how
+   `make run-headless` and the test harness see the boot log.
+
+## The ABI
+
+`abi/ABI.md` is the source of truth: one entry per syscall, with the
+number, the arguments, the return value and the errno values, in append
+order. The numbers live in `kernel/include/vnu/abi.h` and are mirrored in
+`vlibc/include/vnu/abi.h`. A new syscall is not done until both headers
+and `ABI.md` carry it in the same change.
+
+## Manuals
+
+Every user-visible command has a manual page: the vash builtins, each
+coreutils binary, the usertools, the GUI apps, `vcc` and `vnu`. The
+`man` binary is self-contained (there is no `/usr/share/man` filesystem),
+so the pages live in the `pages[]` table in
+`userspace/man/man.c`. Read them with:
 
 ```bash
-./build_iso.sh        # соберёт kernel.elf и упакует в vnu.iso
-./run.sh               # запустит в QEMU с окном
-./run.sh --headless    # запустит без графики, вывод через serial в терминал
+man              # every documented command
+man ls           # one page
+man vash man su  # several at once
 ```
 
-Ctrl+C или закрытие окна QEMU останавливает эмуляцию (ядро уходит в `hlt`
-сразу после вывода приветствия — планировщика и обработки прерываний
-пока нет).
-
-## Как это работает
-
-1. GRUB находит Multiboot2-заголовок в `boot.s` (магическое число,
-   контрольная сумма, теги), переводит CPU в 32-битный protected mode
-   и прыгает на `_start` с `eax` = multiboot2 magic, `ebx` = указатель
-   на multiboot info.
-2. `_start` ставит стек и зовёт `kernel_main(magic, mbi)`.
-3. `kernel_main` инициализирует serial (UART 16550 на 0x3F8) и пишет
-   текст напрямую в VGA text buffer по адресу `0xB8000` — никакого
-   драйвера экрана, никакой libc, только memory-mapped I/O и `outb`/`inb`.
-
-## Дорожная карта (куда двигаться дальше)
-
-Разумный порядок наращивания — GDT/IDT сильно проще делать сразу после
-скелета, пока код маленький и всё под контролем:
-
-1. **GDT** — своя глобальная таблица дескрипторов вместо той, что
-   поставил GRUB (нужна для дальнейшего перехода в user mode).
-2. **IDT + обработчики исключений** — хотя бы page fault, GPF, double
-   fault с внятным сообщением вместо мгновенного reboot/triple fault.
-3. **PIC/PIT** — разрешить и обработать первое настоящее прерывание
-   (таймер), убедиться что `EOI` отправляется правильно.
-4. **Клавиатура через IRQ1** — первый ввод с реального железа/эмулятора.
-5. **Physical memory manager** (bitmap/free-list по данным Multiboot2
-   memory map) → **paging** → `kmalloc`.
-6. **Процессы**: переключение контекста, простой round-robin
-   планировщик, переход Ring 0 → Ring 3, syscalls.
-7. Только после этого имеет смысл портировать `vibecoreutils` —
-   `std::filesystem`/`std::thread` из текущей версии потребуют
-   реализовать под них системные вызовы (или проще: на первое время
-   переписать утилиты на голые syscalls типа `open`/`read`/`write`
-   без STL-тяжеловесов, будет проще натянуть на своё ядро).
-
-Каждый из этих шагов хорошо документирован на wiki.osdev.org — начать
-стоит со страниц "GDT Tutorial", "Interrupts Tutorial" и "Meaty Skeleton".
-
-## POSIX v0.1 + v0.2 foundation
-VNU now reserves a POSIX-oriented userspace boundary. ABI v1 (source of truth: `kernel/include/vnu/abi.h`, mirrored in `vlibc` and `abi/ABI.md`) currently exposes:
-
-| #  | call   |
-|----|--------|
-| 0  | read   |
-| 1  | write  |
-| 2  | open   |
-| 3  | close  |
-| 4  | exit   |
-| 5  | lseek  |
-| 6  | stat   |
-| 7  | fstat  |
-| 8  | brk    |
-| 9  | getpid |
-| 10 | chdir  |
-| 11 | getcwd |
-
-Unsupported calls return `-VNU_ENOSYS`. Numbers are append-only.
-
-The kernel contains an initial VFS/file-descriptor table with stdin/stdout/stderr reserved and dynamic descriptors starting at 3. `initialD` is the designated PID 1 init system. Its boot scripts live under `/etc/initialD/`; execution will be enabled with directory traversal and process syscalls.
-
-## Сборка
-```bash
-cd vnu          # или куда вы кладёте дерево
-rm -rf kernel/build
-./build_iso.sh
-./run.sh        # или ./run.sh --headless
-```
-
-## Host toolchain (vcc / vld)
-
-From the repository root (parent of `tools/` and `vlibc/`):
-
-```bash
-./tools/vcc vnu/userspace/examples/hello/hello.c -o hello
-file hello   # ELF 32-bit LSB executable
-```
-
-Inside the native console the names are reserved:
-
-```
-VNU> help
-VNU> vcc
-VNU> vld
-VNU> run /bin/hello
-```
-
-Full in-OS compile/run waits on process support and an ELF loader.
-
-## Unified system (kernel + vlibc userspace)
-
-Boot no longer stays in the native console by default. After GDT/IDT init the
-kernel starts **`/bin/vash`** (embedded ELF built with `vcc`/`vld`).
-
-```bash
-./tools/build_userspace.sh   # regenerates embedded_*.h
-cd vnu && ./build_iso.sh && ./run.sh
-```
-
-Inside `vash`: `help`, `echo`, `ls`, `hello`, `run /bin/hello`, `exit`.
-
-## Мануалы
-
-У каждой команды системы (builtins vash, отдельные coreutils-бинарники,
-usertools-бинарники для учёток и установки, самостоятельные программы)
-есть справочная страница. Просмотр — через `man`:
-
-```bash
-man              # список всех документированных команд
-man ls           # страница команды ls
-man vash man su  # несколько страниц сразу
-```
-
-Правило обязательности мануалов для новых команд описано в `AGENTS.md`
-в корне репозитория (и продублировано в `vnu/userspace/man/man.c`).
+The rule that makes a page mandatory is in `AGENTS.md` at the repository
+root, and is repeated in a comment at the top of `userspace/man/man.c`.

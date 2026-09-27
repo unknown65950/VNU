@@ -14,35 +14,44 @@ consistent.
   kernel via generated `vnu/kernel/proc/embedded_*.h`.
 
 ## Build
-Основной интерфейс — корневой `Makefile` (`make help` печатает все
-цели):
+The front-end is the top-level `Makefile` (`make help` lists every
+target):
 ```bash
-make doctor        # проверить инструменты на хосте
-make iso           # userspace + ядро -> vnu/vnu.iso
-make run           # QEMU с окном; make run-headless / run-gpu — варианты
-make vhd           # создать тестовый диск vnu/vnu.vhd
-make test          # автотесты в QEMU (tools/qemu_test.py)
-make clean         # сборочные каталоги; make distclean — всё пересобираемое
+make doctor        # check the host has the tools it needs
+make iso           # userspace + kernel -> vnu/vnu.iso
+make run           # QEMU with a window; make run-headless / run-gpu vary it
+make vhd           # create the test disk vnu/vnu.vhd
+make test          # automated guest tests in QEMU (tools/qemu_test.py)
+make clean         # drop build dirs; make distclean drops everything
 ```
-Makefile — тонкая обёртка над скриптами, сама логика сборки живёт в
-них, поэтому они тоже остаются рабочим путём:
+The Makefile is a thin front-end: the build logic still lives in the
+scripts, so they remain a working path of their own:
 ```bash
 ./tools/build_userspace.sh   # compile userspace + regenerate embedded_*.h
 ./vnu/build_iso.sh           # cmake kernel build + grub-mkrescue -> vnu/vnu.iso
 ```
-`./vnu/build_iso.sh` (и `./vnu/run.sh`, и `make iso`) сами запускают
-сборку userspace, если `vnu/kernel/proc/embedded_*.h` ещё не
-сгенерированы (свежий клон), так что с нуля достаточно одной команды
-`make iso`.
+`./vnu/build_iso.sh` (like `./vnu/run.sh` and `make iso`) starts the
+userspace build itself when `vnu/kernel/proc/embedded_*.h` are not
+generated yet (a fresh clone), so a single `make iso` is enough from
+scratch.
 
 ## Tests
-`tools/qemu_test.py` загружает образ в QEMU без графики, печатает в гостя
-через QMP `sendkey` (драйвер клавиатуры читает PS/2, а не COM1) и
-проверяет вывод гостя. Новую проверку добавлять записью
-`(name, command, expected, forbidden)` в таблицу `SUITE` этого файла;
-цели — `make test`, `make test-gpu`, `make test-install`, `make test-all`.
+`tools/qemu_test.py` boots the image in QEMU without graphics, types at
+the guest through QMP `sendkey` (the keyboard driver reads PS/2, not
+COM1) and asserts on what the guest prints. Add a new check as a
+`(name, command, expected, forbidden)` entry in that file's `SUITE`
+table; the targets are `make test`, `make test-gpu`, `make test-install`
+and `make test-all`.
 
 ## Rules
+- **Everything is written in English.** Source comments, commit messages,
+  documentation, man pages, script output, Makefile targets and the
+  text a program prints to the user — all of it in English, without
+  exception. This file and the README set the style: read them before
+  writing prose. A file that still carries text in another language is a
+  bug to be fixed in the same change that touches it; when you edit a
+  file, translate what is left of it. Identifiers, paths and
+  user-supplied data keep whatever form they have.
 - **Mandatory man pages.** Every user-visible command — vash builtins,
   each coreutils command (they are separate binaries under
   `vnu/userspace/vibecoreutils/`, one `.c` per command, not applets of a
@@ -97,8 +106,9 @@ Makefile — тонкая обёртка над скриптами, сама л�
   do not count as device access.
 - The kernel is freestanding C++20 (no exceptions/RTTI/STL) and may only
   include `<vnu/...>` headers. Userspace is C++17 with `vlibc` only.
-- Keep the style of the file you edit: comments in the language it
-  already uses, same indentation, no new dependencies.
+- Keep the style of the file you edit — same indentation, same comment
+  style, no new dependencies — except for the language, which is English
+  everywhere.
 - **Build outputs stay untracked.** `vnu/kernel/build/`, `vnu/vnu.iso`,
   `vnu/iso/`, `vnu/grub-seed/`, `vnu/.tmp_grub/`, `sysroot/` and
   `vnu/kernel/proc/embedded_*.h` are build artifacts and must never be

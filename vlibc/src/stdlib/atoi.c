@@ -4,7 +4,7 @@ int atoi(const char* str) {
     int result = 0;
     int sign = 1;
     
-    // Пропускаем пробелы
+    // skip leading whitespace
     while (*str == ' ' || *str == '\t') str++;
     
     if (*str == '-') {

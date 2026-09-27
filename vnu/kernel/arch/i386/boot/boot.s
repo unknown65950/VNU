@@ -1,8 +1,8 @@
-; boot.s — Multiboot2 header и точка входа ядра VNU.
+; boot.s — the Multiboot2 header and the VNU kernel entry point.
 ;
-; GRUB (или любой другой Multiboot2-совместимый загрузчик) находит
-; заголовок ниже, переводит процессор в 32-битный protected mode,
-; загружает наше ядро по адресу 1 МиБ и прыгает на _start.
+; GRUB (or any other Multiboot2-compatible loader) finds the header
+; below, switches the CPU into 32-bit protected mode, loads our kernel
+; at 1 MiB and jumps to _start.
 
 section .multiboot
 align 8
@@ -12,7 +12,7 @@ multiboot_header:
     dd multiboot_header_end - multiboot_header        ; header length
     dd -(0xE85250D6 + 0 + (multiboot_header_end - multiboot_header)) ; checksum
 
-    ; end tag (обязателен)
+    ; end tag (required)
     dw 0
     dw 0
     dd 8
@@ -21,7 +21,7 @@ multiboot_header_end:
 section .bss
 align 16
 stack_bottom:
-    resb 16384                  ; 16 KiB стека ядра
+    resb 16384                  ; 16 KiB kernel stack
 stack_top:
 
 section .text
@@ -30,9 +30,9 @@ extern kernel_main
 extern __bss_start
 extern __bss_end
 _start:
-    ; GRUB передаёт:
+    ; GRUB passes in:
     ;   eax = 0x36d76289 (multiboot2 magic)
-    ;   ebx = указатель на multiboot info struct
+    ;   ebx = pointer to the multiboot info struct
     ;
     ; .bss relocated to 0x00A00000 (see linker.ld) and is not loaded from
     ; the file, so zero it explicitly. rep stosb clobbers eax/edi/ecx and

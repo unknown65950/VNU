@@ -406,8 +406,8 @@ memory contents.)
 - GUI: `hello` and `vedit` in their windows (fourth drop's wintask
   path) — unaffected, still clean.
 - **`term` launched from the GUI — no longer crashes.** This was the
-  original bug report ("ломается графика при запуске демо
-  приложений"): `term` runs the classic full-screen hand-off with a
+  original bug report ("the graphics break when the demo
+  applications start"): `term` runs the classic full-screen hand-off with a
   real private address space now, comes back cleanly, and the shell
   keeps working afterward (`echo term_ok` succeeds post-launch).
 - Multiple `term` launches in sequence, interleaved with shell

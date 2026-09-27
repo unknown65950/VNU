@@ -3,5 +3,5 @@
 
 void exit(int status) {
     syscall(SYS_exit, status);
-    // Никогда не возвращаемся
+    // never returns
 }

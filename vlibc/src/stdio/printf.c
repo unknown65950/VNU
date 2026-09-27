@@ -9,16 +9,16 @@ static void print_hex(unsigned long num) {
     putchar(hex[num % 16]);
 }
 
-// Печатает беззнаковое число в десятичной системе.
+// Prints an unsigned number in base 10.
 //
-// Раньше здесь (в теле %d) была ошибка на единицу: указатель pos
-// сдвигался на один байт ПОСЛЕ записи последней (старшей) цифры,
-// а write() всё равно начинал читать именно с pos — то есть с байта
-// перед началом буфера. На практике это читало случайный мусор со
-// стека вместо первой цифры (например, "42" превращалось в
-// "\0" + "4", теряя двойку). Здесь буфер заполняется с конца,
-// и pos в момент вызова write() всегда указывает ровно на первый
-// записанный символ.
+// There used to be an off-by-one here (in the %d body): pos was
+// advanced one byte AFTER the last (most significant) digit had been
+// written, while write() still started reading at pos - one byte
+// before the start of the buffer. In practice that read whatever
+// happened to sit on the stack instead of the first digit ("42"
+// became "\0" + "4", losing the 2). The buffer is filled from the
+// back here, so pos always points at the very first character written
+// by the time write() is called.
 static int print_unsigned(unsigned long num) {
     char buffer[24];
     char* pos = buffer + sizeof(buffer);
@@ -41,9 +41,9 @@ static int print_unsigned(unsigned long num) {
 static int print_signed(long num) {
     if (num < 0) {
         putchar('-');
-        // -num переполнился бы для LONG_MIN (нет положительного
-        // эквивалента в том же типе); вместо этого считаем модуль
-        // через (-(num+1))+1, что безопасно для любого num.
+        // -num would overflow for LONG_MIN (there is no positive
+        // equivalent in the same type), so the magnitude is computed as
+        // (-(num+1))+1, which is safe for any num.
         unsigned long magnitude = (unsigned long)(-(num + 1)) + 1UL;
         return 1 + print_unsigned(magnitude);
     }
@@ -63,8 +63,8 @@ int vprintf(const char* format, va_list args) {
 
         p++;
 
-        // Модификатор длины 'l' (нужен для %ld/%lu — используется,
-        // например, в getpid()/getuid(), которые возвращают
+        // The 'l' length modifier (needed by %ld/%lu - used, for
+        // example, by getpid()/getuid(), which return
         // unsigned long).
         int is_long = 0;
         if (*p == 'l') {
@@ -99,7 +99,7 @@ int vprintf(const char* format, va_list args) {
                     ? va_arg(args, unsigned long)
                     : (unsigned long)va_arg(args, unsigned int);
                 print_hex(num);
-                count += 8; // приблизительно — точную длину print_hex пока не возвращает
+                count += 8; // approximate - print_hex does not report its exact length yet
                 break;
             }
             case 'c': {

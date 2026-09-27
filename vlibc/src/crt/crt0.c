@@ -1,23 +1,22 @@
-// Точка входа для программ (x86_64, Linux).
+// The entry point for programs (x86_64, Linux).
 //
-// Важно: _start НЕ может быть обычной C-функцией. Компилятор
-// вставляет в неё пролог (push %rbp; mov %rsp,%rbp; sub $N,%rsp
-// под локальные переменные), и к моменту выполнения нашего кода
-// %rsp уже не указывает на то, что реально положило ядро при
-// запуске процесса. Раньше здесь была именно такая ошибка: argc
-// читался из собственного стек-фрейма _start, а не из данных ядра —
-// в лучшем случае мусор, в худшем сегфолт.
+// Important: _start must NOT be an ordinary C function. The compiler
+// puts a prologue in it (push %rbp; mov %rsp,%rbp; sub $N,%rsp for
+// locals), so by the time our code runs %rsp no longer points at what
+// the kernel put there when the process started. That was exactly the
+// bug once: argc was read out of _start's own stack frame instead of
+// the kernel's data - garbage at best, a segfault at worst.
 //
-// Правильная схема (как в musl/glibc): голая asm-заглушка забирает
-// "сырой" %rsp ДО какого-либо пролога и передаёт его как обычный
-// аргумент в маленькую C-функцию.
+// The correct scheme (as in musl/glibc): a naked asm stub grabs the
+// "raw" %rsp BEFORE any prologue and passes it as an ordinary argument
+// to a small C function.
 #include <stddef.h>
 #include <vlibc/unistd.h>
 
-// Внешняя функция main
+// The user-facing main
 extern int main(int argc, char** argv, char** envp);
 
-// При старте процесса на x86_64 Linux стек выглядит так:
+// At process start on x86_64 Linux the stack looks like this:
 //   rsp -> [argc]
 //          [argv[0]]
 //          ...
@@ -40,9 +39,9 @@ void _start_c(long* stack) {
 __asm__(
     ".global _start\n"
     "_start:\n"
-    "   xor %ebp, %ebp\n"        // обнуляем rbp — конец цепочки стека для отладчиков
-    "   mov %rsp, %rdi\n"        // rdi = указатель на argc (первый аргумент _start_c)
-    "   and $-16, %rsp\n"        // выравниваем стек на 16 байт под SysV ABI
+    "   xor %ebp, %ebp\n"        // clear rbp - end of the frame chain for debuggers
+    "   mov %rsp, %rdi\n"        // rdi = pointer to argc (the first argument of _start_c)
+    "   and $-16, %rsp\n"        // align the stack to 16 bytes as the SysV ABI wants
     "   call _start_c\n"
-    "   hlt\n"                   // никогда не должны сюда попасть (_start_c зовёт exit)
+    "   hlt\n"                   // must never be reached (_start_c calls exit)
 );

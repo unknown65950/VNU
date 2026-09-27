@@ -16,7 +16,7 @@ REPO_DIR="$(cd "$ROOT_DIR/.." && pwd)"
 # the userspace build first; afterwards the headers exist and this step is
 # skipped, keeping incremental rebuilds fast.
 if ! ls "$ROOT_DIR"/kernel/proc/embedded_*.h >/dev/null 2>&1; then
-    echo "embedded_*.h не найдены, собираю userspace..."
+    echo "no embedded_*.h yet, building userspace..."
     bash "$REPO_DIR/tools/build_userspace.sh"
 fi
 
@@ -61,13 +61,13 @@ ensure_grub_seed() {
         return 0
     fi
     if [[ ! -f "$ROOT_DIR/vnu.iso" ]]; then
-        echo "Нет grub-mkrescue и нет vnu.iso, из которого можно извлечь GRUB-ready" >&2
-        echo "загрузочные файлы (eltorito.img + модули + efi.img)." >&2
-        echo "Варианты: собрать ISO один раз на машине с grub-mkrescue," >&2
-        echo "или положить готовый vnu.iso рядом с этим скриптом." >&2
+        echo "no grub-mkrescue and no vnu.iso to take the GRUB-ready boot" >&2
+        echo "files from (eltorito.img + modules + efi.img)." >&2
+        echo "Options: build the ISO once on a machine that has grub-mkrescue," >&2
+        echo "or drop a finished vnu.iso next to this script." >&2
         exit 1
     fi
-    echo "Извлекаю GRUB-блобы загрузки из vnu.iso -> $SEED_DIR ..."
+    echo "extracting the GRUB boot blobs from vnu.iso -> $SEED_DIR ..."
     rm -rf "$SEED_DIR"
     mkdir -p "$SEED_DIR"
     xorriso -osirrox on -indev "$ROOT_DIR/vnu.iso" \
@@ -107,4 +107,4 @@ if command -v grub-mkrescue >/dev/null 2>&1; then
 else
     build_iso_portable
 fi
-echo "Готово: $ROOT_DIR/vnu.iso"
+echo "done: $ROOT_DIR/vnu.iso"
