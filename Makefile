@@ -32,6 +32,7 @@ EMBEDDED := $(wildcard $(KERNEL_DIR)/proc/embedded_*.h)
 
 .PHONY: help all iso kernel userspace vhd \
         run run-headless run-gpu run-headless-gpu run-vhd run-headless-vhd \
+        run-installed run-headless-installed \
         test test-gpu test-install test-all \
         doctor size clean clean-vhd distclean
 
@@ -86,6 +87,12 @@ run-vhd: vhd ## boot in a window with the test disk vnu/vnu.vhd attached
 
 run-headless-vhd: vhd ## the same, with the serial console in this terminal
 	@./vnu/run.sh vhd --headless $(RUN_ARGS)
+
+run-installed: ## boot the installed disk alone, no ISO (see `vnu install`)
+	@./vnu/run.sh installed $(RUN_ARGS)
+
+run-headless-installed: ## the same, with the serial console in this terminal
+	@./vnu/run.sh installed --headless $(RUN_ARGS)
 
 vhd: ## create the test disk vnu/vnu.vhd (VHD_SIZE=size in MiB)
 	@if [ -f $(VHD) ]; then \

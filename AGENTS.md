@@ -20,6 +20,8 @@ target):
 make doctor        # check the host has the tools it needs
 make iso           # userspace + kernel -> vnu/vnu.iso
 make run           # QEMU with a window; make run-headless / run-gpu vary it
+make run-vhd       # boot the ISO with vnu/vnu.vhd attached, to install onto it
+make run-installed # boot that disk alone, no ISO (what `vnu install` produced)
 make vhd           # create the test disk vnu/vnu.vhd
 make test          # automated guest tests in QEMU (tools/qemu_test.py)
 make clean         # drop build dirs; make distclean drops everything

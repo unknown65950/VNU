@@ -96,6 +96,8 @@ make run           # boot it in QEMU (window)
 make run-headless  # boot without graphics, serial console in this terminal
 make run-gpu       # window, but the desktop goes through virtio-gpu
 make vhd           # create the test disk vnu/vnu.vhd
+make run-vhd       # boot the ISO with vnu.vhd attached, ready to install
+make run-installed # boot that disk on its own, no ISO (after `vnu install`)
 make test          # automated guest tests in QEMU
 make clean         # drop build dirs and stray objects
 ```

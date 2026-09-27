@@ -55,6 +55,8 @@ calls:
 ./build_iso.sh     # cmake build + grub-mkrescue -> vnu.iso
 ./run.sh           # launch in QEMU
 ./run.sh --headless
+./run.sh vhd       # boot the ISO with vnu.vhd attached (to install onto it)
+./run.sh installed # boot vnu.vhd on its own, no ISO
 ./run.sh --help
 ```
 
