@@ -13,6 +13,7 @@
 #include <vlibc/string.h>
 #include <vlibc/unistd.h>
 #include <vlibc/fcntl.h>
+#include "vcc_version.h"
 
 #ifndef VCC_NOMAIN
 #define MAIN main
@@ -5549,7 +5550,13 @@ int MAIN(int argc, char** argv)
     }
     for (i = 1; i < argc; i++) {
         const char* a = argv[i];
-        if (a[0] == '-' && a[1] == 'o' && a[2] == 0) {
+        if (strcmp(a, "--version") == 0) {
+            printf("vcc (VNU) " VCC_VERSION "\n");
+            return 0;
+        } else if (strcmp(a, "--help") == 0) {
+            printf("usage: vcc [-c] [-o out] [-I dir] file.c [file.o] [lib.a]\n");
+            return 0;
+        } else if (a[0] == '-' && a[1] == 'o' && a[2] == 0) {
             if (i + 1 < argc)
                 outpath2 = argv[++i];
         } else if (a[0] == '-' && a[1] == 'c' && a[2] == 0) {

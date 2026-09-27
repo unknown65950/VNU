@@ -132,6 +132,7 @@ add_executable(kernel.elf
     proc/elf.cpp
     proc/process.cpp
     proc/mboot.cpp
+    proc/images.cpp
     proc/switch.s
     proc/ctxswitch.s
     sync/locking.cpp
@@ -166,4 +167,13 @@ endif()
 target_include_directories(kernel.elf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${INSTALL_BLOB_DIR}
+)
+
+# One build stamp for the whole kernel, fixed at configure time.
+# __DATE__/__TIME__ are per translation unit, so a plain macro would make
+# `uname` report one time and /proc/version another; every TU of this
+# build instead gets the same "yyyy-mm-dd HH:MM:SS" string.
+string(TIMESTAMP VNU_BUILD_STAMP "%Y-%m-%d %H:%M:%S")
+target_compile_definitions(kernel.elf PRIVATE
+    VNU_BUILD_STAMP="${VNU_BUILD_STAMP}"
 )

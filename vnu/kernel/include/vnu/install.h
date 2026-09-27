@@ -20,4 +20,10 @@ namespace vnu::install {
 int disk_count();
 int install(int drive, uint32_t size_mib);
 
+// Index of the first ATA disk carrying a VNU install, or -1 when the
+// machine has none (a live CD session, or disks that are not ours).
+// Detection is by the FAT16 boot sector's OEM name, so it is a fact
+// about the disks rather than a guess; /proc/boot reports it.
+int installed_drive();
+
 } // namespace vnu::install

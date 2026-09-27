@@ -45,6 +45,28 @@ int disk_count()
     return vnu::ata::drive_count();
 }
 
+int installed_drive()
+{
+    /* One boot sector of scratch: we only look for the FAT16 OEM name
+     * the installer stamps into it ("VNUFS   "), never walk the volume.
+     * The freestanding kernel has no memcmp, hence the eight-byte
+     * compare by hand. */
+    uint8_t bs[512];
+    for (int d = 0; d < vnu::ata::drive_count(); ++d) {
+        if (!vnu::ata::read_sectors(d, PART_START, 1, bs))
+            continue;
+        const uint8_t* oem = bs + 3;
+        bool ours = true;
+        for (int i = 0; i < 8; ++i) {
+            if (oem[i] != static_cast<uint8_t>("VNUFS   "[i]))
+                ours = false;
+        }
+        if (ours)
+            return d;
+    }
+    return -1;
+}
+
 int install(int drive, uint32_t size_mib)
 {
     if (drive < 0 || drive >= vnu::ata::drive_count())

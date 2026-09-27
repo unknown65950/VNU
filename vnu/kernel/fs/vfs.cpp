@@ -1,6 +1,12 @@
 #include <vnu/vfs.h>
 #include <vnu/abi.h>
+#include <vnu/version.h>
 #include <vnu/pmm.h>
+#include <vnu/images.h>
+#include <vnu/vga_gfx.h>
+#include <vnu/virtio_gpu.h>
+#include <vnu/install.h>
+#include <vnu/mboot.h>
 #include <vnu/process.h>
 #include <vnu/ata.h>
 #include "../proc/embedded_lib_crt0.h"
@@ -25,7 +31,7 @@ constexpr int PATH_CAP = 64;
  * on every open() rather than stored, so a reader always sees current
  * values; the generated text lands in the node's normal data buffer so
  * read()/lseek() work on it unchanged. */
-enum class SynthKind : uint8_t { None = 0, Version, CpuInfo, MemInfo, SelfStatus, Mounts, Uptime, Disks, DfStat };
+enum class SynthKind : uint8_t { None = 0, Version, CpuInfo, MemInfo, SelfStatus, Mounts, Uptime, Disks, DfStat, Images, Gfx, Boot };
 
 struct Node {
     bool used;
@@ -411,7 +417,13 @@ void regen_synth(Node& n)
     Appender a{tmp, sizeof(tmp), 0};
     switch (n.synth) {
     case SynthKind::Version:
-        a.str("VNU version 0.5 (vibe) i386\n");
+        /* One `key value` fact per line, all from vnu/version.h, so a
+         * program can pick the field it needs (and a human can read
+         * the lot) instead of scraping a single fat line. */
+        a.str("version " VNU_VERSION " (" VNU_CODENAME ") " VNU_ARCH "\n");
+        a.str("kernel " VNU_KERNEL_VERSION "\n");
+        a.str("abi " VNU_STRINGIFY(VNU_ABI_VERSION) "\n");
+        a.str("built " VNU_BUILD_STAMP "\n");
         break;
     case SynthKind::CpuInfo: {
         char vendor[13];
@@ -433,9 +445,17 @@ void regen_synth(Node& n)
         break;
     }
     case SynthKind::MemInfo: {
+        /* MemTotal is what the machine really has, from the boot
+         * loader's memory map (falling back to the pool when the
+         * loader passed none). MemFree/MemUsed and PoolTotal describe
+         * the frames the allocator actually hands out, which is a
+         * slice of MemTotal — both facts, clearly named apart. */
         uint32_t total = vnu::pmm::total_frames();
         uint32_t freef = vnu::pmm::free_frames();
+        uint32_t ram = vnu::mboot::ram_bytes();
         a.str("MemTotal:       ");
+        a.num((ram ? ram / 1024 : total * 4));
+        a.str(" kB\nPoolTotal:      ");
         a.num(total * 4);
         a.str(" kB\nMemFree:        ");
         a.num(freef * 4);
@@ -446,7 +466,9 @@ void regen_synth(Node& n)
     }
     case SynthKind::SelfStatus: {
         auto* p = vnu::proc::current();
-        a.str("Name:\tvnu-process\nPid:\t");
+        a.str("Name:\t");
+        a.str(p && p->name[0] ? p->name : "?");
+        a.str("\nPid:\t");
         a.num(p ? static_cast<uint32_t>(p->pid) : 0);
         a.str("\nPPid:\t");
         a.num(p ? static_cast<uint32_t>(p->ppid) : 0);
@@ -504,6 +526,61 @@ void regen_synth(Node& n)
         a.str(".00 ");
         a.num(delta);
         a.str(".00\n");
+        break;
+    }
+    case SynthKind::Images: {
+        /* Byte accounting of the running image: the kernel as the boot
+         * loader handed it over, plus every embedded blob grouped by
+         * kind. `vnu size` prints exactly these lines. */
+        static const char* labels[] = {
+            "kernel", "userspace", "libraries", "fonts", "resources",
+        };
+        vnu::images::Sizes s = vnu::images::collect();
+        for (int i = 0; i < static_cast<int>(vnu::images::Count); ++i) {
+            a.str(labels[i]);
+            a.str("\t");
+            a.num(s.bytes[i]);
+            a.str("\t");
+            a.num(s.files[i]);
+            a.str("\n");
+        }
+        a.str("total\t");
+        a.num(s.total_bytes());
+        a.str("\t");
+        a.num(s.total_files());
+        a.str("\n");
+        break;
+    }
+    case SynthKind::Gfx:
+        /* The display in use: the 8-bit VGA framebuffer unless a
+         * virtio-gpu/virtio-vga device took over, plus the mode the
+         * driver programs. */
+        a.str("driver\t");
+        a.str(vnu::virtio_gpu::active() ? "virtio-gpu" : "vga");
+        a.str("\nresolution\t");
+        a.num(static_cast<uint32_t>(vnu::vgfx::WIDTH));
+        a.str("x");
+        a.num(static_cast<uint32_t>(vnu::vgfx::HEIGHT));
+        a.str("\nbpp\t8\n");
+        break;
+    case SynthKind::Boot: {
+        /* Whether this machine also has VNU on a disk. The root
+         * filesystem itself is always the in-RAM VFS; an install only
+         * means the disk can boot its own copy. */
+        int d = vnu::install::installed_drive();
+        a.str("rootfs\tvfs\n");
+        a.str("installed\t");
+        if (d >= 0) {
+            a.str("ata");
+            a.num(static_cast<uint32_t>(d));
+        } else {
+            a.str("none");
+        }
+        a.str("\n");
+        char shell[16];
+        a.str("shell\t");
+        a.str(vnu::proc::session_shell(shell, sizeof(shell)) == 0 ? shell : "none");
+        a.str("\n");
         break;
     }
     case SynthKind::None:
@@ -630,6 +707,7 @@ void init()
     add("/bin/echoserver", false);
     add("/bin/tlsserver", false);
     add("/bin/vcc", false);
+    add("/bin/vnu", false);
     add("/tmp", true);
     auto* tmp = find_index("/tmp") >= 0 ? &nodes[find_index("/tmp")] : nullptr;
     if (tmp)
@@ -681,6 +759,9 @@ void init()
     add_synth("/proc/uptime", SynthKind::Uptime);
     add_synth("/proc/disks", SynthKind::Disks);
     add_synth("/proc/dfstat", SynthKind::DfStat);
+    add_synth("/proc/images", SynthKind::Images);
+    add_synth("/proc/gfx", SynthKind::Gfx);
+    add_synth("/proc/boot", SynthKind::Boot);
     add("/proc/self", true);
     add_synth("/proc/self/status", SynthKind::SelfStatus);
 
@@ -695,11 +776,15 @@ void init()
      * programs against the same standard library bytes. */
     add("/lib", true);
     auto* lib_crt0 = add("/lib/crt0.o", false);
-    if (lib_crt0)
+    if (lib_crt0) {
         node_set(*lib_crt0, embedded_lib_crt0_elf, embedded_lib_crt0_elf_size);
+        vnu::images::add(vnu::images::Libraries, embedded_lib_crt0_elf_size);
+    }
     auto* lib_vlibc = add("/lib/libvlibc.a", false);
-    if (lib_vlibc)
+    if (lib_vlibc) {
         node_set(*lib_vlibc, embedded_lib_vlibc_elf, embedded_lib_vlibc_elf_size);
+        vnu::images::add(vnu::images::Libraries, embedded_lib_vlibc_elf_size);
+    }
     add("/home", true);
     auto* root_home = add("/root", true);
     if (root_home)

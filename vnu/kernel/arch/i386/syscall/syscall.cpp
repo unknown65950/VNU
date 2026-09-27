@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <vnu/abi.h>
+#include <vnu/version.h>
 #include <vnu/vfs.h>
 #include <vnu/process.h>
 #include <vnu/kbd.h>
@@ -436,10 +437,11 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
         };
         cpy(u->sysname, "VNU");
         cpy(u->nodename, "vnu");
-        cpy(u->release, "0.5");
-        cpy(u->version, "vibe");
-        cpy(u->machine, "i386");
-        cpy(u->processor, "i386");
+        cpy(u->release, VNU_KERNEL_VERSION);
+        /* Release codename plus the build stamp, as in /proc/version. */
+        cpy(u->version, VNU_CODENAME " " VNU_BUILD_STAMP);
+        cpy(u->machine, VNU_ARCH);
+        cpy(u->processor, VNU_ARCH);
         cpy(u->hardware_platform, "pc");
         cpy(u->operating_system, "VNU");
         return 0;

@@ -2,6 +2,7 @@
 #include <vnu/vfs.h>
 #include <vnu/posix.h>
 #include <vnu/process.h>
+#include <vnu/images.h>
 #include <vnu/vga_gfx.h>
 
 #include "../proc/embedded_hello.h"
@@ -135,6 +136,7 @@ void install_demo_pics()
             continue;
         vnu::vfs::write(fd, p.data, p.size);
         vnu::vfs::close(fd);
+        vnu::images::add(vnu::images::Resources, p.size);
     }
 
     /* The desktop wallpaper lives at the VFS root, not under /pics, so
@@ -144,6 +146,7 @@ void install_demo_pics()
     if (wfd >= 0) {
         vnu::vfs::write(wfd, embedded_wallpaper_elf, embedded_wallpaper_elf_size);
         vnu::vfs::close(wfd);
+        vnu::images::add(vnu::images::Resources, embedded_wallpaper_elf_size);
     }
 }
 
@@ -172,6 +175,7 @@ void install_demo_sounds()
             continue;
         vnu::vfs::write(fd, c.data, c.size);
         vnu::vfs::close(fd);
+        vnu::images::add(vnu::images::Resources, c.size);
     }
 }
 

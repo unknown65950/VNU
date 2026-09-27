@@ -152,6 +152,8 @@ static int draw_memory(void)
             const char* lab = 0;
             if (!strcmp(key, "MemTotal"))
                 lab = "total";
+            else if (!strcmp(key, "PoolTotal"))
+                lab = "pool";
             else if (!strcmp(key, "MemFree"))
                 lab = "free";
             else if (!strcmp(key, "MemUsed"))

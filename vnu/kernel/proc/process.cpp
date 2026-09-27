@@ -1,5 +1,6 @@
 #include <vnu/process.h>
 #include <vnu/elf.h>
+#include <vnu/images.h>
 #include <vnu/abi.h>
 #include <vnu/paging.h>
 #include <vnu/vfs.h>
@@ -45,6 +46,7 @@
 #include "embedded_echoserver.h"
 #include "embedded_tlsserver.h"
 #include "embedded_vcc.h"
+#include "embedded_vnu.h"
 
 extern "C" void vnu_proc_switch(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_proc_trampoline();
@@ -119,12 +121,25 @@ const EmbeddedProg embedded[] = {
     {"/bin/echoserver", embedded_echoserver_elf, embedded_echoserver_elf_size},
     {"/bin/tlsserver", embedded_tlsserver_elf, embedded_tlsserver_elf_size},
     {"/bin/vcc", embedded_vcc_elf, embedded_vcc_elf_size},
+    {"/bin/vnu", embedded_vnu_elf, embedded_vnu_elf_size},
     /* short names for convenience */
     {"hello", embedded_hello_elf, embedded_hello_elf_size},
     {"echo", embedded_echo_elf, embedded_echo_elf_size},
     {"vcc", embedded_vcc_elf, embedded_vcc_elf_size},
     {nullptr, nullptr, 0},
 };
+
+/* Count every userspace program into the image accounting /proc/images
+ * reports. Only the canonical absolute paths are counted: the short
+ * aliases below are the very same ELF, and counting them twice would
+ * inflate the number. */
+void register_embedded_sizes()
+{
+    for (int i = 0; embedded[i].path; ++i) {
+        if (embedded[i].path[0] == '/')
+            vnu::images::add(vnu::images::Userspace, embedded[i].size);
+    }
+}
 
 const EmbeddedProg* find_embedded(const char* path)
 {
@@ -141,6 +156,47 @@ const EmbeddedProg* find_embedded(const char* path)
             return &embedded[i];
     }
     return nullptr;
+}
+
+/* Record argv[0]'s basename as the process name ("/bin/ls" -> "ls"), as
+ * /proc/self/status reports it. */
+void set_proc_name(vnu::proc::Process& p, const char* path)
+{
+    const char* base = path;
+    if (path) {
+        for (const char* s = path; *s; ++s) {
+            if (*s == '/')
+                base = s + 1;
+        }
+    }
+
+    /* Prefer the canonical name of the program over the name it was
+     * invoked under: /sbin/init, /bin/sh and /bin/vash are one binary
+     * (one embedded blob, listed under /bin/vash first), and every
+     * user of these names wants to be told "vash", not which alias
+     * happened to be used. */
+    const EmbeddedProg* prog = find_embedded(path);
+    if (prog) {
+        for (int i = 0; embedded[i].path; ++i) {
+            if (embedded[i].data == prog->data) {
+                base = embedded[i].path;
+                for (const char* s = base; *s; ++s) {
+                    if (*s == '/')
+                        base = s + 1;
+                }
+                break;
+            }
+        }
+    }
+
+    int i = 0;
+    for (; base && base[i] && i < static_cast<int>(sizeof(p.name)) - 1; ++i)
+        p.name[i] = base[i];
+    p.name[i] = 0;
+    if (i == 0) {
+        p.name[0] = '?';
+        p.name[1] = 0;
+    }
 }
 
 int alloc_slot()
@@ -357,6 +413,8 @@ void init()
      * parent of every boot-spawned init: uid 0 → init comes up as root. */
     table[0].uid = 0;
     table[0].gid = 0;
+    set_proc_name(table[0], "kernel");
+    register_embedded_sizes();
     current_idx = 0;
     next_pid = 1;
     console_session = false;
@@ -364,6 +422,49 @@ void init()
 
 int current_pid() { return table[current_idx].pid; }
 Process* current() { return &table[current_idx]; }
+/* The vash binary answers to several names (see the embedded table);
+ * whichever of them is running is the shell a user sits at. */
+static bool is_shell_name(const char* n)
+{
+    if (!n)
+        return false;
+    if (n[0] == 'v' && n[1] == 'a' && n[2] == 's' && n[3] == 'h' && !n[4])
+        return true;
+    if (n[0] == 'i' && n[1] == 'n' && n[2] == 'i' && n[3] == 't' && !n[4])
+        return true;
+    if (n[0] == 's' && n[1] == 'h' && !n[2])
+        return true;
+    return false;
+}
+
+int session_shell(char* out, int cap)
+{
+    if (cap < 2)
+        return -1;
+    out[0] = 0;
+
+    /* Walk the parent chain, closest ancestor first. */
+    Process* p = current();
+    for (int guard = 0; p && guard < MAX_PROCS; ++guard) {
+        if (is_shell_name(p->name)) {
+            int i = 0;
+            for (; p->name[i] && i < cap - 1; ++i)
+                out[i] = p->name[i];
+            out[i] = 0;
+            return 0;
+        }
+        Process* parent = nullptr;
+        for (int i = 0; i < MAX_PROCS; ++i) {
+            if (table[i].state != State::Unused && table[i].pid == p->ppid) {
+                parent = &table[i];
+                break;
+            }
+        }
+        p = parent;
+    }
+    return -1;
+}
+
 int sys_getpid() { return table[current_idx].pid; }
 
 uint32_t sys_getuid() { return table[current_idx].uid; }
@@ -857,6 +958,7 @@ int run_program_from_memory(const char* argv0_path, const uint8_t* data, uint32_
     p.pgdir_phys = pgdir;
     p.user_stack_top = stack_base + USER_STACK_SIZE;
     p.app_pages = app_pages;
+    set_proc_name(p, argv0_path);
 
     table[0].state = State::Runnable;
     current_idx = slot;
@@ -1020,6 +1122,7 @@ int sys_spawn(const char* path)
     p.argv_esp = argv_esp;
     p.brk = BRK_MIN;
     p.app_pages = app_pages;
+    set_proc_name(p, g_spawn_path);
     g_last_slot = slot;
     return p.pid;
 }

@@ -52,11 +52,22 @@ struct Process {
     uint32_t brk;       // per-process heap break (coro processes only,
                         // so parallel services don't stomp a shared g_brk)
     uint32_t app_pages; // pages mapped in the 0x400000 app region
+    /* argv[0] basename, as in /proc/self/status "Name:". Filled when the
+     * program starts (spawn or exec), so ps-like tools show which
+     * command a process actually runs instead of one global string. */
+    char name[16];
 };
 
 void init();
 int current_pid();
 Process* current();
+
+/* Name of the shell that started the session this process belongs to
+ * ("vash"): the closest ancestor running one of the shell aliases, as
+ * a NUL-terminated string written into `out` (max `cap` bytes).
+ * Returns 0 on success, -1 when the caller was not started by a shell
+ * (the kernel's own pid 0). */
+int session_shell(char* out, int cap);
 int sys_fork(Registers* trap);
 int sys_execve(Registers* trap, const char* path, char* const* argv);
 void sys_exit(int status);

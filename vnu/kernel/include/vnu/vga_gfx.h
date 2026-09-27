@@ -40,6 +40,11 @@ constexpr uint8_t COLOR_WHITE = 15;
 // Switch from whatever text mode GRUB set up into WIDTHxHEIGHTx256.
 // Captures the current font + full register state first so exit_to_text()
 // can restore the exact mode the console was in.
+// Bytes of glyph data this module keeps in the image (the 8x16 console
+// font captured from the VGA font plus the 8x8 variant derived from it),
+// for the /proc/images accounting.
+uint32_t font_bytes();
+
 void enter_gfx_mode();
 
 // Restore the text mode saved by enter_gfx_mode().

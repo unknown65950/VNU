@@ -49,6 +49,8 @@ for c in echo true false pwd cat ls mkdir rm touch uname clear \
 done
 # the compiler itself (runs inside the guest and links against /lib).
 "$VCC" "$ROOT/vnu/userspace/vcc/vcc.c" -o "$ROOT/sysroot/bin/vcc"
+# system information: what machine am I on (fetch/version/size).
+"$VCC" "$ROOT/vnu/userspace/vnu/vnu.c" -o "$ROOT/sysroot/bin/vnu"
 # account/install tools: one separate binary per command.
 for c in id whoami groups useradd passwd su install; do
   "$VCC" "$ROOT/vnu/userspace/usertools/$c.c" -o "$ROOT/sysroot/bin/$c"
@@ -80,6 +82,7 @@ embed "$ROOT/sysroot/bin/tlsserver" tlsserver
 embed "$ROOT/sysroot/bin/ttytest" ttytest
 embed "$ROOT/sysroot/bin/man" man
 embed "$ROOT/sysroot/bin/vcc" vcc
+embed "$ROOT/sysroot/bin/vnu" vnu
 # the guest compiler's link inputs (mounted as /lib/crt0.o, /lib/libvlibc.a).
 embed "$ROOT/sysroot/lib/crt0.o" lib_crt0
 embed "$ROOT/sysroot/lib/libvlibc.a" lib_vlibc

@@ -271,6 +271,14 @@ const uint8_t HILL_T[64] = {
 
 namespace vnu::vgfx {
 
+/* Both glyph tables are part of the image whether or not the VGA font
+ * was ever captured, so the size is reportable from the start (the
+ * kernel accounts for it at boot). */
+uint32_t font_bytes()
+{
+    return static_cast<uint32_t>(sizeof(g_font) + sizeof(g_font8));
+}
+
 void enter_gfx_mode()
 {
     if (!g_have_font)

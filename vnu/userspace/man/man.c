@@ -603,6 +603,8 @@ OPTIONS\n\
     -c            compile only, write the object file\n\
     -o out        output file (default a.o with -c, else a.out)\n\
     -I dir        add dir to the include search path\n\
+        --help    display this help and exit\n\
+        --version output version information and exit\n\
 \n\
 EXAMPLES\n\
     vcc -c hello.c -o hello.o\n\
@@ -615,6 +617,56 @@ FILES\n\
 \n\
 EXIT STATUS\n\
     0 on success, 1 on any compile, link or I/O error.\n"
+
+#define VNU_PAGE "NAME\n\
+    vnu - report what system you are running on\n\
+\n\
+SYNOPSIS\n\
+    vnu [COMMAND]...\n\
+\n\
+DESCRIPTION\n\
+    Prints a summary of the running system: its versions, how long it\n\
+    has been up, memory use, the shell and file system the session\n\
+    runs in, the display, and how much space each part of the system\n\
+    image takes.\n\
+\n\
+    Every value is read from the running system (uname(2), the /proc\n\
+    files listed below, and the size accounting in the kernel, so the\n\
+    output describes the machine you are on, not a built-in table.\n\
+    Nothing is written to disk and no other process is disturbed, so\n\
+    vnu is safe to run at any time, including from scripts.\n\
+\n\
+    With no COMMAND the usage summary is printed.\n\
+\n\
+COMMANDS\n\
+    fetch     overview of the running system: OS and kernel version,\n\
+              uptime, memory, shell, file system, display, compiler\n\
+              version and build date\n\
+    version   version block: OS, kernel, compiler, ABI version and\n\
+              build date\n\
+    size      image size per component (kernel, userspace, libraries,\n\
+              fonts, resources) with the number of objects in each\n\
+\n\
+    The remaining options are:\n\
+\n\
+        --help    display this help and exit\n\
+        --version output version information and exit\n\
+\n\
+EXAMPLES\n\
+    vnu\n\
+    vnu fetch\n\
+    vnu version\n\
+    vnu size\n\
+\n\
+FILES\n\
+    /proc/version  OS, kernel and build versions\n\
+    /proc/meminfo  total and free memory\n\
+    /proc/boot     root file system, install state, session shell\n\
+    /proc/gfx      display driver and mode\n\
+    /proc/images   per-component image sizes\n\
+\n\
+EXIT STATUS\n\
+    0 on success, 1 when the requested information cannot be read.\n"
 
 #define PING_PAGE "NAME\n\
     ping - send ICMP echo requests (network test)\n\
@@ -1029,6 +1081,8 @@ static const struct Page pages[] = {
      MAN_PAGE},
     {"vcc",      "the VNU C compiler",
      VCC_PAGE},
+    {"vnu",     "report what system you are running on",
+     VNU_PAGE},
     {"vash",     "VNU login shell",
      VASH_PAGE},
     {"sh",       "the standard shell (synonym for vash)",

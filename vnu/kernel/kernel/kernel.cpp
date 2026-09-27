@@ -18,6 +18,8 @@
 #include <vnu/mboot.h>
 #include <vnu/net.h>
 #include <vnu/tcp.h>
+#include <vnu/images.h>
+#include <vnu/vga_gfx.h>
 #include <vnu/virtio_gpu.h>
 #include <vnu/audio.h>
 extern "C" void vnu_console_start();
@@ -105,6 +107,9 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
     vnu::paging::init();
     vnu::vfs::init();
     vnu::proc::init();
+    /* Glyph tables are part of the image from the start, whether or not
+     * the desktop ever captures the VGA font. */
+    vnu::images::add(vnu::images::Fonts, vnu::vgfx::font_bytes());
     vnu::pipe::init();
     vnu::apps::install_demo_apps();
     vnu::apps::install_demo_pics();
