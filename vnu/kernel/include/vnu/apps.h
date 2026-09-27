@@ -41,12 +41,15 @@ struct AppEntry {
 
 void install_demo_apps();
 
-// Mounts the demo photograph pack under /pics (one VFS node per image,
-// sourced from the embedded bytes) so picview has content to show.
+// Mounts the demo photograph pack under /etc/vnu/pics (one VFS node per
+// image, sourced from the embedded bytes) so picview has content to
+// show, and seeds the desktop wallpaper from the embedded image: the
+// shipped original and the copy in use (see include/vnu/media.h).
 void install_demo_pics();
 
-// Mounts the demo WAV clips under /sounds (one VFS node per file,
-// sourced from the embedded bytes) so the play app has content to play.
+// Mounts the demo WAV clips under /etc/vnu/sounds (one VFS node per
+// file, sourced from the embedded bytes) so the play app has content to
+// play.
 void install_demo_sounds();
 
 // Scans /apps/ for subdirectories and fills out[] (up to max). Returns

@@ -2,7 +2,8 @@
  * picview — tiny image viewer for the VNU desktop.
  *
  * Two ways to get content. As a desktop app it walks the kernel VFS
- * directory /pics the same way the files app walks its cwd (opendir/
+ * directory /etc/vnu/pics the same way the files app walks its cwd
+ * (opendir/
  * readdir, struct dirent, d_type[1] == 8 for regular files); it can
  * also be opened on a single file, which is what the files manager
  * does when you open a .png/.jpg — the manager execs picview with the
@@ -43,6 +44,10 @@ static int       g_pic_w, g_pic_h;
 
 #define MAX_PICS 16
 #define NAME_CAP 32
+/* The demo photograph pack the kernel mounts at boot (gui/apps.cpp). */
+#define PICS_DIR   "/etc/vnu/pics"
+#define PICS_EMPTY "empty " PICS_DIR
+
 #define PATH_CAP 128 /* fits any path the file manager can open */
 #define DATA_CAP 20480
 
@@ -91,7 +96,7 @@ static void pcat(char* out, int cap, const char* a, const char* b)
 static void enumerate(void)
 {
     g_n = 0;
-    DIR* d = opendir("/pics");
+    DIR* d = opendir(PICS_DIR);
     if (!d)
         return;
     struct dirent* de;
@@ -177,13 +182,13 @@ static int load_file(const char* path)
 }
 
 /* Load whatever the current selection is: the single file opened from
- * the file manager, or /pics/<g_sel> in the gallery. */
+ * the file manager, or <pics>/<g_sel> in the gallery. */
 static int load_current(void)
 {
     if (g_single)
         return load_file(g_single_path);
     char path[PATH_CAP];
-    pcat(path, PATH_CAP, "/pics", g_names[g_sel]);
+    pcat(path, PATH_CAP, PICS_DIR, g_names[g_sel]);
     return load_file(path);
 }
 
@@ -277,8 +282,8 @@ static void show(void)
 {
     if (g_n == 0) {
         vgfx_clear(VGFX_BLACK);
-        vgfx_str8((VGFX_W - vgfx_text_width8("empty /pics")) / 2,
-                  VGFX_H / 2 - 4, "empty /pics", VGFX_LRED);
+        vgfx_str8((VGFX_W - vgfx_text_width8(PICS_EMPTY)) / 2,
+                  VGFX_H / 2 - 4, PICS_EMPTY, VGFX_LRED);
         vgfx_flush();
         for (;;) {
             vgfx_event_t ev;

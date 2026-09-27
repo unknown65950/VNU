@@ -9,7 +9,7 @@
 // buffers -- extends to ~0xA00000 (__bss_end). VFS file contents are no
 // longer a fixed 128*64 KiB BSS array either: each node's bytes live in
 // this same pool as a growable contiguous run (see vfs.cpp node_reserve,
-// with the /sounds clips and /pics mounted from it).
+// with the /etc/vnu sound clips and picture pack mounted from it).
 // The former POOL_BASE = 0x01520000 (21.125 MiB) overlapped that BSS
 // region again once the node table grew past 112 entries: alloc_frame()'s
 // zeroing memset was wiping g_bitmap/g_identity_pt/g_kernel_pgdir, the

@@ -913,7 +913,7 @@ picview [file]\n\
  \n\
  DESCRIPTION\n\
     A tiny image viewer for the VNU desktop. Without an argument it\n\
-    walks the /pics directory; with a file argument (as the files\n\
+    walks the /etc/vnu/pics directory; with a file argument (as the files\n\
     manager supplies when you open a .png/.jpg/.jpeg) it decodes and\n\
     shows just that file. Either way, BMP, PNG and JPEG are decoded\n\
     with the embedded px.h decoder and rendered, colour-quantised to\n\
@@ -928,7 +928,7 @@ KEYS\n\
     Esc   close the window (opened from the file manager: return to it)\n\
 \n\
 FILES\n\
-    /pics   directory of embedded demo pictures\n\
+    /etc/vnu/pics   directory of embedded demo pictures\n\
     /apps/picview/bin   the program itself\n"
 
 #define CLOCK_PAGE "NAME\n\
@@ -970,7 +970,7 @@ SYNOPSIS\n\
 \n\
 DESCRIPTION\n\
     A graphical sound player for the VNU desktop: lists the WAV\n\
-    clips in /sounds, decodes the selected one with the embedded\n\
+    clips in /etc/vnu/sounds, decodes the selected one with the embedded\n\
     libwav parser and streams the PCM through the kernel's AC'97\n\
     audio driver (audio_* syscalls). It is launched from the play\n\
     tile on the desktop; the window is 480x340 and lives on the\n\
@@ -991,7 +991,7 @@ KEYS\n\
     Esc         close the window\n\
 \n\
 FILES\n\
-    /sounds             directory of embedded demo WAV clips\n\
+    /etc/vnu/sounds     directory of embedded demo WAV clips\n\
     /dev/dsp            the sound card as a byte stream (16-bit stereo PCM;\n\
                         writes go straight to the AC'97 DMA ring)\n\
     /apps/play/bin      the program itself\n\

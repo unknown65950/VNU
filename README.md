@@ -178,8 +178,9 @@ Kernel output and userspace fd1/fd2 are mirrored to COM1, which is the log
 the assertions read.
 
 ```bash
-make test                      # 55 cases: vnu, /proc, uname, hostname, coreutils,
-                               #   man, plus the interactive man pager session
+make test                      # 63 cases: vnu, /proc, uname, hostname, coreutils,
+                               #   man, /etc/vnu media, plus the interactive
+                               #   man pager session
 make test-gpu                  # the same suite on a virtio-gpu display
 make test-install              # vnu install onto a fresh disk, boot that disk,
                                #   and check the name it boots with

@@ -5,7 +5,7 @@
  * "play" tile, the window is pre-created at 480x340 and the app just
  * draws, flushes and services events through the vgfx library.
  *
- * It lists the clips in /sounds (the kernel mounts three demo WAVs
+ * It lists the clips in /etc/vnu/sounds (the kernel mounts three demo WAVs
  * there at boot, one VFS node per file), decodes the selected clip
  * with the self-contained libwav parser (vnu/userspace/libwav/) and
  * streams the raw PCM through the audio_* syscalls (49..56) into the
@@ -37,6 +37,9 @@
 #include "../libwav/wav.h"
 
 #define TICK_BYTE 0x06 /* kernel GUI heartbeat, see vnu/wintask.h */
+
+/* The demo clips the kernel mounts at boot (gui/apps.cpp). */
+#define SOUNDS_DIR "/etc/vnu/sounds"
 
 #define MAX_SOUNDS 12
 #define NAME_CAP 28
@@ -116,7 +119,7 @@ static void fmt_time(char* out, int cap, long bytes, const wav_info* w)
 static int load_file(int idx)
 {
     char path[64];
-    s_cat(path, sizeof(path), "/sounds/", g_names[idx]);
+    s_cat(path, sizeof(path), SOUNDS_DIR "/", g_names[idx]);
     int fd = open(path, 0); /* O_RDONLY */
     if (fd < 0)
         return -1;
@@ -258,7 +261,7 @@ static void draw(void)
     vgfx_str8(8, 26, "sounds", VGFX_LCYAN);
     vgfx_rect(LIST_X, LIST_Y, LIST_W, LIST_H, VGFX_BLACK);
     if (g_n == 0) {
-        vgfx_str8(11, 44, "empty /sounds", VGFX_LRED);
+        vgfx_str8(11, 44, "empty " SOUNDS_DIR, VGFX_LRED);
     }
     for (int i = 0; i < g_n && i < 12; ++i) {
         int y = LIST_Y + 6 + i * ROW_H;
@@ -405,8 +408,8 @@ static void handle_press(int x, int y)
 
 int main(void)
 {
-    /* discover /sounds */
-    DIR* d = opendir("/sounds");
+    /* discover the demo clips */
+    DIR* d = opendir(SOUNDS_DIR);
     if (d) {
         struct dirent* de;
         while ((de = readdir(d)) != 0 && g_n < MAX_SOUNDS) {

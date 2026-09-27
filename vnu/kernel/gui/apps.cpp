@@ -1,4 +1,5 @@
 #include <vnu/apps.h>
+#include <vnu/media.h>
 #include <vnu/vfs.h>
 #include <vnu/posix.h>
 #include <vnu/process.h>
@@ -109,8 +110,9 @@ void install_demo_apps()
     install_one("play", vnu::vgfx::COLOR_LBLUE, IconGlyph::ICON_MUSIC, embedded_play_elf, embedded_play_elf_size);
 }
 
-/* Mount the demo photograph pack under /pics so picview has something
- * to show: one VFS node per picture, filled with the embedded bytes. */
+/* Mount the demo photograph pack under /etc/vnu/pics so picview has
+ * something to show: one VFS node per picture, filled with the embedded
+ * bytes, and seed the desktop wallpaper from the embedded image. */
 void install_demo_pics()
 {
     struct Pic {
@@ -127,10 +129,11 @@ void install_demo_pics()
         {"shapes_rgba.png", embedded_pic_shapes_rgba_elf, embedded_pic_shapes_rgba_elf_size},
     };
 
-    vnu::vfs::mkdir("/pics");
+    vnu::vfs::mkdir(VNU_MEDIA_DIR);
+    vnu::vfs::mkdir(VNU_PICS_DIR);
     for (const Pic& p : pics) {
-        char path[64];
-        join(path, sizeof(path), "/pics", p.name);
+        char path[80];
+        join(path, sizeof(path), VNU_PICS_DIR, p.name);
         int fd = vnu::vfs::open(path, O_WRONLY | O_CREAT | O_TRUNC);
         if (fd < 0)
             continue;
@@ -139,20 +142,25 @@ void install_demo_pics()
         vnu::images::add(vnu::images::Resources, p.size);
     }
 
-    /* The desktop wallpaper lives at the VFS root, not under /pics, so
-     * picview's listing stays unchanged. gui/wallpaper.cpp decodes it
-     * with px.h (BMP/PNG/JPEG) and stretches it over the desktop. */
-    int wfd = vnu::vfs::open("/wallpaper", O_WRONLY | O_CREAT | O_TRUNC);
-    if (wfd >= 0) {
+    /* The desktop wallpaper is a setting, not a picture to browse, so it
+     * lives beside the pack instead of inside it. Two copies: the shipped
+     * original nobody ever writes to, and the one in use, which the
+     * wallpaper picker replaces. gui/wallpaper.cpp decodes the latter
+     * with px.h (BMP/PNG) and stretches it over the desktop. */
+    const char* const seeds[2] = { VNU_WALLPAPER_SHIPPED, VNU_WALLPAPER };
+    for (int i = 0; i < 2; ++i) {
+        int wfd = vnu::vfs::open(seeds[i], O_WRONLY | O_CREAT | O_TRUNC);
+        if (wfd < 0)
+            continue;
         vnu::vfs::write(wfd, embedded_wallpaper_elf, embedded_wallpaper_elf_size);
         vnu::vfs::close(wfd);
         vnu::images::add(vnu::images::Resources, embedded_wallpaper_elf_size);
     }
 }
 
-/* Mount the demo WAV clips under /sounds so the play app has content:
- * one VFS node per clip, filled with the embedded bytes (files may now
- * exceed 64 KiB; the VFS grows each node's buffer on demand). */
+/* Mount the demo WAV clips under /etc/vnu/sounds so the play app has
+ * content: one VFS node per clip, filled with the embedded bytes (files
+ * may now exceed 64 KiB; the VFS grows each node's buffer on demand). */
 void install_demo_sounds()
 {
     struct Clip {
@@ -166,10 +174,11 @@ void install_demo_sounds()
         {"beep.wav", embedded_wav_beep_elf, embedded_wav_beep_elf_size},
     };
 
-    vnu::vfs::mkdir("/sounds");
+    vnu::vfs::mkdir(VNU_MEDIA_DIR);
+    vnu::vfs::mkdir(VNU_SOUNDS_DIR);
     for (const Clip& c : clips) {
-        char path[64];
-        join(path, sizeof(path), "/sounds", c.name);
+        char path[80];
+        join(path, sizeof(path), VNU_SOUNDS_DIR, c.name);
         int fd = vnu::vfs::open(path, O_WRONLY | O_CREAT | O_TRUNC);
         if (fd < 0)
             continue;

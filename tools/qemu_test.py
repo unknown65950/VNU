@@ -374,6 +374,25 @@ SUITE = [
     ("hostname-uname", "uname -n", [r"^mybox$"], []),
     ("hostname-restore", "echo vnu > /etc/hostname", [], []),
     ("hostname-back", "uname -n", [r"^vnu$"], []),
+
+    # The system's own content lives under /etc/vnu, not at the root:
+    # the picture pack, the sound clips and the two wallpaper files.
+    ("media-tree", "ls /etc/vnu",
+     [r"^pics/$", r"^sounds/$", r"^wallpaper$", r"^wallpaper\.default$"], []),
+    ("media-pics", "ls /etc/vnu/pics",
+     [r"^flower\.bmp$", r"^sunset\.png$", r"^logo\.jpg$",
+      r"^gray_alpha\.png$", r"^shapes_pal\.png$", r"^shapes_rgba\.png$"], []),
+    ("media-sounds", "ls /etc/vnu/sounds",
+     [r"^chime\.wav$", r"^melody\.wav$", r"^beep\.wav$"], []),
+    # Both wallpaper files hold the shipped image (4436 bytes as built).
+    ("media-wall", "wc /etc/vnu/wallpaper",
+     [r"^\d+ \d+ 4436 /etc/vnu/wallpaper$"], []),
+    ("media-wall-shipped", "wc /etc/vnu/wallpaper.default",
+     [r"^\d+ \d+ 4436 /etc/vnu/wallpaper\.default$"], []),
+    # ...and nothing is left at the root, where the pack used to be.
+    ("media-gone-pics", "ls /pics", [r"^ls: cannot open /pics$"], []),
+    ("media-gone-sounds", "ls /sounds", [r"^ls: cannot open /sounds$"], []),
+    ("media-gone-wall", "ls /wallpaper", [r"^ls: cannot open /wallpaper$"], []),
     # The installer insists on a name and refuses a bad one, both before
     # it ever looks for a disk - so these run on the live image too.
     ("vnu-install-nohost", "vnu install 0",

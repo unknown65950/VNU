@@ -5,7 +5,8 @@
 
 The clips are source data (like the pictures in gui/pics/) and are
 committed to the repo; at boot the kernel embeds and mounts them into
-the VFS under /sounds (see vnu/kernel/gui/apps.cpp install_demo_sounds).
+the VFS under /etc/vnu/sounds (see vnu/kernel/gui/apps.cpp
+install_demo_sounds).
 The play desktop app lists and plays them.
 
 Each clip must stay well inside the VFS per-file cap of 65536 bytes

@@ -1,7 +1,7 @@
 /*
- * wallpaper.cpp — decode /wallpaper (any px.h format) and render it
- * stretched over the whole desktop, quantized to the 16 Catppuccin DAC
- * colors the GUI actually displays.
+ * wallpaper.cpp — decode /etc/vnu/wallpaper (any px.h format) and
+ * render it stretched over the whole desktop, quantized to the 16
+ * Catppuccin DAC colors the GUI actually displays.
  *
  * The VFS no longer caps a single file at 64 KiB (each node's content
  * grows on demand), and a full 1024x768
@@ -22,11 +22,14 @@
  * 2 MiB pool comfortably holds the worst case (decoded 590 KiB RGB
  * buffer + ~590 KiB inflate work + <64 KiB of compressed IDAT).
  *
- * Hiding /wallpaper from picview: it lives at the VFS root, not under
- * /pics, so the viewer's directory listing is unchanged.
+ * The wallpaper is a setting rather than a picture to browse, so it
+ * sits in /etc/vnu beside the demo pack instead of inside it, and
+ * picview's directory listing stays unchanged.
  */
 #define VNU_IN_KERNEL 1
 #include <vnu/wallpaper.h>
+#include <vnu/media.h>
+#include <vnu/abi.h>
 #include <vnu/px.h>
 #include <vnu/vfs.h>
 #include <vnu/posix.h>
@@ -45,6 +48,10 @@ uint32_t g_px_used = 0;
 
 /* Whole-desktop frame vga_gfx blits when a wallpaper is loaded. */
 bool g_ready = false;
+
+/* Bare name of the image in use, for /proc/gfx. */
+constexpr int NAME_CAP = 64;
+char g_name[NAME_CAP];
 uint8_t g_wall[vnu::vgfx::WIDTH * vnu::vgfx::HEIGHT];
 
 /* Catppuccin Mocha DAC palette (6-bit per channel), mirrors
@@ -59,6 +66,41 @@ const uint8_t PAL[16][3] = {
 
 constexpr uint32_t FILE_CAP = 65536; /* VFS per-file buffer size */
 uint8_t g_file[FILE_CAP];
+
+/* Read a whole file into g_file. Returns its length, 0 when it cannot
+ * be opened, and never more than FILE_CAP bytes. */
+uint32_t slurp(const char* path)
+{
+    int fd = vnu::vfs::open(path, vnu::posix::O_RDONLY);
+    if (fd < 0)
+        return 0;
+    uint32_t n = 0;
+    for (;;) {
+        int r = vnu::vfs::read(fd, g_file + n, FILE_CAP - n);
+        if (r <= 0)
+            break;
+        n += static_cast<uint32_t>(r);
+        if (n >= FILE_CAP)
+            break;
+    }
+    vnu::vfs::close(fd);
+    return n;
+}
+
+/* Bare name of a path, for /proc/gfx. */
+void note_name(const char* path)
+{
+    const char* base = path;
+    for (const char* q = path; *q; ++q)
+        if (*q == '/')
+            base = q + 1;
+    int i = 0;
+    while (base[i] && i < NAME_CAP - 1) {
+        g_name[i] = base[i];
+        ++i;
+    }
+    g_name[i] = 0;
+}
 
 /* Largest source we'll decode: the shipped 512x384, i.e. exactly half
  * the desktop at 2x upscale. Also keeps the pixel-bound memory (decoded
@@ -84,52 +126,13 @@ extern "C" void vnu_kfree(void* p)
 
 namespace vnu::wallpaper {
 
-bool load()
+namespace {
+
+/* Stretch a decoded RGB image over every desktop pixel (nearest
+ * neighbour per axis, like picview's zoom-out) and quantize straight to
+ * a DAC index. */
+void stretch(const uint8_t* rgb, int w, int h, uint8_t* out)
 {
-    int fd = vnu::vfs::open("/wallpaper", vnu::posix::O_RDONLY);
-    if (fd < 0)
-        return false;
-    uint32_t n = 0;
-    for (;;) {
-        int r = vnu::vfs::read(fd, g_file + n, FILE_CAP - n);
-        if (r <= 0)
-            break;
-        n += static_cast<uint32_t>(r);
-        if (n >= FILE_CAP)
-            break;
-    }
-    vnu::vfs::close(fd);
-    if (n < 4)
-        return false;
-
-    int w = 0, h = 0;
-    int fmt = px_probe(g_file, n, &w, &h);
-    if (fmt == PX_NONE || w <= 0 || h <= 0)
-        return false;
-    if (static_cast<uint32_t>(w) * static_cast<uint32_t>(h) > MAX_PIX)
-        return false;
-
-    uint8_t* rgb = static_cast<uint8_t*>(vnu_kalloc(
-        (static_cast<uint32_t>(w) * static_cast<uint32_t>(h)) * 3u));
-    if (!rgb)
-        return false;
-    /* Dispatch the integer decoders directly instead of px_decode:
-     * px_jpg_decode (with its float IDCT) must stay unreferenced so the
-     * linker never pulls in soft-float calls this kernel cannot satisfy. */
-    int rc;
-    if (fmt == PX_BMP)
-        rc = px_bmp_decode(g_file, n, &w, &h, rgb);
-    else if (fmt == PX_PNG)
-        rc = px_png_decode(g_file, n, &w, &h, rgb);
-    else
-        rc = -1;
-    if (rc != 0) {
-        vnu_kfree(rgb);
-        return false;
-    }
-
-    /* Stretch to every desktop pixel (nearest neighbour per axis, like
-     * picview's zoom-out) and quantize straight to a DAC index. */
     const int W = vnu::vgfx::WIDTH;
     const int H = vnu::vgfx::HEIGHT;
     for (int y = 0; y < H; ++y) {
@@ -154,13 +157,99 @@ bool load()
                     best = c;
                 }
             }
-            g_wall[y * W + x] = static_cast<uint8_t>(best);
+            out[y * W + x] = static_cast<uint8_t>(best);
         }
     }
+}
+
+/* Decode whatever is in g_file into g_wall. Returns 0 on success; a
+ * failure leaves g_wall exactly as it was, because the quantization
+ * only runs once a decoder has returned a clean picture. */
+int decode_into_frame(uint32_t n)
+{
+    if (n < 4)
+        return -1;
+
+    /* The bump pool is never given back, so a second decode would run
+     * into the first one's leftovers. g_wall already holds quantized
+     * palette indices, so nothing in the arena is still live and
+     * starting it over is safe. */
+    g_px_used = 0;
+
+    int w = 0, h = 0;
+    int fmt = px_probe(g_file, n, &w, &h);
+    if (fmt == PX_NONE || w <= 0 || h <= 0)
+        return -1;
+    if (static_cast<uint32_t>(w) * static_cast<uint32_t>(h) > MAX_PIX)
+        return -1;
+
+    uint8_t* rgb = static_cast<uint8_t*>(vnu_kalloc(
+        (static_cast<uint32_t>(w) * static_cast<uint32_t>(h)) * 3u));
+    if (!rgb)
+        return -1;
+    /* Dispatch the integer decoders directly instead of px_decode:
+     * px_jpg_decode (with its float IDCT) must stay unreferenced so the
+     * linker never pulls in soft-float calls this kernel cannot satisfy. */
+    int rc;
+    if (fmt == PX_BMP)
+        rc = px_bmp_decode(g_file, n, &w, &h, rgb);
+    else if (fmt == PX_PNG)
+        rc = px_png_decode(g_file, n, &w, &h, rgb);
+    else
+        rc = -1;
+    if (rc != 0) {
+        vnu_kfree(rgb);
+        return -1;
+    }
+
+    stretch(rgb, w, h, g_wall);
     vnu_kfree(rgb);
+    return 0;
+}
+
+} // namespace
+
+bool load()
+{
+    uint32_t n = slurp(VNU_WALLPAPER);
+    if (decode_into_frame(n) != 0)
+        return false;
+    g_ready = true;
+    note_name(VNU_WALLPAPER);
+    return true;
+}
+
+int apply(const char* path)
+{
+    uint32_t n = slurp(path);
+    if (n == 0)
+        return -VNU_ENOENT;
+    if (decode_into_frame(n) != 0)
+        return -VNU_EINVAL;
+
+    /* The picture is good, so it becomes the wallpaper file too. The
+     * frame is already on screen by now: overwriting a VFS node of this
+     * size cannot really fail, and a failure here (-VNU_EIO) is the only
+     * case where the screen and the file can disagree. */
+    int fd = vnu::vfs::open(VNU_WALLPAPER,
+                            vnu::posix::O_WRONLY | vnu::posix::O_CREAT |
+                            vnu::posix::O_TRUNC);
+    if (fd < 0)
+        return -VNU_EIO;
+    uint32_t wrote = 0;
+    while (wrote < n) {
+        int r = vnu::vfs::write(fd, g_file + wrote, n - wrote);
+        if (r <= 0)
+            break;
+        wrote += static_cast<uint32_t>(r);
+    }
+    vnu::vfs::close(fd);
+    if (wrote != n)
+        return -VNU_EIO;
 
     g_ready = true;
-    return true;
+    note_name(path);
+    return 0;
 }
 
 const uint8_t* frame()
@@ -171,6 +260,11 @@ const uint8_t* frame()
 bool ready()
 {
     return g_ready;
+}
+
+const char* current_name()
+{
+    return g_name;
 }
 
 } // namespace vnu::wallpaper

@@ -20,8 +20,8 @@ constexpr int MAX_FD = 64;
  * a path, some flags and a pointer to its content buffer (see node_reserve
  * below), so a full table costs a couple of words per node rather than
  * megabytes of .bss. Boot alone registers ~117 nodes (static
- * /bin+proc+dev tree plus the /apps tiles, the /pics pack and the
- * /sounds clips), so the remaining heads-up room is for anything the
+ * /bin+proc+dev tree plus the /apps tiles, the /etc/vnu picture and
+ * sound packs), so the remaining heads-up room is for anything the
  * runtime creates (/tmp/.session, redirections, ...) — an exhausted
  * table makes those add() calls return ENOSPC and shells lose their
  * session file. */
