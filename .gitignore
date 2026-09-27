@@ -27,3 +27,6 @@ vnu/kernel/proc/embedded_*.h
 
 # Test disk image produced by ./vnu/run.sh vhd
 vnu/vnu.vhd
+# Python bytecode from importing tools/qemu_test.py (a probe script or an
+# IDE indexer drops this next to the harness)
+__pycache__/

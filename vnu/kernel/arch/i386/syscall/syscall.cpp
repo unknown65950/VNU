@@ -494,6 +494,22 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
          * see vnu::proc::sys_sleep. */
         return static_cast<std::uint32_t>(vnu::proc::sys_sleep(tf->ebx));
 
+    case VNU_SYS_tty_size:
+        /* Text-plane geometry of the console (ebx = uint32* rows,
+         * ecx = uint32* cols). Either pointer may be null. Lets a
+         * full-screen program lay itself out without hardcoding 80x25. */
+        {
+            uint16_t rows = 0, cols = 0;
+            vnu::tty::get_size(&rows, &cols);
+            auto* rp = reinterpret_cast<std::uint32_t*>(tf->ebx);
+            auto* cp = reinterpret_cast<std::uint32_t*>(tf->ecx);
+            if (rp)
+                *rp = rows;
+            if (cp)
+                *cp = cols;
+            return 0;
+        }
+
     case VNU_SYS_ping:
         /* RTT to an IPv4 address (ebx, big-endian uint32); ecx is the
          * timeout in ms. Returns RTT ms or -VNU_EHOSTUNREACH/-VNU_ETIMEDOUT. */

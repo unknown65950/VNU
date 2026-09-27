@@ -71,6 +71,7 @@ must never be renumbered.
 | 56 | audio_reset |
 | 57 | dnd_declare |
 | 58 | sleep |
+| 59 | tty_size |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
@@ -102,6 +103,12 @@ with `-1` leaves a field unchanged; only root may chown.
   windowed path that has no scheduler to come back to. Backs the kernel's
   wakeup-based wait mechanism (`waitpid` blocking, future pipes/blocking
   I/O) with a precise, timer-driven timeout.
+- `tty_size(ebx, ecx)` — writes the console geometry in character
+  cells to two `uint32` out-pointers: `ebx` gets the row count, `ecx`
+  the column count (either may be null). Returns 0. The VGA text plane
+  is a fixed 80x25 today, so a full-screen program (the `man` pager) asks
+  for the numbers through this call instead of hardcoding them: when the
+  mode changes, only the kernel changes.
 - `ping(ebx, ecx)` — `ebx` is the target IPv4 address as a
   big-endian uint32 (10.0.2.2 = `0x0A000202`), `ecx` the timeout in
   milliseconds (kernel clamps to 10..2000).
@@ -209,7 +216,7 @@ with `-1` leaves a field unchanged; only root may chown.
 
 Not applicable — numbers are never reused; old gaps stay reserved.
 
-### Future (append-only, start at 58)
+### Future (append-only, start at 59)
 
 Unsupported calls return `-VNU_ENOSYS`.
 

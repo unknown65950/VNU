@@ -11,6 +11,10 @@ void write(const char* s, size_t n);
 void write_cstr(const char* s);
 void set_cursor(uint16_t row, uint16_t col);
 void get_cursor(uint16_t* row, uint16_t* col);
+/* Text-plane geometry in character cells (80x25 today). Userspace asks
+ * for it through SYS_tty_size instead of hardcoding the numbers, so a
+ * full-screen program (a pager) keeps its layout when the mode changes. */
+void get_size(uint16_t* rows, uint16_t* cols);
 /* Flush pending hardware cursor update (after a batch of putc). */
 void flush_cursor();
 

@@ -57,6 +57,16 @@ for _c in string.ascii_lowercase:
 for _c in string.ascii_uppercase:
     KEYMAP[_c] = "shift-" + _c.lower()
 
+# Keys that have no character of their own. Written as <name> in a string
+# handed to _type(), e.g. guest._type("<down><down>q"): the arrow keys are
+# what a full-screen program (the man pager) is driven with, and the QEMU
+# key names below are the ones its HMP sendkey understands.
+SPECIAL_KEYS = {
+    "<up>": "up", "<down>": "down", "<left>": "left", "<right>": "right",
+    "<home>": "home", "<end>": "end", "<pgup>": "pgup", "<pgdn>": "pgdn",
+    "<esc>": "esc", "<ret>": "ret", "<spc>": "spc", "<tab>": "tab",
+}
+
 
 class Qmp:
     """Minimal QMP client: one JSON object per line, one request at a time."""
@@ -206,15 +216,33 @@ class Guest:
         key, and a batch would either be rejected (spaces are not a
         separator) or apply the shift of `shift-a` to the whole batch. One
         call per character is unambiguous, and the hold time keeps the
-        i8042 buffer from being overrun by the guest's own polling."""
-        missing = sorted({c for c in text if c not in KEYMAP})
+        i8042 buffer from being overrun by the guest's own polling.
+
+        A <name> token from SPECIAL_KEYS (e.g. <down>) stands for a key
+        that is not a character, such as an arrow. Returns the number of
+        keys sent."""
+        keys, missing = [], []
+        i = 0
+        while i < len(text):
+            if text[i] == "<":
+                token = text[i:text.find(">", i) + 1]
+                if token in SPECIAL_KEYS:
+                    keys.append(SPECIAL_KEYS[token])
+                    i += len(token)
+                    continue
+            if text[i] in KEYMAP:
+                keys.append(KEYMAP[text[i]])
+            else:
+                missing.append(text[i])
+            i += 1
         if missing:
-            raise RuntimeError("no key mapping for %r" % missing)
-        for c in text:
-            reply = self.qmp.hmp("sendkey %s %d" % (KEYMAP[c], hold_ms))
+            raise RuntimeError("no key mapping for %r" % sorted(set(missing)))
+        for k in keys:
+            reply = self.qmp.hmp("sendkey %s %d" % (k, hold_ms))
             if reply and "invalid" in reply:
-                raise RuntimeError("sendkey %s: %s" % (KEYMAP[c], reply))
+                raise RuntimeError("sendkey %s: %s" % (k, reply))
             time.sleep(0.01)
+        return len(keys)
 
     def type_line(self, text, expect=None, timeout=60.0):
         """Type `text` + Enter, then wait for `expect` to show up in the log.
@@ -332,13 +360,23 @@ SUITE = [
     ("uname-plain", "uname", [r"^VNU$"], []),
 
     # -- the rest of userspace still works ------------------------------
+    # On a terminal man pages the page and waits for a key, so the page
+    # *content* is checked through a redirect: the pager must stay out of
+    # the way there (no status bar) and print the page instead. Each pair
+    # shares one /tmp file, which the VFS keeps between commands (vash has
+    # no ';' to chain them). The interactive side - status bar, arrows,
+    # help, q - is run_man_pager() below.
+    ("man-redirect", "man vcc > /tmp/man-vcc.out", [], [r"press h for help"]),
+    ("man-vcc-text", "cat /tmp/man-vcc.out", [r"^SYNOPSIS$", r"^OPTIONS$"], []),
     ("vcc-version", "vcc --version", [r"^vcc \(VNU\) 0\.5$"], []),
     ("bin-list", "ls /bin",
      [r"^vash$", r"^vcc$", r"^vnu$", r"^man$", r"^df$"], []),
-    ("man-vnu", "man vnu",
+    ("man-vnu", "man vnu > /tmp/man-vnu.out", [], [r"press h for help"]),
+    ("man-vnu-text", "cat /tmp/man-vnu.out",
      [r"^NAME$", r"^SYNOPSIS$", r"^COMMANDS$", r"^FILES$",
       r"/proc/images"], []),
-    ("man-ls", "man ls", [r"^NAME$", r"ls -"], []),
+    ("man-ls", "man ls > /tmp/man-ls.out", [], [r"press h for help"]),
+    ("man-ls-text", "cat /tmp/man-ls.out", [r"^NAME$", r"ls -"], []),
     ("df", "df", [r"^Filesystem", r"^vfs +\d+ +\d+ +\d+ +\d+% /$"], []),
     ("motd", "cat /etc/motd", [r"Welcome to VNU"], []),
     ("echo", "echo hello world", [r"^hello world$"], []),
@@ -372,6 +410,91 @@ def run_suite(guest, cases, result, verbose, timeout, boot_timeout=120.0):
             continue
         check(name, output, expects, forbids, result, verbose)
     return result
+
+
+# The status bar the man pager draws on the last console row, and the white
+# background that goes with it (SGR 0;30;47 right after the row is picked).
+MAN_STATUS = r"Manual page vcc\(1\) line (\d+) \(press h for help or q to quit\)"
+MAN_BAR = "\x1b[25;1H\x1b[0;30;47m"
+
+
+def run_man_pager(guest, result, verbose, timeout=60.0):
+    """Drive the man pager: the status bar, arrow keys, the help screen.
+
+    This is not a SUITE case because the pager owns the terminal until q
+    is pressed - there is no prompt for sh() to wait on - so the keys are
+    sent here and the whole session is checked at the end."""
+    print("==> man pager (interactive)")
+    frm = len(guest.tail(0))
+    guest._type("man vcc\n")
+    guest.wait(MAN_STATUS, timeout, frm)
+    guest.wait(r"SYNOPSIS", timeout, frm)
+
+    def lines():
+        return [int(n) for n in re.findall(MAN_STATUS, guest.tail(frm))]
+
+    def last():
+        seen = lines()
+        return seen[-1] if seen else None
+
+    def press(keys):
+        """Type keys and wait for the bar to be redrawn once per key.
+
+        Every key the pager acts on repaints the status line, so counting
+        those repaints is a precise synchronisation - no guessed sleep."""
+        seen = len(lines())
+        sent = guest._type(keys)
+        deadline = time.time() + timeout
+        while time.time() < deadline and len(lines()) < seen + sent:
+            time.sleep(0.05)
+        return last()
+
+    problems = []
+
+    # three Down arrows: the bar counts down one line at a time
+    if press("<down><down><down>") != 4:
+        problems.append("after 3x Down the bar says line %r, expected 4" % last())
+    # a space scrolls a whole screen and stops at the end of the document
+    end_line = press("<spc>")
+    if end_line is None or end_line <= 4:
+        problems.append("space did not scroll a screen (line %r)" % end_line)
+    # Home and End jump to the two ends
+    if press("<home>") != 1:
+        problems.append("Home did not return to line 1 (line %r)" % last())
+    if press("<end>") != end_line:
+        problems.append("End went to line %r, expected %r" % (last(), end_line))
+    # b scrolls back up one screen
+    if press("b") != 1:
+        problems.append("b did not scroll up a screen (line %r)" % last())
+
+    # h: the key list, then any key back to the page
+    f2 = len(guest.tail(0))
+    guest._type("h")
+    guest.wait(r"how to move around a page", timeout, f2)
+    f2b = len(guest.tail(0))
+    guest._type("<down>")
+    guest.wait(r"SYNOPSIS", timeout, f2b)
+    if "man - how to move around a page" in guest.tail(f2b):
+        problems.append("the help screen was still up after a key")
+
+    # q: back to the shell
+    f3 = len(guest.tail(0))
+    guest._type("q")
+    guest.wait_prompt(timeout, f3)
+
+    chunk = guest.tail(frm)
+    if MAN_BAR not in chunk:
+        problems.append("the bar was not drawn white on row 25")
+    if "\x1b[25;80H" not in chunk:
+        problems.append("the cursor was not parked on the last cell")
+    if problems:
+        result.failed.append(("man-pager", "", problems))
+        print("FAIL %-18s %s" % ("man-pager", "; ".join(problems)))
+        return False
+    result.passed += 1
+    if verbose:
+        print("ok   %-18s" % "man-pager")
+    return True
 
 
 def run_install_scenario(iso, result, verbose, timeout, workdir):
@@ -427,6 +550,7 @@ def main():
     if args.list:
         for name, command, _, _ in SUITE:
             print("%-18s %s" % (name, command))
+        print("%-18s %s" % ("man-pager", "man vcc (keys, then q)"))
         return 0
 
     if not os.path.exists(args.iso):
@@ -452,6 +576,9 @@ def main():
         if not args.install_only:
             with Guest(iso=args.iso, gpu=args.gpu, log=args.log) as guest:
                 run_suite(guest, cases, result, args.verbose, args.timeout)
+                if not args.only or any(sel in "man-pager"
+                                        for sel in args.only):
+                    run_man_pager(guest, result, args.verbose, args.timeout)
         if args.install or args.install_only:
             run_install_scenario(args.iso, result, args.verbose,
                                  args.timeout, workdir)

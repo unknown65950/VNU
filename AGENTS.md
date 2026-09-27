@@ -41,7 +41,9 @@ the guest through QMP `sendkey` (the keyboard driver reads PS/2, not
 COM1) and asserts on what the guest prints. Add a new check as a
 `(name, command, expected, forbidden)` entry in that file's `SUITE`
 table; the targets are `make test`, `make test-gpu`, `make test-install`
-and `make test-all`.
+and `make test-all`. A check for a full-screen program (one that owns the
+terminal until a key is pressed) is a function next to `run_man_pager()`
+instead, sending the keys with `guest._type("<down>q")`.
 
 ## Rules
 - **Everything is written in English.** Source comments, commit messages,

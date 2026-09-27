@@ -319,4 +319,12 @@ void get_cursor(uint16_t* r, uint16_t* c)
         *c = col;
 }
 
+void get_size(uint16_t* r, uint16_t* c)
+{
+    if (r)
+        *r = H;
+    if (c)
+        *c = W;
+}
+
 } // namespace vnu::tty

@@ -175,7 +175,8 @@ Kernel output and userspace fd1/fd2 are mirrored to COM1, which is the log
 the assertions read.
 
 ```bash
-make test                      # 37 cases: vnu, /proc, uname, coreutils, man
+make test                      # 41 cases: vnu, /proc, uname, coreutils, man
+                               #   plus the interactive man pager session
 make test-gpu                  # the same suite on a virtio-gpu display
 make test-install              # install 0 to a fresh disk, boot that disk,
                                #   and check /proc/boot reports installed ata0
@@ -187,6 +188,13 @@ TEST_ARGS="--only vnu -v" make test      # filter cases, verbose
 The harness is the place for a new check: add a `(name, command, expected,
 forbidden)` entry to its `SUITE` table, where the patterns are regular
 expressions matched against the output of that one command.
+
+A check that has to *drive* the guest — a full-screen program like the
+`man` pager, which owns the terminal until you press `q` — is a function
+of its own instead, next to `run_man_pager()`: the keys are sent with
+`guest._type("<down><down>q")` (`<name>` is any key in `SPECIAL_KEYS`) and
+the session is checked once the prompt is back. `run_suite()` calls it
+after the table, so `make test` covers both.
 
 ## Development rules
 

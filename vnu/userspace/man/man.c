@@ -8,6 +8,13 @@
  * /usr/share/man tree would blow the node table). That keeps `man`
  * self-contained and working from anywhere, for any user.
  *
+ * On a terminal the page is paged: the arrow keys scroll it a line at a
+ * time, other keys scroll a screen or jump to an end, `h` lists them all
+ * and `q` goes back to the shell. A white status bar on the last row says
+ * which page and line you are on. When stdout is not a terminal (a
+ * redirect, a test) the page is simply printed, so `man ls > file` and
+ * the test harness keep working.
+ *
  * Usage:
  *     man              list every documented command
  *     man -l           same as above
@@ -23,6 +30,10 @@
  */
 #include <vlibc/unistd.h>
 #include <vlibc/string.h>
+#include <vlibc/stdio.h>
+#include <vlibc/stdlib.h>
+#include <vlibc/keys.h>
+#include <vlibc/term.h>
 
 struct Page {
     const char* name;
@@ -58,10 +69,27 @@ DESCRIPTION\n\
     command on the system with a one-line summary, which doubles\n\
     as a quick way to discover what is installed.\n\
 \n\
+    When the output is a terminal the page is shown in a pager\n\
+    instead: a white status bar on the last row reads\n\
+        Manual page vcc(1) line 12 (press h for help or q to quit)\n\
+    and names the page and the first line you are looking at. When\n\
+    the output is redirected the page is simply printed instead, so\n\
+    'man ls > /tmp/ls.txt' leaves you a file to grep.\n\
+\n\
+KEYS\n\
+    Up / Down      scroll one line (k and j do the same)\n\
+    space, f, Enter  scroll down one screen (also Ctrl+F, Ctrl+D)\n\
+    b, u           scroll up one screen (also Ctrl+B)\n\
+    Home, g        jump to the first line of the page\n\
+    End, G         jump to the last line of the page\n\
+    h              list the keys (any other key goes back)\n\
+    q              quit and return to the shell (Esc, Ctrl+C too)\n\
+\n\
 EXAMPLES\n\
     man ls          page for the ls command\n\
     man useradd id  two pages at once\n\
     man             full listing of documented commands\n\
+    man vcc > /tmp/v.txt  the page as a plain file, no pager\n\
 \n\
 SEE ALSO\n\
     Every command in the system has a page; try man vash,\n\
@@ -1210,6 +1238,8 @@ static void usage(void)
     w("usage: man [NAME...]\n");
     w("       man -l | --list      list all documented commands\n");
     w("       man -h | --help      this help\n");
+    w("\nOn a terminal a page is paged: Up/Down scroll, h lists the\n");
+    w("keys, q quits. Redirected output is printed as is.\n");
 }
 
 static void list_all(void)
@@ -1225,18 +1255,273 @@ static void list_all(void)
     w("\nType 'man NAME' for the page of NAME.\n");
 }
 
-static int show_page(const char* name)
+static const struct Page* find_page(const char* name)
 {
     for (unsigned i = 0; i < sizeof(pages) / sizeof(pages[0]); ++i)
-        if (strcmp(pages[i].name, name) == 0) {
-            w(pages[i].text);
-            w("\n");
-            return 0;
+        if (strcmp(pages[i].name, name) == 0)
+            return &pages[i];
+    return 0;
+}
+
+/* --- the pager --------------------------------------------------------
+ *
+ * The page text is a string literal inside this ELF, so the document is
+ * indexed in place instead of copied: a display line is a (pointer,
+ * length) pair into that text, cut at every '\n' and wrapped at the
+ * screen width, so nothing is ever truncated.
+ */
+
+struct Line {
+    const char* p;
+    unsigned len;
+    unsigned page; /* which requested page the line came from */
+};
+
+static const char* g_names[32]; /* page names, in the order given */
+static unsigned g_npages;
+static struct Line* g_lines;
+static unsigned g_nlines, g_capacity;
+static unsigned g_top; /* first display line on screen */
+static unsigned g_rows = TNU_ROWS, g_cols = TNU_COLS;
+static char g_pad[TNU_COLS + 8]; /* spaces, to fill the status bar */
+
+/* The three fixed pieces of the status line, kept as strings so the
+ * padding arithmetic below cannot drift from what is printed. */
+static const char* const S_PRE = "Manual page ";
+static const char* const S_MID = "(1) line ";
+static const char* const S_POST = " (press h for help or q to quit)";
+
+static void seq_goto(unsigned row, unsigned col)
+{
+    char q[24];
+    int n = tnu_goto(q, sizeof q, row, col);
+    if (n > 0)
+        write(1, q, (unsigned long)n);
+}
+
+static void seq_sgr(const char* params)
+{
+    char q[16];
+    int n = tnu_sgr(q, sizeof q, params);
+    if (n > 0)
+        write(1, q, (unsigned long)n);
+}
+
+static void seq_erase_eol(void)
+{
+    char q[8];
+    int n = tnu_erase_eol(q, sizeof q);
+    if (n > 0)
+        write(1, q, (unsigned long)n);
+}
+
+static unsigned ndigits(unsigned v)
+{
+    unsigned n = 1;
+    while (v >= 10) {
+        v /= 10;
+        ++n;
+    }
+    return n;
+}
+
+static int doc_reserve(unsigned extra)
+{
+    unsigned need = g_nlines + extra;
+    if (need <= g_capacity)
+        return 0;
+    unsigned cap = g_capacity ? g_capacity : 256;
+    while (cap < need)
+        cap *= 2;
+    struct Line* nl = (struct Line*)malloc(sizeof(struct Line) * cap);
+    if (!nl)
+        return -1;
+    if (g_lines) {
+        memcpy(nl, g_lines, sizeof(struct Line) * g_nlines);
+        free(g_lines);
+    }
+    g_lines = nl;
+    g_capacity = cap;
+    return 0;
+}
+
+/* Cut `text` into display lines and append them to the document. */
+static int doc_add(const char* text, unsigned page)
+{
+    const char* cur = text;
+    for (;;) {
+        const char* nl = cur;
+        while (*nl != 0 && *nl != '\n')
+            ++nl;
+        unsigned len = (unsigned)(nl - cur);
+        unsigned off = 0;
+        do {
+            unsigned take = len - off;
+            if (take > g_cols)
+                take = g_cols;
+            if (doc_reserve(1) != 0)
+                return -1;
+            g_lines[g_nlines].p = cur + off;
+            g_lines[g_nlines].len = take;
+            g_lines[g_nlines].page = page;
+            ++g_nlines;
+            off += take;
+        } while (off < len);
+        if (*nl == 0)
+            break;
+        cur = nl + 1;
+    }
+    return 0;
+}
+
+static void draw_page(unsigned view)
+{
+    for (unsigned r = 0; r < view; ++r) {
+        seq_goto(r + 1, 1);
+        unsigned i = g_top + r;
+        if (i < g_nlines) {
+            write(1, g_lines[i].p, g_lines[i].len);
+            seq_erase_eol();
+        } else {
+            /* Past the end of the document: leave the row blank. */
+            seq_sgr("0");
+            seq_erase_eol();
         }
-    we("man: no manual page for ");
-    we(name);
-    we("\n");
-    return 1;
+    }
+}
+
+static const char* const HELP[] = {
+    "man - how to move around a page",
+    "",
+    "  Up, k            scroll up one line",
+    "  Down, j          scroll down one line",
+    "  space, f, Enter  scroll down one screen",
+    "  b, u             scroll up one screen",
+    "  Home, g          first line of the page",
+    "  End, G           last line of the page",
+    "  h                this help",
+    "  q                quit, back to the shell",
+    "",
+    "The arrow keys move one line; the rest are shortcuts. q and h also",
+    "work on this screen - any other key returns to the page.",
+    0
+};
+
+static void draw_help(unsigned view)
+{
+    unsigned r = 0;
+    for (; r < view && HELP[r] != 0; ++r) {
+        seq_goto(r + 1, 1);
+        write(1, HELP[r], strlen(HELP[r]));
+        seq_erase_eol();
+    }
+    for (; r < view; ++r) {
+        seq_goto(r + 1, 1);
+        seq_sgr("0");
+        seq_erase_eol();
+    }
+}
+
+/* The white bar on the last row: which page, which line, what to press.
+ * The cursor is parked on the last cell, since the console has no
+ * hide-cursor sequence. */
+static void draw_status(void)
+{
+    unsigned first = g_top + 1;
+    unsigned name = 0;
+    if (g_nlines > 0 && g_top < g_nlines && g_names[0] != 0)
+        name = g_lines[g_top].page;
+    const char* nm = g_names[name] ? g_names[name] : "?";
+
+    seq_goto(g_rows, 1);
+    seq_sgr("0;30;47");
+    printf("%s%s%s%u%s", S_PRE, nm, S_MID, first, S_POST);
+    unsigned used = (unsigned)(strlen(S_PRE) + strlen(nm) + strlen(S_MID) +
+                               ndigits(first) + strlen(S_POST));
+    unsigned fill = used + 1 < g_cols ? g_cols - used - 1 : 0;
+    if (fill > sizeof g_pad)
+        fill = sizeof g_pad;
+    if (fill > 0)
+        write(1, g_pad, (unsigned long)fill);
+    seq_goto(g_rows, g_cols);
+    seq_sgr("0");
+}
+
+static void draw(int help)
+{
+    unsigned view = g_rows - 1; /* the last row belongs to the status bar */
+    seq_sgr("0");
+    if (help)
+        draw_help(view);
+    else
+        draw_page(view);
+    draw_status();
+}
+
+static void run_pager(void)
+{
+    int help = 0;
+
+    tnu_size(&g_rows, &g_cols);
+    if (g_rows < 8) /* room for a status bar plus a little text */
+        g_rows = 8;
+    memset(g_pad, ' ', sizeof g_pad);
+    /* Scrolling never goes past the end: the last screen of the document
+     * sits at the bottom of the window, like less does. */
+    unsigned view = g_rows - 1;
+    unsigned max_top = g_nlines > view ? g_nlines - view : 0;
+
+    draw(help);
+    for (;;) {
+        char raw = 0;
+        if (read(0, &raw, 1) <= 0)
+            break;
+        unsigned ch = (unsigned char)raw;
+
+        if (ch == VNU_KEY_INTR || ch == VNU_KEY_ESC || ch == 'Q')
+            break;
+
+        if (help) {
+            if (ch == 'q' || ch == 'Q' || ch == 'h' || ch == 'H')
+                break;
+            help = 0; /* any other key: back to the page */
+            draw(help);
+            continue;
+        }
+        if (ch == 'q')
+            break;
+        if (ch == 'h' || ch == 'H') {
+            help = 1;
+            draw(help);
+            continue;
+        }
+
+        if (ch == VNU_KEY_UP || ch == 'k') {
+            if (g_top > 0)
+                --g_top;
+        } else if (ch == VNU_KEY_DOWN || ch == 'j') {
+            if (g_top < max_top)
+                ++g_top;
+        } else if (ch == ' ' || ch == '\n' || ch == 'f' || ch == 6 /* ^F */ ||
+                   ch == 4 /* ^D */) {
+            g_top += view;
+            if (g_top > max_top)
+                g_top = max_top;
+        } else if (ch == 'b' || ch == 'u' || ch == 2 /* ^B */) {
+            g_top = g_top > view ? g_top - view : 0;
+        } else if (ch == VNU_KEY_HOME || ch == 'g') {
+            g_top = 0;
+        } else if (ch == VNU_KEY_END || ch == 'G') {
+            g_top = max_top;
+        } else {
+            continue; /* an unbound key changes nothing */
+        }
+        draw(help);
+    }
+    /* Leave the shell a clean prompt: the newline scrolls the bar off the
+     * bottom and the cursor lands where vash continues. */
+    seq_sgr("0");
+    write(1, "\n", 1);
 }
 
 int main(int argc, char** argv)
@@ -1254,8 +1539,36 @@ int main(int argc, char** argv)
         return 0;
     }
     int rc = 0;
-    for (int i = 1; i < argc; ++i)
-        if (show_page(argv[i]) != 0)
+    /* On a terminal the pages are shown one screen at a time; otherwise
+     * they are printed straight out, so a redirect keeps working. */
+    int interactive = isatty(1) == 1;
+    for (int i = 1; i < argc; ++i) {
+        const struct Page* page = find_page(argv[i]);
+        if (page == 0) {
+            we("man: no manual page for ");
+            we(argv[i]);
+            we("\n");
             rc = 1;
+            continue;
+        }
+        if (interactive) {
+            /* One document holds every page asked for, so the status bar
+             * can name the one on screen; the array of names is the cap. */
+            if (g_npages >= sizeof(g_names) / sizeof(g_names[0])) {
+                we("man: too many pages requested\n");
+                return 1;
+            }
+            g_names[g_npages++] = page->name;
+            if (doc_add(page->text, g_npages - 1) != 0) {
+                we("man: out of memory building the page\n");
+                return 1;
+            }
+        } else {
+            w(page->text);
+            w("\n");
+        }
+    }
+    if (interactive && g_npages > 0)
+        run_pager();
     return rc;
 }

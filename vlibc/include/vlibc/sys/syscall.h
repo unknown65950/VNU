@@ -34,6 +34,7 @@
 #define SYS_time VNU_SYS_time
 #define SYS_uptime VNU_SYS_uptime
 #define SYS_sleep VNU_SYS_sleep
+#define SYS_tty_size VNU_SYS_tty_size
 
 #ifdef __cplusplus
 extern "C" {
