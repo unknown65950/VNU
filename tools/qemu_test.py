@@ -33,8 +33,10 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# The guest shell prompt as it appears in the serial log, prompt included.
-PROMPT = re.compile(r"[a-z_]+@vnu:[^\n]*[$#] ")
+# The guest shell prompt as it appears in the serial log, prompt included:
+# user@hostname:cwd$ , where the host name comes from /etc/hostname (a
+# live image is "vnu", an installed disk the name it was installed with).
+PROMPT = re.compile(r"[a-z_]+@[a-z0-9][a-z0-9_.-]*:[^\n]*[$#] ")
 
 # QEMU QKeyCode names for a US layout, so a test can type any of the
 # commands below (quotes, pipes, semicolons) exactly as a user would.
@@ -319,7 +321,8 @@ SUITE = [
     # -- the system information command ---------------------------------
     ("vnu-fetch", "vnu fetch",
      [r"VNU system information", r"^OS +: +VNU 0\.5 \(vibe\)$",
-      r"^Kernel +: +0\.5\.0$", r"^Uptime +: +\d+ s$", r"^Shell +: +vash$",
+      r"^Kernel +: +0\.5\.0$", r"^Host +: +vnu$", r"^Uptime +: +\d+ s$",
+      r"^Shell +: +vash$",
       r"^Graphics +: +\w[\w-]* \d+x\d+$", r"^VCC +: +0\.5$",
       r"^Build +: +\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"], []),
     ("vnu-version", "vnu version",
@@ -332,7 +335,8 @@ SUITE = [
       r"^total +: "], []),
     ("vnu-version-flag", "vnu --version", [r"^vnu \(VNU\) 0\.5$"], []),
     ("vnu-help", "vnu --help",
-     [r"Usage: vnu \[COMMAND\]\.\.\.", r"fetch", r"version", r"size"], []),
+     [r"Usage: vnu \[COMMAND\]\.\.\.", r"fetch", r"version", r"size",
+      r"install +install VNU onto a disk"], []),
     ("vnu-unknown", "vnu bogus", [r"unknown command: bogus"], []),
     ("vnu-noargs", "vnu", [r"Usage: vnu"], []),
 
@@ -358,6 +362,24 @@ SUITE = [
      [r"^VNU vnu 0\.5\.0 vibe \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} i386 "],
      []),
     ("uname-plain", "uname", [r"^VNU$"], []),
+    ("uname-node", "uname -n", [r"^vnu$"], []),
+    ("vnu-fetch-host", "vnu fetch", [r"^Host +: +vnu$"], []),
+
+    # The host name is a file like any other: root can rewrite it and
+    # uname(2) follows. Restored below so the rest of the suite sees the
+    # default name again.
+    ("hostname-file", "cat /etc/hostname", [r"^vnu$"], []),
+    ("hostname-set", "echo mybox > /etc/hostname", [], []),
+    ("hostname-new", "cat /etc/hostname", [r"^mybox$"], []),
+    ("hostname-uname", "uname -n", [r"^mybox$"], []),
+    ("hostname-restore", "echo vnu > /etc/hostname", [], []),
+    ("hostname-back", "uname -n", [r"^vnu$"], []),
+    # The installer insists on a name and refuses a bad one, both before
+    # it ever looks for a disk - so these run on the live image too.
+    ("vnu-install-nohost", "vnu install 0",
+     [r"host name is required"], [r"complete"]),
+    ("vnu-install-badhost", "vnu install 0 -bad",
+     [r"not a valid host name"], [r"complete"]),
 
     # -- the rest of userspace still works ------------------------------
     # On a terminal man pages the page and waits for a key, so the page
@@ -370,13 +392,20 @@ SUITE = [
     ("man-vcc-text", "cat /tmp/man-vcc.out", [r"^SYNOPSIS$", r"^OPTIONS$"], []),
     ("vcc-version", "vcc --version", [r"^vcc \(VNU\) 0\.5$"], []),
     ("bin-list", "ls /bin",
-     [r"^vash$", r"^vcc$", r"^vnu$", r"^man$", r"^df$"], []),
+     [r"^vash$", r"^vcc$", r"^vnu$", r"^man$", r"^df$"], [r"^install$"]),
     ("man-vnu", "man vnu > /tmp/man-vnu.out", [], [r"press h for help"]),
     ("man-vnu-text", "cat /tmp/man-vnu.out",
      [r"^NAME$", r"^SYNOPSIS$", r"^COMMANDS$", r"^FILES$",
       r"/proc/images"], []),
     ("man-ls", "man ls > /tmp/man-ls.out", [], [r"press h for help"]),
     ("man-ls-text", "cat /tmp/man-ls.out", [r"^NAME$", r"ls -"], []),
+    ("man-hostname", "man hostname > /tmp/man-hostname.out", [],
+     [r"press h for help"]),
+    ("man-hostname-text", "cat /tmp/man-hostname.out",
+     [r"^NAME$", r"hostname -", r"/etc/hostname"], []),
+    # `install` is a `vnu` subcommand now, so it has no page of its own.
+    ("man-no-install", "man install",
+     [r"^man: no manual page for install$"], []),
     ("df", "df", [r"^Filesystem", r"^vfs +\d+ +\d+ +\d+ +\d+% /$"], []),
     ("motd", "cat /etc/motd", [r"Welcome to VNU"], []),
     ("echo", "echo hello world", [r"^hello world$"], []),
@@ -497,8 +526,14 @@ def run_man_pager(guest, result, verbose, timeout=60.0):
     return True
 
 
+# The name the installed system is given, and therefore the one its
+# prompt shows on the next boot. A dash and a digit are in it on
+# purpose: both are legal and the harness must survive them.
+INSTALLED_HOST = "vnu-test"
+
+
 def run_install_scenario(iso, result, verbose, timeout, workdir):
-    """install 0 into a fresh disk, boot that disk, and check /proc/boot."""
+    """vnu install onto a fresh disk, boot it, check what it boots as."""
     disk = os.path.join(workdir, "vnu-install.vhd")
     subprocess.run(["qemu-img", "create", "-f", "vpc", disk, "64M"],
                    check=True, stdout=subprocess.DEVNULL)
@@ -506,22 +541,94 @@ def run_install_scenario(iso, result, verbose, timeout, workdir):
     with Guest(iso=iso, disk=disk, log=os.path.join(workdir, "install1.log")) as g:
         g.wait(r"VNU login:", 120.0)
         g.login()
-        output, _ = g.sh("install 0", 180.0)
-        check("install-write", output, [r"install: complete\."], [], result,
-              verbose)
+        output, _ = g.sh("vnu install 0 %s" % INSTALLED_HOST, 180.0)
+        check("install-write", output,
+              [r"vnu install: complete\.",
+               r"now called %s" % INSTALLED_HOST], [], result, verbose)
+        # The machine the installer ran on took the name too, so the
+        # very next prompt is the new one.
+        check("install-prompt", g.tail(0),
+              [r"root@%s:~\$ $" % INSTALLED_HOST], [], result, verbose)
+        output, _ = g.sh("cat /etc/hostname", timeout)
+        check("hostname-live", output, [r"^%s$" % INSTALLED_HOST], [],
+              result, verbose)
+        output, _ = g.sh("uname -n", timeout)
+        check("uname-node-live", output, [r"^%s$" % INSTALLED_HOST], [],
+              result, verbose)
     # Same disk, now without the ISO: this boot can only come from the
-    # MBR/GRUB the installer stamped.
+    # MBR/GRUB the installer stamped, and the name can only come from
+    # the config record it wrote there.
     with Guest(disk=disk, boot="c",
                log=os.path.join(workdir, "install2.log")) as g:
         g.wait(r"VNU login:", 120.0)
         g.login()
+        # The kernel adopted the name out of the disk's config record at
+        # boot (its own boot note goes to the VGA console, not the log),
+        # so the file and uname both hold it now.
+        output, _ = g.sh("cat /etc/hostname", timeout)
+        check("hostname-disk", output, [r"^%s$" % INSTALLED_HOST], [],
+              result, verbose)
+        output, _ = g.sh("uname -n", timeout)
+        check("uname-node-disk", output, [r"^%s$" % INSTALLED_HOST], [],
+              result, verbose)
         output, _ = g.sh("cat /proc/boot", timeout)
         check("proc-boot-disk", output,
               [r"^rootfs\tvfs$", r"^installed\tata0$", r"^shell\tvash$"], [],
               result, verbose)
         output, _ = g.sh("vnu fetch", timeout)
-        check("vnu-fetch-disk", output, [r"installed on ata0"], [], result,
-              verbose)
+        check("vnu-fetch-disk", output,
+              [r"installed on ata0", r"^Host +: +%s$" % INSTALLED_HOST], [],
+              result, verbose)
+    return result
+
+
+# The host name the wizard types for itself.
+WIZARD_HOST = "wizard-box"
+
+
+def run_install_wizard(iso, result, verbose, timeout, workdir):
+    """`vnu install` with no arguments: the full-screen wizard.
+
+    The wizard owns the terminal until it is done, so - like the man
+    pager - this is not a SUITE case: the keys are sent here, waiting for
+    each prompt in turn, and the whole session is checked at the end.
+    """
+    disk = os.path.join(workdir, "vnu-wizard.vhd")
+    subprocess.run(["qemu-img", "create", "-f", "vpc", disk, "64M"],
+                   check=True, stdout=subprocess.DEVNULL)
+    print("==> install wizard (ISO -> %s)" % disk)
+    with Guest(iso=iso, disk=disk, log=os.path.join(workdir, "wizard.log")) as g:
+        g.wait(r"VNU login:", 120.0)
+        g.login()
+        frm = len(g.tail(0))
+        g._type("vnu install\n")
+        # disk number, then the size (empty = whole disk), then the name
+        g.wait(r"Enter the disk number", timeout, frm)
+        g._type("0\n")
+        g.wait(r"Size in MiB", timeout, frm)
+        g._type("\n")
+        g.wait(r"Host name", timeout, frm)
+        g._type(WIZARD_HOST + "\n")
+        g.wait(r"Continue\?", timeout, frm)
+        g._type("y\n")
+        g.wait(r"Install complete\.", 180.0, frm)
+        # The wizard offers to reboot into what it just wrote; this
+        # scenario stops here, the other one boots that disk.
+        g.wait(r"Reboot now", timeout, frm)
+        g._type("n\n")
+        g.wait_prompt(timeout, frm)
+    out = g.tail(frm)
+    check("wizard-screens", out,
+          [r"Select the disk to install VNU onto",
+           r"Choose the partition size",
+           r"Name this machine",
+           r"Review your choices",
+           r"^Host: +%s$" % WIZARD_HOST,
+           r"Installing to disk 0",
+           r"Install complete\.",
+           r"disk is ready; reboot when you want to use it",
+           r"now called %s" % WIZARD_HOST,
+           r"root@%s:~\$ $" % WIZARD_HOST], [], result, verbose)
     return result
 
 
@@ -535,7 +642,9 @@ def main():
     ap.add_argument("--install", action="store_true",
                     help="also test installing to a disk and booting it")
     ap.add_argument("--install-only", action="store_true",
-                    help="run only the install-to-disk scenario")
+                    help="run only the install-to-disk scenarios")
+    ap.add_argument("--wizard-only", action="store_true",
+                    help="run only the interactive `vnu install` wizard")
     ap.add_argument("--only", action="append", default=[],
                     help="run only cases whose name contains this")
     ap.add_argument("--list", action="store_true", help="list case names")
@@ -551,6 +660,8 @@ def main():
         for name, command, _, _ in SUITE:
             print("%-18s %s" % (name, command))
         print("%-18s %s" % ("man-pager", "man vcc (keys, then q)"))
+        print("%-18s %s" % ("install-write", "vnu install 0 vnu-test"))
+        print("%-18s %s" % ("install-wizard", "vnu install (keys)"))
         return 0
 
     if not os.path.exists(args.iso):
@@ -573,15 +684,20 @@ def main():
     result = Result()
     workdir = tempfile.mkdtemp(prefix="vnu-test-")
     try:
-        if not args.install_only:
+        if not args.install_only and not args.wizard_only:
             with Guest(iso=args.iso, gpu=args.gpu, log=args.log) as guest:
                 run_suite(guest, cases, result, args.verbose, args.timeout)
                 if not args.only or any(sel in "man-pager"
                                         for sel in args.only):
                     run_man_pager(guest, result, args.verbose, args.timeout)
-        if args.install or args.install_only:
+        if args.wizard_only:
+            run_install_wizard(args.iso, result, args.verbose,
+                               args.timeout, workdir)
+        elif args.install or args.install_only:
             run_install_scenario(args.iso, result, args.verbose,
                                  args.timeout, workdir)
+            run_install_wizard(args.iso, result, args.verbose,
+                               args.timeout, workdir)
     except (TimeoutError, RuntimeError) as exc:
         print("harness error: %s" % exc, file=sys.stderr)
         result.failed.append(("harness", "", [str(exc)]))

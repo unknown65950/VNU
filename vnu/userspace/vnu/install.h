@@ -1,19 +1,30 @@
-/* install — install the VNU system image onto an ATA disk.
+/*
+ * install.h — the disk installer, reached as `vnu install`.
  *
- * With arguments:  install [DRIVE [SIZE_MIB]]
+ * With arguments:  vnu install DRIVE HOSTNAME [SIZE_MIB]
  *   non-interactive; DRIVE is the disk index (0..N-1, see /proc/disks),
- *   SIZE_MIB the partition size in MiB (0/omitted = whole usable disk).
+ *   HOSTNAME the name the machine should boot with (written to
+ *   /etc/hostname and recorded on the disk), SIZE_MIB the partition size
+ *   in MiB (omitted = the whole usable disk).
  *
  * With no arguments: a full-screen interactive wizard with blue ANSI
  * screens (the console's CSI/SGR subset) that lets you pick the target
- * disk, choose the partition size, review the choices, confirm the
- * destructive write and — on success — reboot.
+ * disk, choose the partition size, type the host name, review the
+ * choices, confirm the destructive write and — on success — reboot.
  *
  * The write itself is the kernel VNU_SYS_install syscall (30); it
- * stamps MBR + GRUB core image and creates a FAT16 partition at
- * LBA 2048 holding /boot/kernel.elf so the disk boots standalone.
+ * stamps MBR + GRUB core image, records the host name in the config
+ * sector before the partition and creates a FAT16 partition at LBA 2048
+ * holding /boot/kernel.elf so the disk boots standalone.
+ *
+ * A header, not a .c, because `vnu` is one binary and vcc links one
+ * source file per program (see AGENTS.md): shared code goes into a
+ * header as static inline.
  */
-#include "ue.h"
+#ifndef VNU_INSTALL_H
+#define VNU_INSTALL_H
+
+#include "../usertools/ue.h"
 
 #define ANSI_RESET "\x1b[0m"
 #define ANSI_CLEAR "\x1b[2J"
@@ -24,6 +35,8 @@
 
 #define UE_DISKS_F "/proc/disks"
 
+#define HOST_MAX 64 /* 63 characters plus the NUL */
+
 struct disk_info {
     int idx;
     char model[41];
@@ -33,7 +46,7 @@ struct disk_info {
 /* Read the /proc/disks table (`diskN \t MODEL \t SIZE_MIB MiB` per line,
  * produced by the kernel). Returns the number of entries or -1 if the
  * file could not be read. */
-static int read_disks(struct disk_info* out, int max)
+static inline int read_disks(struct disk_info* out, int max)
 {
     int fd = open(UE_DISKS_F, O_RDONLY);
     if (fd < 0)
@@ -78,7 +91,7 @@ static int read_disks(struct disk_info* out, int max)
 
 /* Read one line, echoing the characters the user types (the tty itself
  * does not echo). Returns the length, or -1 on Ctrl+C/EOF. */
-static int read_field(char* out, int max)
+static inline int read_field(char* out, int max)
 {
     int n = 0;
     out[0] = 0;
@@ -107,7 +120,7 @@ static int read_field(char* out, int max)
     }
 }
 
-static int yes_no(int* confirmed)
+static inline int yes_no(int* confirmed)
 {
     char buf[8];
     if (read_field(buf, sizeof(buf)) < 0)
@@ -116,7 +129,7 @@ static int yes_no(int* confirmed)
     return 0;
 }
 
-static void banner(const char* title)
+static inline void banner(const char* title)
 {
     ue_out(ANSI_CLEAR);
     ue_out(ANSI_TITLE);
@@ -128,13 +141,13 @@ static void banner(const char* title)
     ue_out("\n\n");
 }
 
-static void screen_reset(void)
+static inline void screen_reset(void)
 {
     ue_out(ANSI_RESET);
     ue_out(ANSI_CLEAR);
 }
 
-static void print_disks(struct disk_info* d, int n)
+static inline void print_disks(struct disk_info* d, int n)
 {
     for (int i = 0; i < n; ++i) {
         ue_out(ANSI_PICK);
@@ -153,9 +166,59 @@ static void print_disks(struct disk_info* d, int n)
     ue_out("\n");
 }
 
+/* A host name is 1..63 characters of letters, digits, '-', '_' and '.',
+ * starting and ending with a letter or digit. The kernel applies the
+ * same rule to whatever it records on a disk (vnu/kernel/host/host.cpp),
+ * so the same name can be typed here or stored in /etc/hostname. */
+static inline int host_name_ok(const char* s)
+{
+    int n = 0;
+    for (; s[n]; ++n) {
+        if (n >= HOST_MAX - 1)
+            return 0;
+        char c = s[n];
+        int alnum = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9');
+        if (!alnum && c != '-' && c != '_' && c != '.')
+            return 0;
+        if (n == 0 && !alnum)
+            return 0;
+    }
+    if (n == 0)
+        return 0;
+    char last = s[n - 1];
+    return (last >= 'a' && last <= 'z') || (last >= 'A' && last <= 'Z') ||
+           (last >= '0' && last <= '9');
+}
+
+/* The name this system currently answers to, for the wizard's default. */
+static inline void current_host(char* out, int max)
+{
+    if (max < 2)
+        return;
+    out[0] = 0;
+    if (gethostname(out, (unsigned long)max) != 0)
+        strcpy(out, "vnu");
+}
+
+/* The running system is the one being installed — the kernel copies
+ * itself onto the disk — so it takes the name as well: /etc/hostname is
+ * rewritten and the next shell prompt already says it. */
+static inline void adopt_host(const char* hostname)
+{
+    if (sethostname(hostname) == 0) {
+        ue_out("vnu install: this machine is now called ");
+        ue_out(hostname);
+        ue_out(" (/etc/hostname)\n");
+        return;
+    }
+    ue_err("vnu install: warning: /etc/hostname could not be updated\n");
+}
+
 /* Full-screen interactive installer: pick disk, pick partition size,
- * review, confirm the destructive write, install, offer a reboot. */
-static int wizard(void)
+ * type the host name, review, confirm the destructive write, install,
+ * offer a reboot. */
+static inline int install_wizard(void)
 {
     struct disk_info disks[8];
     int nd = read_disks(disks, 8);
@@ -224,10 +287,38 @@ static int wizard(void)
         read_field(junk, sizeof(junk));
     }
 
+    /* --- the host name --- */
+    char hostname[HOST_MAX];
+    char deflt[HOST_MAX];
+    current_host(deflt, sizeof(deflt));
+    for (;;) {
+        banner("Name this machine");
+        ue_out("The name is stored in /etc/hostname and shows up in the\n");
+        ue_out("shell prompt, in uname and on the installed disk.\n");
+        ue_out("Letters, digits, '-', '_' and '.', up to 63 characters.\n\n");
+        ue_out("Host name [");
+        ue_out(deflt);
+        ue_out("]: ");
+        if (read_field(hostname, sizeof(hostname)) < 0) {
+            screen_reset();
+            return 1;
+        }
+        if (hostname[0] == 0) {
+            strcpy(hostname, deflt);
+            break;
+        }
+        if (host_name_ok(hostname))
+            break;
+        ue_out("\nNot a valid host name.\n");
+        ue_out("Press Enter to try again...");
+        char junk[8];
+        read_field(junk, sizeof(junk));
+    }
+
     /* --- review --- */
     banner("Review your choices");
     ue_out("Target:  disk ");
-    ue_num(drive);
+    ue_num((unsigned long)drive);
     ue_out("\n");
     for (int i = 0; i < nd; ++i)
         if (disks[i].idx == drive) {
@@ -248,7 +339,9 @@ static int wizard(void)
         ue_num(size_mib);
         ue_out(" MiB\n");
     }
-    ue_out("\nThis will erase the whole disk. ");
+    ue_out("Host:    ");
+    ue_out(hostname);
+    ue_out("\n\nThis will erase the whole disk. ");
     ue_out(ANSI_LABEL);
     ue_out("Continue? [y/N]: ");
     int go = 0;
@@ -266,12 +359,13 @@ static int wizard(void)
     ue_out(ANSI_CLEAR);
     ue_out(ANSI_BODY);
     ue_out("\nInstalling to disk ");
-    ue_num(drive);
+    ue_num((unsigned long)drive);
     ue_out(" ... this may take a while.\n");
-    long rc = syscall(VNU_SYS_install, (unsigned long)drive, (unsigned long)size_mib);
+    long rc = syscall(VNU_SYS_install, (unsigned long)drive, size_mib,
+                      hostname);
     if (rc != 0) {
         ue_out("\nInstall failed (error ");
-        ue_num((unsigned long)rc);
+        ue_num((unsigned long)-rc);
         ue_out("). The disk was left unchanged.\n");
         if (rc == -VNU_EPERM)
             ue_out("You must be root to install.\n");
@@ -282,6 +376,7 @@ static int wizard(void)
     ue_out(ANSI_PICK);
     ue_out("Install complete.\n");
     ue_out(ANSI_BODY);
+    adopt_host(hostname);
     ue_out("\nReboot now to boot from the new disk? [y/N]: ");
     int rb = 0;
     if (yes_no(&rb) < 0) {
@@ -298,26 +393,35 @@ static int wizard(void)
     return 0;
 }
 
-static int non_interactive(int drive, unsigned long size_mib)
+static inline int install_non_interactive(int drive, const char* hostname,
+                                          unsigned long size_mib)
 {
+    if (!host_name_ok(hostname)) {
+        ue_err("vnu install: '");
+        ue_err(hostname);
+        ue_err("' is not a valid host name\n");
+        return 1;
+    }
     long n = syscall(VNU_SYS_blkcount);
     if (n <= 0) {
-        ue_err("install: no disks detected\n");
+        ue_err("vnu install: no disks detected\n");
         return 1;
     }
     if (drive < 0 || drive >= (int)n) {
-        ue_err("install: drive out of range (available: 0..");
+        ue_err("vnu install: drive out of range (available: 0..");
         ue_num((unsigned long)n - 1);
         ue_err(")\n");
         return 1;
     }
-    long rc = syscall(VNU_SYS_install, (unsigned long)drive, size_mib);
+    long rc = syscall(VNU_SYS_install, (unsigned long)drive, size_mib,
+                      hostname);
     if (rc == 0) {
-        ue_out("install: complete. Reboot from this disk to use it.\n");
+        ue_out("vnu install: complete. Reboot from this disk to use it.\n");
+        adopt_host(hostname);
         return 0;
     }
-    ue_err("install: failed (error ");
-    ue_num((unsigned long)rc);
+    ue_err("vnu install: failed (error ");
+    ue_num((unsigned long)-rc);
     ue_err(")");
     if (rc == -VNU_EPERM)
         ue_err(": permission denied (run as root)");
@@ -325,21 +429,32 @@ static int non_interactive(int drive, unsigned long size_mib)
     return 1;
 }
 
-int main(int ac, char** av)
+/* `argc`/`argv` are the ones of `vnu install`, so av[0] is "install". */
+static inline int vnu_install(int argc, char** argv)
 {
-    if (ac < 2)
-        return wizard();
+    (void)argv;
+    if (argc < 2)
+        return install_wizard();
 
-    int drive = atoi(av[1]);
+    if (argc < 3) {
+        ue_err("vnu install: a host name is required: "
+               "vnu install DRIVE HOSTNAME [SIZE_MIB]\n");
+        ue_err("vnu install: with no arguments the wizard asks for both\n");
+        return 1;
+    }
+    int drive = atoi(argv[1]);
+    const char* hostname = argv[2];
     unsigned long size_mib = 0;
-    if (ac > 2) {
-        int v = atoi(av[2]);
+    if (argc > 3) {
+        int v = atoi(argv[3]);
         if (v <= 0) {
-            ue_err("install: partition size must be a positive number of MiB "
-                   "(0 means whole disk)\n");
+            ue_err("vnu install: partition size must be a positive number "
+                   "of MiB (omit it for the whole disk)\n");
             return 1;
         }
         size_mib = (unsigned long)v;
     }
-    return non_interactive(drive, size_mib);
+    return install_non_interactive(drive, hostname, size_mib);
 }
+
+#endif // VNU_INSTALL_H

@@ -6,6 +6,7 @@
 #include <vnu/vga_gfx.h>
 #include <vnu/virtio_gpu.h>
 #include <vnu/install.h>
+#include <vnu/host.h>
 #include <vnu/mboot.h>
 #include <vnu/process.h>
 #include <vnu/ata.h>
@@ -627,6 +628,25 @@ void init()
     node_set_cstr(*m, "Welcome to VNU\n");
     add("/etc/initialD", true);
 
+    /* --- the machine's name ---
+     * /etc/hostname holds the node name, one line, and is the single
+     * source of truth: uname(2), the vash prompt and the installer all
+     * read it (see vnu/host.h). A fresh image starts with the built-in
+     * default; an installed disk overrides it at boot from the config
+     * record the installer stamped, and `vnu install` rewrites it. It
+     * is root-writable (0644), like the other /etc files. */
+    auto* hn = add("/etc/hostname", false);
+    if (hn) {
+        char seed[vnu::host::MAX + 1];
+        int i = 0;
+        for (; vnu::host::DEFAULT_NAME[i] && i < vnu::host::MAX; ++i)
+            seed[i] = vnu::host::DEFAULT_NAME[i];
+        seed[i++] = '\n';
+        seed[i] = 0;
+        node_set_cstr(*hn, seed);
+        hn->perm = 0644u;
+    }
+
     /* --- name resolution ---
      * /etc/hosts: static `ip addr [name ...]` mappings, consulted
      * before DNS. /etc/resolv.conf: `nameserver a.b.c.d` lines tried
@@ -703,7 +723,6 @@ void init()
     add("/bin/useradd", false);
     add("/bin/passwd", false);
     add("/bin/su", false);
-    add("/bin/install", false);
     add("/bin/echoserver", false);
     add("/bin/tlsserver", false);
     add("/bin/vcc", false);
@@ -1245,6 +1264,26 @@ int read_path(const char* path, char* buf, uint32_t count)
     for (uint32_t i = 0; i < z && n->buf; ++i)
         buf[i] = n->buf[i];
     return static_cast<int>(z);
+}
+
+/* Replace the whole content of a file, the way a shell's `> file` does
+ * (O_TRUNC) but by path and without an open descriptor. Only the kernel
+ * needs this today: it rewrites /etc/hostname from the installer and at
+ * boot. Permission bits still apply, so a non-root caller cannot rewrite
+ * a root-owned /etc file. */
+int set_path(const char* path, const char* data, uint32_t len)
+{
+    char abs[PATH_CAP];
+    normalize(path, abs, PATH_CAP);
+    Node* n = find(abs);
+    if (!n || n->dir)
+        return -VNU_ENOENT;
+    if (n->synth != SynthKind::None)
+        return -VNU_EACCES; /* /proc is generated, not stored */
+    if (!have_access(*n, A_W))
+        return -VNU_EACCES;
+    node_set(*n, reinterpret_cast<const uint8_t*>(data), len);
+    return 0;
 }
 
 void list(char* buf, uint32_t count)

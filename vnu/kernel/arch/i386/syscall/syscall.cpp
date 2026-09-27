@@ -2,6 +2,7 @@
 #include <vnu/abi.h>
 #include <vnu/version.h>
 #include <vnu/vfs.h>
+#include <vnu/host.h>
 #include <vnu/process.h>
 #include <vnu/kbd.h>
 #include <vnu/tty.h>
@@ -436,7 +437,8 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
             d[i] = 0;
         };
         cpy(u->sysname, "VNU");
-        cpy(u->nodename, "vnu");
+        /* The node name is whatever /etc/hostname says (vnu::host). */
+        cpy(u->nodename, vnu::host::name());
         cpy(u->release, VNU_KERNEL_VERSION);
         /* Release codename plus the build stamp, as in /proc/version. */
         cpy(u->version, VNU_CODENAME " " VNU_BUILD_STAMP);
@@ -474,12 +476,15 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
         return static_cast<std::uint32_t>(vnu::install::disk_count());
 
     case VNU_SYS_install:
-        /* Destructive disk write: root only (same gate as reboot). */
+        /* Destructive disk write: root only (same gate as reboot).
+         * ebx = drive, ecx = partition size in MiB, edx = the host
+         * name to record for the installed system. */
         if (!vnu::proc::current() || vnu::proc::current()->uid != 0)
             return static_cast<std::uint32_t>(-VNU_EPERM);
         return static_cast<std::uint32_t>(
             vnu::install::install(static_cast<int>(tf->ebx),
-                                  static_cast<std::uint32_t>(tf->ecx)));
+                                  static_cast<std::uint32_t>(tf->ecx),
+                                  reinterpret_cast<const char*>(tf->edx)));
 
     case VNU_SYS_time:
         /* Wall clock: seconds since local midnight from the RTC. */

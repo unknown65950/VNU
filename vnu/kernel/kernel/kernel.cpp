@@ -15,6 +15,7 @@
 #include <vnu/pmm.h>
 #include <vnu/paging.h>
 #include <vnu/ata.h>
+#include <vnu/host.h>
 #include <vnu/mboot.h>
 #include <vnu/net.h>
 #include <vnu/tcp.h>
@@ -118,6 +119,11 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
     vnu::apps::install_demo_sounds();
     vnu::ata::init();
     serial_init();
+    /* An installed disk carries the node name the installer was given;
+     * adopt it into /etc/hostname. A live session keeps the default.
+     * After serial_init(), so the note reaches the console log. */
+    if (vnu::host::load())
+        vga_print("VNU: host name from installed disk\n");
     vnu::tty::init();
     vnu::tty::clear();
     vnu::net::init(); /* QEMU's default e1000 NIC — backs the `ping` command */

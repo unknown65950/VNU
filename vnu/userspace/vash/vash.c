@@ -39,6 +39,17 @@ static unsigned long cur_uid = 0;
 static unsigned long cur_gid = 0;
 static char home_dir[PATH_MAX] = "/root";
 
+/* The machine's name, for the prompt. Read from /etc/hostname on every
+ * prompt (a tiny RAM-backed file, and `vnu install` may have just
+ * renamed the machine); "vnu" when the file is missing or empty. */
+static char cur_host[64] = "vnu";
+
+static void refresh_host(void)
+{
+    if (gethostname(cur_host, sizeof(cur_host)) != 0)
+        strcpy(cur_host, "vnu");
+}
+
 static void w(const char* s)
 {
     if (s)
@@ -784,8 +795,14 @@ int main(int argc, char** argv)
 
     char line[LMAX];
     for (;;) {
+        /* Read the name just before the prompt: `vnu install` renames
+         * the machine under a shell that stays alive, and the new name
+         * shows up in the very next prompt. */
+        refresh_host();
         w(cur_user);
-        w("@vnu:");
+        w("@");
+        w(cur_host);
+        w(":");
         char cwd[PATH_MAX];
         if (getcwd(cwd, sizeof(cwd)))
             w(strcmp(cwd, home_dir) == 0 ? "~" : cwd);

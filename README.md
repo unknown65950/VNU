@@ -38,7 +38,8 @@ root@vnu:~$ man ls
   with icons — terminal `term` (embedded vash), `vedit`, `calc`, `files`,
   `prefs`.
 - **Disks**: ATA driver + FAT16, syscalls `blkcount`/`install` — the kernel
-  can write itself (GRUB + partition) to a disk.
+  can write itself (GRUB + partition) to a disk, together with the host name
+  the machine should boot with (see `/etc/hostname`).
 - **System calls**: `int 0x80`, append-only ABI v1 (0–34), see
   `vnu/abi/ABI.md`. New numbers start at 35 and only with documentation.
 
@@ -56,7 +57,7 @@ External `/bin/*` (each a standalone binary):
 | `cp` `mv` `basename` `dirname` | file operations |
 | `seq` `man` `vedit` `ttytest` | number generation, docs, editor, terminal test |
 | `id` `whoami` `groups` `useradd` `passwd` `su` | accounts/identity tools (`su` starts a fresh shell as the user) |
-| `install` | write the VNU image to an ATA disk (root) |
+| `vnu install` | write the VNU image to an ATA disk, naming the machine (root) |
 | `hello` (and `hello_cxx`) | userspace program examples |
 | `gui` | virtual command → VibeGraphics windowed environment (intercepted by the kernel in `execve`) |
 
@@ -72,10 +73,10 @@ vlibc/                          freestanding C library and its headers
 vnu/
 ├── kernel/                     the kernel (freestanding C++20, build/ via CMake)
 │   ├── arch/i386/              boot (Multiboot2), GDT/IDT, syscalls
-│   ├── console/ fs/ drv/ mm/ proc/ gui/ install/
+│   ├── console/ fs/ drv/ mm/ proc/ gui/ install/ host/
 │   └── proc/embedded_*.h       userspace ELFs embedded into kernel.elf
 ├── userspace/                  vash, vibecoreutils (one .c per command),
-│                               usertools (accounts/install), man, vedit,
+│                               usertools (accounts), man, vedit,
 │                               GUI apps, examples, rootfs
 ├── abi/ABI.md                  ABI v1 description
 ├── build_iso.sh                cmake + grub-mkrescue -> vnu/vnu.iso
@@ -175,11 +176,11 @@ Kernel output and userspace fd1/fd2 are mirrored to COM1, which is the log
 the assertions read.
 
 ```bash
-make test                      # 41 cases: vnu, /proc, uname, coreutils, man
-                               #   plus the interactive man pager session
+make test                      # 55 cases: vnu, /proc, uname, hostname, coreutils,
+                               #   man, plus the interactive man pager session
 make test-gpu                  # the same suite on a virtio-gpu display
-make test-install              # install 0 to a fresh disk, boot that disk,
-                               #   and check /proc/boot reports installed ata0
+make test-install              # vnu install onto a fresh disk, boot that disk,
+                               #   and check the name it boots with
 make test-all                  # ISO + virtio-gpu + install in one go
 TEST_ARGS="--only vnu -v" make test      # filter cases, verbose
 ./tools/qemu_test.py --list               # case names

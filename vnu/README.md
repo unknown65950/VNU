@@ -15,13 +15,13 @@ vnu/
 │   ├── linker.ld               places the kernel at 1 MiB
 │   ├── arch/i386/boot/boot.s   Multiboot2 header + _start (NASM)
 │   ├── arch/i386/              GDT/IDT, PIC, paging, syscall entry
-│   ├── console/ drv/ mm/ proc/ gui/ install/ fs/
+│   ├── console/ drv/ mm/ proc/ gui/ install/ host/ fs/
 │   ├── kernel/kernel.cpp       kernel_main: bring-up order
 │   └── proc/embedded_*.h       userspace ELFs embedded into kernel.elf
 ├── userspace/                  sources compiled by tools/vcc
 │   ├── vash/                   the shell
 │   ├── vibecoreutils/          one .c per coreutils command
-│   ├── usertools/              id, whoami, su, install, ...
+│   ├── usertools/              id, whoami, su, ...
 │   ├── gui/                    desktop apps, picview, prefs, ...
 │   ├── editors/                vedit
 │   ├── man/                    the manual (self-contained, one binary)

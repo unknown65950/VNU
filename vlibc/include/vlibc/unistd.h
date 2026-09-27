@@ -28,6 +28,14 @@ int setgid(unsigned long gid);
 int chown(const char* path, unsigned long uid, unsigned long gid);
 int chdir(const char* path);
 char* getcwd(char* buffer, unsigned long size);
+/* The node name of the machine, in /etc/hostname (this kernel has no
+ * gethostname(2)/sethostname(2): the name is a file). gethostname fills
+ * `name` with the first line of the file and always terminates it;
+ * sethostname accepts 1..63 characters of letters, digits, '-', '_' and
+ * '.', starting and ending with a letter or digit, and rewrites the
+ * file. Both return 0, or -1 on failure. */
+int gethostname(char* name, unsigned long len);
+int sethostname(const char* name);
 int pipe(int fds[2]);
 int dup(int oldfd);
 int dup2(int oldfd, int newfd);

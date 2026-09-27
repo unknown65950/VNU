@@ -40,7 +40,6 @@
 #include "embedded_useradd.h"
 #include "embedded_passwd.h"
 #include "embedded_su.h"
-#include "embedded_install.h"
 #include "embedded_vprobe.h"
 #include "embedded_tlsdemo.h"
 #include "embedded_echoserver.h"
@@ -115,7 +114,6 @@ const EmbeddedProg embedded[] = {
     {"/bin/useradd", embedded_useradd_elf, embedded_useradd_elf_size},
     {"/bin/passwd", embedded_passwd_elf, embedded_passwd_elf_size},
     {"/bin/su", embedded_su_elf, embedded_su_elf_size},
-    {"/bin/install", embedded_install_elf, embedded_install_elf_size},
     {"/bin/vprobe", embedded_vprobe_elf, embedded_vprobe_elf_size},
     {"/bin/tlsdemo", embedded_tlsdemo_elf, embedded_tlsdemo_elf_size},
     {"/bin/echoserver", embedded_echoserver_elf, embedded_echoserver_elf_size},

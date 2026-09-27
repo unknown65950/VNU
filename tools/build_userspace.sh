@@ -51,8 +51,9 @@ done
 "$VCC" "$ROOT/vnu/userspace/vcc/vcc.c" -o "$ROOT/sysroot/bin/vcc"
 # system information: what machine am I on (fetch/version/size).
 "$VCC" "$ROOT/vnu/userspace/vnu/vnu.c" -o "$ROOT/sysroot/bin/vnu"
-# account/install tools: one separate binary per command.
-for c in id whoami groups useradd passwd su install; do
+# account tools: one separate binary per command. The disk installer is
+# not here any more: it is `vnu install`, part of the vnu binary.
+for c in id whoami groups useradd passwd su; do
   "$VCC" "$ROOT/vnu/userspace/usertools/$c.c" -o "$ROOT/sysroot/bin/$c"
 done
 
@@ -90,7 +91,7 @@ for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wc head tail grep sort cp mv basename dirname seq df ping; do
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
-for c in id whoami groups useradd passwd su install; do
+for c in id whoami groups useradd passwd su; do
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
 echo "==> done"

@@ -4,6 +4,8 @@
  *   vnu fetch    one-screen overview of the running system
  *   vnu version  version block (OS, kernel, compiler, ABI, build date)
  *   vnu size     how much of what the system image is made of
+ *   vnu install  install the system onto a disk (wizard, or
+ *                vnu install DRIVE HOSTNAME [SIZE_MIB])
  *
  * Every number printed here is read from the running system: uname(2),
  * /proc/version, /proc/meminfo, /proc/gfx, /proc/boot, /proc/dfstat
@@ -23,6 +25,10 @@
 
 /* vcc's own version number, shared with the compiler binary. */
 #include "../vcc/vcc_version.h"
+
+/* The disk installer, reached as `vnu install`: one binary, so the
+ * wizard lives in a header (see AGENTS.md). */
+#include "install.h"
 
 #define PROC_CAP 4096
 
@@ -285,7 +291,12 @@ static int cmd_fetch(void)
     }
     w("\n");
 
+    w("\n");
     row("Kernel", have_uname ? u.release : vi.kernel);
+
+    char host[64];
+    if (gethostname(host, sizeof(host)) == 0)
+        row("Host", host);
 
     label("Uptime");
     w(":  ");
@@ -443,6 +454,9 @@ static void usage(void)
     w("  fetch     overview of the running system (default)\n");
     w("  version   version block: OS, kernel, compiler, ABI, build date\n");
     w("  size      how much of what the system image is made of\n");
+    w("  install   install VNU onto a disk: no arguments opens the\n");
+    w("            wizard, or DRIVE HOSTNAME [SIZE_MIB] does it\n");
+    w("            without asking\n");
     w("  --help    display this help and exit\n");
     w("  --version output version information and exit\n");
 }
@@ -460,6 +474,8 @@ int main(int argc, char** argv)
         return cmd_version();
     if (strcmp(cmd, "size") == 0)
         return cmd_size();
+    if (strcmp(cmd, "install") == 0)
+        return vnu_install(argc - 1, argv + 1);
     if (strcmp(cmd, "--help") == 0 || strcmp(cmd, "-h") == 0) {
         usage();
         return 0;

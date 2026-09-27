@@ -125,6 +125,7 @@ add_executable(kernel.elf
     gui/wintask.cpp
     install/blobs.s
     install/install.cpp
+    host/host.cpp
     runtime/string.cpp
     kernel/kernel.cpp
     mm/pmm.cpp

@@ -1,6 +1,7 @@
 #include <vnu/install.h>
 #include <vnu/ata.h>
 #include <vnu/fat16.h>
+#include <vnu/host.h>
 #include <vnu/mboot.h>
 #include <vnu/tty.h>
 
@@ -15,6 +16,16 @@ namespace {
 
 constexpr uint32_t PART_START = 2048;         // 1 MiB alignment
 constexpr uint32_t MAX_PART_SECTORS = 0x3F0000u; // keep FAT16 happy (~2 GiB)
+
+// The one sector of our own in the gap between the GRUB embedding area
+// and the partition: magic + the node name the installer was given. It
+// is never part of the FAT16 volume, so a filesystem tool cannot see or
+// clobber it, and the kernel reads it back with a single sector read
+// when it boots from an installed disk.
+constexpr uint32_t CFG_SECTOR = PART_START - 1;
+constexpr const char* CFG_MAGIC = "VNUCFG1"; // 8 bytes, then the name
+constexpr uint32_t CFG_NAME_OFF = 8;
+constexpr uint32_t CFG_NAME_MAX = vnu::host::MAX;
 
 // The config the installed GRUB loads. `module2 /boot/kernel.elf` is
 // what makes the running kernel available as a Multiboot2 module, so a
@@ -36,6 +47,20 @@ void put32(uint8_t* p, uint32_t v)
     p[3] = static_cast<uint8_t>(v >> 24);
 }
 
+/* Is drive `d` one of ours? A single boot sector read is enough: the
+ * installer stamps the FAT16 OEM name "VNUFS   " into it. The
+ * freestanding kernel has no memcmp, hence the byte compare by hand. */
+bool is_vnu_volume(int d, uint8_t* scratch)
+{
+    if (!vnu::ata::read_sectors(d, PART_START, 1, scratch))
+        return false;
+    for (int i = 0; i < 8; ++i) {
+        if (scratch[3 + i] != static_cast<uint8_t>("VNUFS   "[i]))
+            return false;
+    }
+    return true;
+}
+
 } // namespace
 
 namespace vnu::install {
@@ -47,29 +72,52 @@ int disk_count()
 
 int installed_drive()
 {
-    /* One boot sector of scratch: we only look for the FAT16 OEM name
-     * the installer stamps into it ("VNUFS   "), never walk the volume.
-     * The freestanding kernel has no memcmp, hence the eight-byte
-     * compare by hand. */
+    /* We only look for the OEM name the installer stamped, we never walk
+     * the volume. */
     uint8_t bs[512];
-    for (int d = 0; d < vnu::ata::drive_count(); ++d) {
-        if (!vnu::ata::read_sectors(d, PART_START, 1, bs))
-            continue;
-        const uint8_t* oem = bs + 3;
-        bool ours = true;
-        for (int i = 0; i < 8; ++i) {
-            if (oem[i] != static_cast<uint8_t>("VNUFS   "[i]))
-                ours = false;
-        }
-        if (ours)
+    for (int d = 0; d < vnu::ata::drive_count(); ++d)
+        if (is_vnu_volume(d, bs))
             return d;
-    }
     return -1;
 }
 
-int install(int drive, uint32_t size_mib)
+int installed_hostname(char* out, uint32_t max)
+{
+    if (!out || max == 0)
+        return -1;
+    out[0] = 0;
+    /* The same disk /proc/boot reports, so the name on screen and the
+     * name on the disk can never come from two different volumes. */
+    int d = installed_drive();
+    if (d < 0)
+        return -1;
+    uint8_t cfg[512];
+    if (!vnu::ata::read_sectors(d, CFG_SECTOR, 1, cfg))
+        return -1;
+    for (int i = 0; i < 8; ++i) {
+        if (cfg[i] != static_cast<uint8_t>(CFG_MAGIC[i]))
+            return -1; /* installed, but by a build without names */
+    }
+    uint32_t n = 0;
+    while (n < CFG_NAME_MAX - 1 && CFG_NAME_OFF + n < 512 &&
+           cfg[CFG_NAME_OFF + n] != 0) {
+        out[n] = static_cast<char>(cfg[CFG_NAME_OFF + n]);
+        ++n;
+    }
+    out[n] = 0;
+    if (n == 0 || n >= max)
+        return -1;
+    return 0;
+}
+
+int install(int drive, uint32_t size_mib, const char* hostname)
 {
     if (drive < 0 || drive >= vnu::ata::drive_count())
+        return -22; // EINVAL
+    /* The name is part of the install, not a nicety: the disk has to
+     * boot as a machine with a name. Same rule as vnu::host::valid(),
+     * which also documents the accepted characters. */
+    if (!vnu::host::valid(hostname))
         return -22; // EINVAL
 
     uint32_t total = vnu::ata::drive(drive).sectors;
@@ -132,7 +180,24 @@ int install(int drive, uint32_t size_mib)
     if (!vnu::ata::write_sectors(drive, 1, core_sec, core))
         return -5;
 
-    // 3) Filesystem with the running kernel.
+    // 3) Our config sector: the node name for the next boot.
+    {
+        uint8_t cfg[512];
+        for (int i = 0; i < 512; ++i)
+            cfg[i] = 0;
+        for (int i = 0; i < 8; ++i)
+            cfg[i] = static_cast<uint8_t>(CFG_MAGIC[i]);
+        uint32_t n = 0;
+        for (; hostname[n] && n < CFG_NAME_MAX - 1; ++n)
+            cfg[CFG_NAME_OFF + n] = static_cast<uint8_t>(hostname[n]);
+        vnu::tty::write_cstr("install: recording host name '");
+        vnu::tty::write_cstr(hostname);
+        vnu::tty::write_cstr("'\n");
+        if (!vnu::ata::write_sectors(drive, CFG_SECTOR, 1, cfg))
+            return -5; // EIO
+    }
+
+    // 4) Filesystem with the running kernel.
     uint32_t ksize = 0;
     const void* kernel = vnu::mboot::first_module(ksize);
     if (!kernel || ksize == 0) {

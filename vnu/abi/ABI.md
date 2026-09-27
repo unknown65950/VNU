@@ -86,9 +86,15 @@ with `-1` leaves a field unchanged; only root may chown.
   fit the new image (cap 1 MiB). Errors: `-VNU_ENOENT`, `-VNU_ENOEXEC`,
   `-VNU_ENOMEM`.
 - `blkcount(ebx)` — returns the number of ATA disks the installer sees.
-- `install(ebx, ecx)` — `ebx` is the target ATA disk index; `ecx` is the
-  partition size in MiB (0 = as much as the disk/FAT16 allows). Returns 0
-  or a negative errno. Root only — the write is destructive.
+- `install(ebx, ecx, edx)` — `ebx` is the target ATA disk index; `ecx` is
+  the partition size in MiB (0 = as much as the disk/FAT16 allows); `edx` is
+  a pointer to the NUL-terminated host name the machine should boot with
+  (1..63 characters of letters, digits, `-`, `_`, `.`, starting and ending
+  with a letter or digit; anything else is rejected with `-VNU_EINVAL` before
+  a single sector is written). The name is stamped into the disk's config
+  record (sector 2047: magic `VNUCFG1\0`, then the name) and the kernel
+  adopts it into `/etc/hostname` on the next boot of that disk. Returns 0 or
+  a negative errno. Root only — the write is destructive.
 - `reboot()` — triggers a system reset via the 8042 keyboard controller.
   Root only.
 - `time()` — returns the RTC wall-clock time as whole seconds since local

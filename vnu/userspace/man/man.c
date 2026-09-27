@@ -104,7 +104,8 @@ SYNOPSIS\n\
 \n\
 DESCRIPTION\n\
     The interactive login shell. Prints a prompt of the form\n\
-    user@vnu:cwd$ and reads commands line by line. Words are\n\
+    user@name:cwd$, where name comes from /etc/hostname, and reads\n\
+    commands line by line. Words are\n\
     split on whitespace; there is no quoting or piping yet.\n\
 \n\
     Redirection is supported with > file, >> file (append) and\n\
@@ -204,34 +205,6 @@ DESCRIPTION\n\
     Returns the path (or 'is a shell builtin') that would be\n\
     used for NAME. Identical in behaviour to type.\n"
 
-#define INSTALL_PAGE "NAME\n\
-    install - install the VNU system image onto a disk\n\
-\n\
-SYNOPSIS\n\
-    install [DRIVE [SIZE_MIB]]\n\
-\n\
-DESCRIPTION\n\
-    With no arguments, install launches a full-screen interactive wizard\n\
-    in the style of the classic Windows Setup / FreeBSD sysinstall /\n\
-    Slackware setup screens. It lets you pick the target disk (from\n\
-    /proc/disks), choose the partition size in MiB, review the chosen\n\
-    parameters, confirm the destructive write and finally reboot. Blue\n\
-    screens use the console's ANSI color support.\n\
-\n\
-    With arguments, install runs non-interactively: DRIVE is the disk\n\
-    index (0..N-1, see VNU_SYS_blkcount or /proc/disks) and SIZE_MIB is\n\
-    the partition size in MiB (0 or omitted = the whole usable disk).\n\
-\n\
-    The write itself is performed by the kernel (syscall VNU_SYS_install,\n\
-    30): it stamps the MBR + GRUB core image and creates a FAT16\n\
-    partition at LBA 2048 holding /boot/kernel.elf and a GRUB config so\n\
-    the disk boots standalone. This is what a distro 'sysinst' would be.\n\
-\n\
-    Requires root. After a successful write, reboot from the target\n\
-    disk (with no arguments the wizard offers to reboot for you).\n\
-\n\
-    Standalone binary /bin/install.\n"
-
 #define ID_PAGE "NAME\n\
     id - print the current identity\n\
 \n\
@@ -321,9 +294,9 @@ DESCRIPTION\n\
     page is kept as an index of the set. Run 'man <name>' for a\n\
     single tool, or bare 'man' for every documented command.\n\
 \n\
-    The separate account/install tools id, whoami, groups,\n\
-    useradd, passwd, su and install are standalone /bin binaries\n\
-    too — see also the VNU manual's list.\n"
+    The separate account tools id, whoami, groups, useradd,\n\
+    passwd and su are standalone /bin binaries too. The disk\n\
+    installer is not one of them: it is 'vnu install' (see man vnu).\n"
 
 #define ECHO_PAGE "NAME\n\
     echo - write its arguments to standard output\n\
@@ -433,7 +406,8 @@ DESCRIPTION\n\
 \n\
     -a, --all            print everything\n\
     -s, --kernel-name    kernel name\n\
-    -n, --nodename       network hostname\n\
+    -n, --nodename       host name (from /etc/hostname; see\n\
+                         'man hostname')\n\
     -r, --kernel-release kernel release\n\
     -v, --kernel-version kernel version\n\
     -m, --machine        machine hardware name\n\
@@ -654,9 +628,9 @@ SYNOPSIS\n\
 \n\
 DESCRIPTION\n\
     Prints a summary of the running system: its versions, how long it\n\
-    has been up, memory use, the shell and file system the session\n\
-    runs in, the display, and how much space each part of the system\n\
-    image takes.\n\
+    has been up, its host name, memory use, the shell and file system\n\
+    the session runs in, the display, and how much space each part of\n\
+    the system image takes.\n\
 \n\
     Every value is read from the running system (uname(2), the /proc\n\
     files listed below, and the size accounting in the kernel, so the\n\
@@ -668,23 +642,51 @@ DESCRIPTION\n\
 \n\
 COMMANDS\n\
     fetch     overview of the running system: OS and kernel version,\n\
-              uptime, memory, shell, file system, display, compiler\n\
-              version and build date\n\
+              uptime, host name, memory, shell, file system, display,\n\
+              compiler version and build date\n\
     version   version block: OS, kernel, compiler, ABI version and\n\
               build date\n\
     size      image size per component (kernel, userspace, libraries,\n\
               fonts, resources) with the number of objects in each\n\
+    install   install VNU onto a disk, see 'vnu install' below\n\
 \n\
     The remaining options are:\n\
 \n\
         --help    display this help and exit\n\
         --version output version information and exit\n\
 \n\
+VNU INSTALL\n\
+    With no argument, install opens a full-screen wizard in the style of\n\
+    the classic Windows Setup / FreeBSD sysinstall / Slackware setup\n\
+    screens: pick the target disk (from /proc/disks), choose the\n\
+    partition size, type the host name for the machine, review the\n\
+    choices, confirm the destructive write and reboot. Blue screens use\n\
+    the console's ANSI color support.\n\
+\n\
+    With arguments it runs without asking anything:\n\
+\n\
+        vnu install DRIVE HOSTNAME [SIZE_MIB]\n\
+\n\
+    DRIVE is the disk index (0..N-1, the same numbering as /proc/disks),\n\
+    HOSTNAME the name the machine should boot with (see 'man\n\
+    hostname'; it is written to /etc/hostname and recorded on the disk)\n\
+    and SIZE_MIB the partition size in MiB, omitted for the whole usable\n\
+    disk. Requires root.\n\
+\n\
+    The write itself is done by the kernel (syscall VNU_SYS_install,\n\
+    30): it stamps the MBR + GRUB core image, records the host name in\n\
+    the config sector before the partition, and creates a FAT16\n\
+    partition at LBA 2048 holding /boot/kernel.elf and a GRUB config, so\n\
+    the disk boots on its own with no CD. This is what a distro\n\
+    'sysinst' does.\n\
+\n\
 EXAMPLES\n\
     vnu\n\
     vnu fetch\n\
     vnu version\n\
     vnu size\n\
+    vnu install           the wizard\n\
+    vnu install 0 mybox   disk 0, named mybox, whole disk\n\
 \n\
 FILES\n\
     /proc/version  OS, kernel and build versions\n\
@@ -692,9 +694,12 @@ FILES\n\
     /proc/boot     root file system, install state, session shell\n\
     /proc/gfx      display driver and mode\n\
     /proc/images   per-component image sizes\n\
+    /etc/hostname  the name of this machine\n\
 \n\
 EXIT STATUS\n\
-    0 on success, 1 when the requested information cannot be read.\n"
+    0 on success, 1 when the requested information cannot be read, or\n\
+    when an install fails (in which case nothing was written to the\n\
+    disk).\n"
 
 #define PING_PAGE "NAME\n\
     ping - send ICMP echo requests (network test)\n\
@@ -728,6 +733,41 @@ EXAMPLES\n\
     ping 10.0.2.2\n\
     ping gateway 1\n\
     ping 10.0.2.2 1\n"
+
+#define HOSTNAME_PAGE "NAME\n\
+    hostname - the name of this machine\n\
+\n\
+SYNOPSIS\n\
+    cat /etc/hostname\n\
+\n\
+DESCRIPTION\n\
+    /etc/hostname holds the node name of the machine: one line, no\n\
+    spaces, as on any other Unix. It is the single source of truth, so\n\
+    everything that has to know who the machine is reads it from\n\
+    here instead of keeping a copy:\n\
+\n\
+      - the vash prompt, which prints user@name:cwd$ where it used to\n\
+        print a hard-coded root@vnu:...\n\
+      - uname(2), so 'uname -n' and 'uname -a' agree with the prompt\n\
+      - the installer, which asks for the name and records it on the\n\
+        disk it writes (vnu install)\n\
+\n\
+    A name is 1 to 63 characters of letters, digits, '-', '_' and\n\
+    '.', and must start and end with a letter or digit. 'vnu fetch'\n\
+    reports the current one as its Host line.\n\
+\n\
+    The file is seeded at boot with the built-in default 'vnu'. An\n\
+    installed disk carries the name it was given, so booting that disk\n\
+    puts the name here instead. To rename a running system, write the\n\
+    file as root ('echo mybox > /etc/hostname') or call sethostname()\n\
+    from a program; the shell picks the new name up at the next\n\
+    prompt. Keep it short: it is part of every prompt.\n\
+\n\
+    See 'man vnu' for the installer and 'man uname' for -n.\n\
+\n\
+FILES\n\
+    /etc/hostname\n\
+"
 
 #define HOSTS_PAGE "NAME\n\
     hosts - static host name to IP mapping\n\
@@ -1133,8 +1173,8 @@ static const struct Page pages[] = {
      TYPE_PAGE},
     {"which",    "report where a command lives",
      WHICH_PAGE},
-    {"install",  "write the VNU system image to a disk",
-     INSTALL_PAGE},
+    {"hostname", "the name of this machine (/etc/hostname)",
+     HOSTNAME_PAGE},
     {"id",       "print the current identity",
      ID_PAGE},
     {"whoami",   "print the current user name",
