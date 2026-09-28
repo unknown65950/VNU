@@ -930,7 +930,7 @@ Known limitations / natural next steps:
 - `g_backbuf` and `g_wall` are still static arrays in `.bss` (1.25 MiB
   each), and `g_small` adds 192 KiB. A mode-sized allocation from the
   PMM in `enter_gfx_mode()` is the fix, and it is what makes 32bpp
-  reachable at all.
+  reachable at all. (Done, one drop later: see the Twelfth drop.)
 - Still 8bpp with a 16-entry DAC, so there is no alpha and no
   compositing: two render paths (VBE flat 8bpp, virtio-gpu B8G8R8X8)
   would have to coexist for a 32bpp mode, and `mode_supported()` would
@@ -942,3 +942,123 @@ Known limitations / natural next steps:
   Making the canvas follow the window is an Expose-style change.
 - Resolution changes are visible only to the display: a wall clock
   (`tty_size`) and a wallpaper refresh in a text window are not told.
+
+## Twelfth drop: the buffers are the mode's size, and the pool follows .bss
+
+`MAX_MODE` was not only the top of the resolution ladder. For as long as
+the backbuffer and the wallpaper frame were static arrays, it was also
+their *size*, and a machine paid for it whether or not it ever drew a
+pixel at that resolution. Four `.bss` arrays stood between the desktop
+and the pool:
+
+- `g_backbuf`, the framebuffer: 1.25 MiB at 1280x1024.
+- `g_wall`, the wallpaper frame, the same.
+- `g_small`, the quantized source image: 192 KiB.
+- `g_px_pool`, px.h's decode arena: 2 MiB, resident for the kernel's
+  whole life although a decode is over in a second.
+
+4.7 MiB, every boot, for a desktop that at 640x480 uses 0.8 MiB of it.
+This drop moves all four into the PMM pool, sized for the mode actually
+programmed, and hands them back when they are not in use.
+
+### The framebuffer
+
+- **`enter_gfx_mode()` returns bool and allocates.** The run is taken
+  before the card is programmed, and reused if `set_resolution()` had
+  already taken one for this mode from text mode (which is how the
+  seeded `gfx.conf` gets its mode: a console-time `set_resolution()`
+  finds the pool far emptier than a desktop does). The only thing that
+  can stop a desktop now is a pool with nothing left, and then the
+  desktop says so on the console (`vnu: not enough memory for the
+  desktop`) and hands the shell back - the text mode is never
+  programmed, so there is no half-state to clean up.
+- **`set_resolution()` takes the new framebuffer before it touches
+  anything else.** Both allocations that can fail are asked in the
+  order that leaves the display untouched if either says no: the
+  framebuffer, then the virtio-gpu scanout. The old run is released
+  only once the new one is in hand, so the switch is a pointer swap
+  rather than a free followed by an allocation that might not come.
+- **`exit_to_text()` gives it back.** A machine sitting at the console
+  holds no framebuffer at all; the next desktop session takes a fresh
+  run for whatever mode is configured by then. `wallpaper::unload()`
+  does the same for the wallpaper's pixels, in the same place, so
+  quitting the desktop hands ~2.7 MiB at the top mode back to the pool.
+
+### The wallpaper's three buffers
+
+- The frame is `width() x height()` of the mode on screen, and the
+  quantized source is `MAX_PIX` (512x384) as before - the pixel bound
+  of what we decode, not of the mode. The arena is one pool run per
+  decode, so a `wallpaper set` that fails releases it again.
+- `load()` starts by releasing whatever the last session left, so a
+  machine that has run a few desktops in a row is in the state of a
+  fresh boot plus one desktop. `apply()` decodes into *new* runs and
+  only swaps them in once the decode worked, so a rejected candidate
+  (JPEG, oversized, or simply out of pool) still leaves the desktop
+  exactly as it was.
+- `resize()` grows the frame to the new mode and, if even that cannot be
+  had, drops back to the procedural scene - which fits any mode - rather
+  than blitting a frame stretched for the old geometry. `ready()` now
+  means "there is a frame *for the mode now programmed*", so that
+  invariant is checked where it is relied upon.
+- The name is still a static array: releasing the pixels does not
+  forget the choice, so `/proc/gfx` still reports which file is the
+  wallpaper after the desktop has quit.
+
+### The pool follows the kernel's .bss
+
+- The freed 4.7 MiB would have been a hole between `__bss_end` and a
+  pool base that is a hand-written constant, so `pmm::init()` reads
+  `__bss_end` from the linker now. The pool is everything between the
+  kernel's own globals and the last usable byte of RAM, and the two
+  cannot drift apart. This retires a footgun that had already bitten
+  twice, both times as a triple fault: `alloc_frame()` zeroes every
+  frame it hands out, so a base that lags behind a grown `.bss` wipes
+  the bitmap, the identity page tables and the kernel page directory,
+  and the allocator then re-issues those in-use frames.
+- `__bss_end` goes 0xF93754 -> 0xAE3754 and the pool grows from
+  17..30.75 MiB to 10.9..30.75: **20.5 MiB, 5256 frames**, up from
+  14.4 MiB and 3688. `/proc/meminfo` says `PoolTotal: 21040 kB` where
+  it said `14784 kB`.
+
+### What this unblocks
+
+Milestone B (32bpp) was blocked on exactly this: at 32bpp the same pair
+of buffers is 10 MiB of `.bss`, and a 1280x1024 desktop plus its
+virtio-gpu scanout (5 MiB) plus one window would not have fitted in the
+old pool at all. Both are now the mode's size, taken when they are
+needed, and the pool has 6 MiB more to give.
+
+### The bug this uncovered
+
+`execve` of a binary read out of the VFS staged it in a 1 MiB
+`vnu_kalloc()`. That symbol is the *image decoders'* bump allocator -
+the one `px.h`'s `malloc` is `#define`d to, implemented in
+`wallpaper.cpp` over the static arena above - so the exec path and
+`px.h` were quietly sharing one 2 MiB bump: two execs of a VFS binary
+filled it and every later one failed with ENOMEM. It is now sized from
+the file (a 6 KiB program stages in two frames) and released as soon as
+the image is mapped. Which is also why `vnu_kalloc` can now honestly
+return null outside a decode.
+
+### Verified in QEMU
+
+- `make test` 84/84, `make test-gpu` 84/84, `make test-install` 9/9.
+- `gfx-resolution` cycles the whole ladder (F12) on both displays with
+  the desktop drawing a wallpaper throughout, and `gfx-surface` still
+  sees a window's pixels on the screen - both are the checks that would
+  notice a framebuffer that is the wrong size for the mode.
+
+### Still open
+
+- The buffers are 8bpp palette indices, so a desktop session now costs
+  pool frames proportional to the mode instead of a fixed `.bss`, but
+  the pixel format itself is unchanged (Milestone B).
+- `present()` still copies the whole frame to the card every frame
+  (Milestone C), and an app's canvas is still 480x340 whatever the mode
+  (the Expose-style change named in `vga_gfx.h`).
+- The pool base is now read at runtime, so a kernel whose `.bss` grew
+  past `POOL_END` would come up with an empty pool and a machine that
+  fails every allocation. That is a loud failure rather than a
+  corruption, which is the point, but it is a build-time mistake that
+  nothing checks yet.
