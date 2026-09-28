@@ -772,3 +772,173 @@ dark header/status bars, colored tiles, full-width selection bar,
   layout changes.
 - Verified: userspace + kernel build clean (no new warnings), ISO
   regenerated. QEMU screenshot check outstanding.
+
+## Eleventh drop: runtime resolution, a shared canvas, a chosen wallpaper
+
+The mode used to be a build-time constant: `vga_gfx.h` carried
+`WIDTH`/`HEIGHT` as `constexpr`, the VBE registers were programmed once
+at desktop startup, and the wallpaper was decoded once for exactly
+that size. Changing the resolution meant rebuilding. This drop makes
+it a value the driver holds and the desktop can change while it runs,
+gives both display drivers one interface for it, and replaces the fd-3
+framebuffer hack with memory an app and the compositor share.
+
+### Runtime resolution
+
+- **The ladder lives in the driver** (`vga_gfx.h`): `vgfx::Mode`,
+  `MODE_COUNT`, `DEFAULT_MODE` (1024x768), `MAX_MODE` (1280x1024) and
+  `modes()` / `width()` / `height()` / `mode_supported()` /
+  `set_resolution()`. Every `WIDTH`/`HEIGHT` use became
+  `width()`/`height()`, including the procedural wallpaper, which is
+  still drawn in 1024x768 coordinates and scaled through `px()`/`py()`/
+  `pr()` so the sun, clouds and hill heights land where they were
+  authored.
+- **`g_backbuf` is sized for `MAX_MODE`, not for the current mode.**
+  Both it and `g_wall` were `WIDTH * HEIGHT` (768 KiB at 1024x768) and
+  are 1.25 MiB now, so a mode change is a register write: nothing is
+  reallocated and no frame is lost mid-composite. The price is `.bss`
+  that the low modes sit on unused - the trade the header already named
+  as a ceiling, now written down as a number.
+- **F12 steps the ladder** on a live desktop. The keyboard decodes
+  F1..F12 as 0x88..0x93, the same values as `VNU_KEY_F*` in
+  `vlibc/keys.h`, so a key a desktop shortcut consumed and one a
+  program reads from `getch()` cannot disagree. Two syscalls carry the
+  same thing to userspace: `VNU_SYS_gfx_setmode` (62) and
+  `VNU_SYS_gfx_getmode` (63), wrapped as `vgfx_set_resolution()` /
+  `vgfx_get_resolution()`. Both drivers answer identically, so a
+  program never has to parse `/proc/gfx` to know where it stands -
+  which now also lists the whole ladder as `modes` beside the mode in
+  use.
+- **The choice is remembered** in `/etc/vnuconfig/gfx.conf`
+  (`mode 1024x768`), a new file seeded with the default, rewritten on
+  every change and read before the card is programmed, so the next
+  `gui` comes up in the mode the last one left. It is in the RAM VFS
+  like everything else under `/etc`: a reboot starts over from the
+  built-in default.
+- **Relayout policy** (`gui.cpp`): a mode change closes nothing and
+  loses nothing. A window that fits keeps its size and is clamped back
+  inside; one too big for the new screen shrinks to it, and a text
+  window just shows fewer columns and rows, since `fit_cols`/`fit_rows`
+  read the client area off the rectangle. The cascade offset restarts
+  (an offset chosen for the old geometry lands off the new screen) and
+  the cursor is brought back inside. Everything else the desktop shows
+  is redrawn from scratch every frame, so nothing else needs redoing.
+- **A mode change no longer re-decodes the wallpaper.** The image is
+  decoded once, quantized at its own size into `g_small` (512x384, the
+  decoder's own limit) and re-scaled by nearest neighbour on every
+  resize, so a switch only scales: a 1280x1024 desktop repaints in
+  well under a second instead of standing blank for two.
+- **The console comes back afterwards.** A graphics mode paints over
+  the text plane *and* the console font in plane 2, so
+  `tty::save_screen()` captures the 80x25 cell buffer on the way in and
+  `restore_font()` + `tty::restore_screen()` put both plane 2 and the
+  text back on the way out. Two register-level details: the attribute
+  controller shares one flip-flop between its index and its data
+  writes, so the `inb(0x3DA)` in front of the video-enable write is
+  load-bearing, and the saved sequencer state is 8 registers wide (was
+  5), or the mode switch left registers it had no business touching.
+- **virtio-gpu follows the mode.** The scanout resource is exactly the
+  size of the mode in use and backed by a *list* of 256 KiB segments:
+  the PMM pool is shared with the VFS nodes and every window's
+  surface, and a 5 MiB contiguous run is not something it can often
+  offer. `present()` walks the runs row by row, so a row may straddle
+  two of them. Resource ids are handed out in sequence and never
+  reused, because a create on a just-unreffed id is refused by the host
+  with `ERR_INVALID_RESOURCE_ID`; a switch unrefs the old resource
+  *before* returning its frames, which is also the only order in which
+  the two buffers never exist at the same time (at the top mode, 5 MiB
+  against 10 of a 14.4 MiB pool). `submit_and_wait()` samples the used
+  ring *before* the kick - reading it after loses the race the wrong
+  way round, and a warm command that completed already would be called
+  a failure. The device is named in the log when a command is refused
+  or never completes, instead of the desktop quietly stopping.
+
+### The canvas is shared memory
+
+- **`VNU_SYS_gfx_surface` (61)** returns the virtual address of the
+  480x340 canvas, mapped on first use inside the app window's own 4 MiB
+  page and into the kernel through its physical address. The app
+  writes pixels and the compositor blits those same bytes on its next
+  pass: no copy, no frame ever crosses a syscall, and asking is also
+  what puts a window into pixel mode, which is how the desktop knows to
+  size it to what the app draws. Returns 0 when the caller has no
+  window, and there is no unmap - the frames go back with the address
+  space.
+- **fd 3 is an ordinary descriptor now.** The `write(3, ...)` /
+  `lseek(3, ...)` intercept is gone, so `vfs.cpp` and `pipe.cpp` hand
+  out numbers from 3 up instead of reserving one, and every file a
+  windowed app opens stops being a hazard.
+- **`extend_address_space()` had a bug this exposed:** an address space
+  seeded from the identity map has *present* entries, but they are
+  shared with every other space and with the kernel. Extending over
+  one skipped the "already mapped" test and left the new mapping
+  pointing at memory it did not own; it now checks the frame is one of
+  the space's own.
+- **vgfx keeps its API.** `fb` is the shared canvas where there is a
+  window and a private buffer where there is not (a program drawing
+  with no window has to draw into something; the result is not shown).
+  `vgfx_flush()` stays, because every app ends a frame with it and
+  there is nothing left to push. `vgfx_event_t.key` is unsigned, since
+  the kernel normalises the PS/2 scancodes for the arrows into
+  0x81..0x87 and a signed char made every comparison against them
+  false.
+
+### The wallpaper is choosable
+
+- **`wallpaper`** is its own binary (`userspace/vibecoreutils/`) with a
+  `man` page, as every command here has one. With no argument it prints
+  the background in use (or `none` while the procedural sky is up);
+  with a path it hands it to `VNU_SYS_wallpaper` (60), which decodes
+  the candidate *first* and only swaps it in when that works - a
+  refused picture leaves both the screen and `/etc/vnu/wallpaper` as
+  they were. BMP and PNG up to 512x384 and 64 KiB are accepted; a JPEG
+  is listed by `--list` and then refused, since its IDCT is the one
+  piece of float code a `-mno-80387` kernel cannot link.
+- **`prefs` grows a Wallpaper pane**: the same candidates as a
+  tile list, Up/Down moves the cursor (clicking moves it too), Enter
+  applies, and the status line says why a pick was refused.
+- `/etc/vnu/wallpaper.default` is never overwritten, so the desktop
+  VNU ships with is always there to come back to. The shipped image is
+  embedded as `wallpaper_png` now, leaving the plain name to the
+  command's own binary. `/proc/gfx` names the background in use.
+
+Verified in QEMU: `make test` 84/84, `make test-gpu` 84/84 (the
+virtio-gpu display, where a mode change rebuilds the scanout) and
+`make test-install` 9/9. The resolution case walks the whole ladder by
+F12 on a live desktop and checks at each size that the screen is a
+drawn desktop (`gfx-resolution`: `mode-config-boot` on a fresh image,
+`mode-proc`, `mode-config`, the second desktop coming up in the
+recorded mode, and a `calc` window that stays inside the frame at the
+smallest mode and at the top one - not pinned to a corner). The
+surface case (`gfx-surface`) works off QEMU screendumps - a gfx window
+is exactly the case where the serial log proves nothing - and looks for
+the band of changed pixels a 480x340 canvas has to produce, at the
+width and depth a window's client area is and where a centred window
+goes, with enough colour changes along its middle row to be the app's
+picture rather than a blank canvas; then it brackets two desktop
+sessions and checks the console text came back, allowing for the lines
+the harness itself scrolled. `wallpaper-*` covers the command against a JPEG, a
+missing file, a text file, the shipped desktop and a real picture;
+`prefs-wallpaper` drives the pane with real key events.
+
+Known limitations / natural next steps:
+
+- The mode and the wallpaper live in the RAM VFS, so a reboot starts
+  over. An installed disk has one spare config sector (`VNUCFG1`, the
+  hostname's) that could carry the mode; the wallpaper is a file and
+  would need a real filesystem first.
+- `g_backbuf` and `g_wall` are still static arrays in `.bss` (1.25 MiB
+  each), and `g_small` adds 192 KiB. A mode-sized allocation from the
+  PMM in `enter_gfx_mode()` is the fix, and it is what makes 32bpp
+  reachable at all.
+- Still 8bpp with a 16-entry DAC, so there is no alpha and no
+  compositing: two render paths (VBE flat 8bpp, virtio-gpu B8G8R8X8)
+  would have to coexist for a 32bpp mode, and `mode_supported()` would
+  have to refuse it while virtio-gpu is not the active driver.
+- `present()` still copies the whole frame every time, which 8bpp
+  tolerates and 32bpp would not.
+- A window's canvas is still 480x340 whatever the mode, upscaled by
+  the compositor: a bigger mode buys desktop room, not sharper apps.
+  Making the canvas follow the window is an Expose-style change.
+- Resolution changes are visible only to the display: a wall clock
+  (`tty_size`) and a wallpaper refresh in a text window are not told.
