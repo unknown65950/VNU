@@ -331,28 +331,70 @@ int g_width = vnu::vgfx::DEFAULT_MODE.width;
 int g_height = vnu::vgfx::DEFAULT_MODE.height;
 bool g_in_gfx_mode = false;
 
-/* The desktop's framebuffer: one mode's worth of palette indices, from
- * the PMM pool rather than .bss, so a 640x480 desktop holds 300 KiB
- * instead of the 1.25 MiB of the top mode and a machine that never
- * reaches the top mode never reserves it. It is identity-mapped, so
- * the pointer is as good a virtual address as it is a physical one.
+/* The desktop's framebuffer, from the PMM pool rather than .bss, so a
+ * 640x480 desktop holds 300 KiB instead of the 1.25 MiB of the top mode
+ * and a machine that never reaches the top mode never reserves it. It
+ * is identity-mapped, so the pointer is as good a virtual address as it
+ * is a physical one.
  *
  * A mode change swaps the pointer; the old run is released only once
  * the new one is in hand, so a display that cannot be shown is a
  * refusal (set_resolution() returns false) and never a half-state. */
 uint8_t* g_backbuf = nullptr;
 
-/* Whole frames a w x h mode's framebuffer takes. */
-uint32_t backbuf_frames(int w, int h)
+/* Bits per pixel the framebuffer is held at, or 0 while no desktop has
+ * asked for one yet.
+ *
+ * The depth follows the display rather than being a mode of its own,
+ * because it is the display that decides what a frame costs: the Bochs
+ * VBE path this driver programs is 8-bpp with a DAC in front of it, and
+ * the virtio-gpu scanout is 32-bpp B8G8R8X8 with no DAC at all. A mode
+ * is a resolution on this OS (gfx_setmode takes a width and a height,
+ * see vnu/abi/ABI.md), and a resolution the hardware cannot show at its
+ * own depth is a mode this driver does not have.
+ *
+ * So where a virtio-gpu holds the display the desktop composites
+ * straight into the scanout's own format - four bytes a pixel, with the
+ * fourth left opaque for now and free to carry a window's alpha - and
+ * where the VBE path holds it, the framebuffer stays one byte per pixel
+ * and present() expands through the DAC on the way to the card, as it
+ * always did. The cost is named, because it is real: a 32bpp frame is
+ * four times the memory (3 MiB at 1024x768, 5 MiB at 1280x1024) and
+ * four times the bytes across a present, which is what the damage
+ * tracking in the roadmap is for.
+ *
+ * Resolved once, when the first framebuffer is taken, and never changed:
+ * the display cannot be swapped out from under a frame that is being
+ * drawn into it, and a framebuffer whose size depended on a value that
+ * could change would be a buffer the pool was never told about. */
+int g_bpp = 0;
+
+int resolve_bpp()
 {
-    const uint32_t px = static_cast<uint32_t>(w) * static_cast<uint32_t>(h);
+    if (g_bpp == 0)
+        g_bpp = vnu::virtio_gpu::active() ? 32 : 8;
+    return g_bpp;
+}
+
+inline int pixel_bytes()
+{
+    return g_bpp / 8;
+}
+
+/* Whole frames a w x h frame of `bpp` bits per pixel takes. */
+uint32_t backbuf_frames(int w, int h, int bpp)
+{
+    const uint32_t px = static_cast<uint32_t>(w) *
+                        static_cast<uint32_t>(h) *
+                        static_cast<uint32_t>(bpp / 8);
     return (px + vnu::pmm::FRAME_SIZE - 1u) / vnu::pmm::FRAME_SIZE;
 }
 
-/* Take a zeroed framebuffer run for w x h, or 0 if the pool is out. */
-uint8_t* alloc_backbuf(int w, int h)
+/* Take a zeroed framebuffer run for w x h at bpp, or 0 if the pool is
+ * out. */
+uint8_t* alloc_backbuf(int w, int h, int bpp)
 {
-    const uint32_t phys = vnu::pmm::alloc_contig(backbuf_frames(w, h));
+    const uint32_t phys = vnu::pmm::alloc_contig(backbuf_frames(w, h, bpp));
     if (!phys)
         return nullptr;
     /* Identity-mapped by paging::init(), so the physical address is a
@@ -367,8 +409,59 @@ void release_backbuf()
     if (!g_backbuf)
         return;
     vnu::pmm::free_contig(reinterpret_cast<uint32_t>(g_backbuf),
-                          backbuf_frames(g_width, g_height));
+                          backbuf_frames(g_width, g_height, g_bpp));
     g_backbuf = nullptr;
+}
+
+/* The start of a row, and one pixel along it. Everything that writes a
+ * pixel goes through these, so the framebuffer's format is decided in
+ * one place instead of at every call site. */
+inline uint8_t* row_ptr(int y)
+{
+    return g_backbuf + static_cast<long>(y) * g_width * pixel_bytes();
+}
+
+inline uint8_t* pixel_ptr(int x, int y)
+{
+    return row_ptr(y) + x * pixel_bytes();
+}
+
+/* A colour as the bytes of one pixel in the current format: the palette
+ * index itself at 8bpp, and the same index looked up in the desktop
+ * palette at 32bpp, stored B,G,R,X the way the virtio-gpu scanout is.
+ * `pal` is the palette to read, so the console can present in the one
+ * the text mode booted with. */
+uint32_t pixel_of(uint8_t color, const uint8_t (&pal)[16][3], uint8_t out[4])
+{
+    if (g_bpp == 8) {
+        out[0] = color;
+        return 1;
+    }
+    const uint8_t* rgb = pal[color];
+    /* 6-bit DAC -> 8-bit channel, as present() has always done it on
+     * the way to the scanout. */
+    out[0] = static_cast<uint8_t>((rgb[2] << 2) | (rgb[2] >> 4));
+    out[1] = static_cast<uint8_t>((rgb[1] << 2) | (rgb[1] >> 4));
+    out[2] = static_cast<uint8_t>((rgb[0] << 2) | (rgb[0] >> 4));
+    out[3] = 0xFF;   /* opaque: nothing has blended here yet */
+    return 4;
+}
+
+inline void store_with(uint8_t* p, uint8_t color, const uint8_t (&pal)[16][3])
+{
+    uint8_t px[4];
+    const uint32_t n = pixel_of(color, pal, px);
+    for (uint32_t i = 0; i < n; ++i)
+        p[i] = px[i];
+}
+
+/* The desktop's own colours, which is what every caller but the console
+ * wants: at 8bpp a pixel is a palette index and the palette only
+ * matters at present time, but at 32bpp the colour is decided as it is
+ * drawn, so the caller has to say which palette it is drawing in. */
+inline void store(uint8_t* p, uint8_t color)
+{
+    store_with(p, color, CATT_PAL);
 }
 
 /* Quarter-sine profile (0..255) used to carve the wallpaper's hill
@@ -474,7 +567,8 @@ bool enter_gfx_mode()
      * the console exactly as it was than by entering a mode with
      * nowhere to draw. */
     if (!g_backbuf) {
-        g_backbuf = alloc_backbuf(g_width, g_height);
+        resolve_bpp();
+        g_backbuf = alloc_backbuf(g_width, g_height, g_bpp);
         if (!g_backbuf)
             return false;
     }
@@ -509,7 +603,8 @@ bool set_resolution(int w, int h)
      * can run out of memory, so the new framebuffer is taken first: a
      * mode that cannot be shown leaves the display, the virtio scanout
      * and the old framebuffer exactly as they were. */
-    uint8_t* next = alloc_backbuf(w, h);
+    resolve_bpp();
+    uint8_t* next = alloc_backbuf(w, h, g_bpp);
     if (!next)
         return false;
 
@@ -518,7 +613,7 @@ bool set_resolution(int w, int h)
      * disagree about the screen. */
     if (virtio_gpu::active() && !virtio_gpu::set_resolution(w, h)) {
         vnu::pmm::free_contig(reinterpret_cast<uint32_t>(next),
-                              backbuf_frames(w, h));
+                              backbuf_frames(w, h, g_bpp));
         return false;
     }
 
@@ -570,8 +665,19 @@ void exit_to_text()
 
 void clear(uint8_t color)
 {
-    for (int i = 0; i < g_width * g_height; ++i)
-        g_backbuf[i] = color;
+    if (!g_backbuf)
+        return;
+    /* One pixel built once and copied down the rows: at 32bpp that is
+     * four bytes a pixel, and a screen of them is the one loop that
+     * would be worth not doing per pixel. */
+    uint8_t px[4];
+    const uint32_t n = pixel_of(color, CATT_PAL, px);
+    for (int y = 0; y < g_height; ++y) {
+        uint8_t* row = row_ptr(y);
+        for (int x = 0; x < g_width; ++x)
+            for (uint32_t i = 0; i < n; ++i)
+                row[x * n + i] = px[i];
+    }
 }
 
 /* The procedural wallpaper is authored in 1024x768 coordinates, so the
@@ -609,8 +715,21 @@ int pr(int r)
 void draw_wallpaper()
 {
     if (vnu::wallpaper::ready()) {
-        memcpy(g_backbuf, vnu::wallpaper::frame(),
-               static_cast<unsigned long>(g_width * g_height));
+        /* A decoded wallpaper is held as one byte per pixel (it is
+         * quantized to a palette at startup), so a 32bpp frame is fed
+         * from it the way a scanout is: index by index through the same
+         * palette the rest of the desktop draws in. */
+        const uint8_t* src = vnu::wallpaper::frame();
+        for (int y = 0; y < g_height; ++y) {
+            const uint8_t* in = src + static_cast<long>(y) * g_width;
+            uint8_t* row = row_ptr(y);
+            for (int x = 0; x < g_width; ++x) {
+                uint8_t px[4];
+                const uint32_t n = pixel_of(in[x], CATT_PAL, px);
+                for (uint32_t i = 0; i < n; ++i)
+                    row[x * n + i] = px[i];
+            }
+        }
         return;
     }
     static const uint8_t B4[4][4] = {
@@ -643,9 +762,10 @@ void draw_wallpaper()
         }
         unsigned u = (t - lo) * 256u / (hi - lo + 1);
         const uint8_t* bayer = B4[y & 3];
-        uint8_t* row = g_backbuf + y * g_width;
+        uint8_t* row = row_ptr(y);
         for (int x = 0; x < g_width; ++x)
-            row[x] = (u >= (unsigned)(bayer[x & 3] * 17)) ? bottom : top;
+            store(row + x * pixel_bytes(),
+                  (u >= (unsigned)(bayer[x & 3] * 17)) ? bottom : top);
     }
 
     /* Sun: peach halo around a warm yellow core (Mocha dusk). */
@@ -670,18 +790,18 @@ void draw_wallpaper()
         int idx = (x * 3 * 64 / g_width) % 64;
         int h = far_h * static_cast<int>(HILL_T[idx]) / 256;
         for (int y = far_base - h; y < far_base; ++y)
-            g_backbuf[y * g_width + x] = COLOR_DGRAY;
+            store(pixel_ptr(x, y), COLOR_DGRAY);
     }
     for (int x = 0; x < g_width; ++x) {
         int idx = (x * 2 * 64 / g_width + 16) % 64;
         int h = near_h * static_cast<int>(HILL_T[idx]) / 256;
         for (int y = near_base - h; y < near_base; ++y)
-            g_backbuf[y * g_width + x] = COLOR_GREEN;
+            store(pixel_ptr(x, y), COLOR_GREEN);
     }
     for (int y = near_base; y < g_height; ++y) {
-        uint8_t* row = g_backbuf + y * g_width;
+        uint8_t* row = row_ptr(y);
         for (int x = 0; x < g_width; ++x)
-            row[x] = COLOR_GREEN;
+            store(row + x * pixel_bytes(), COLOR_GREEN);
     }
 }
 
@@ -699,9 +819,10 @@ void clear_gradient(uint8_t top, uint8_t bottom)
     for (int y = 0; y < g_height; ++y) {
         unsigned t = (unsigned)y * 256u / (unsigned)g_height;
         const uint8_t* bayer = B4[y & 3];
-        uint8_t* row = g_backbuf + y * g_width;
+        uint8_t* row = row_ptr(y);
         for (int x = 0; x < g_width; ++x)
-            row[x] = (t >= (unsigned)(bayer[x & 3] * 17)) ? bottom : top;
+            store(row + x * pixel_bytes(),
+                  (t >= (unsigned)(bayer[x & 3] * 17)) ? bottom : top);
     }
 }
 
@@ -709,7 +830,7 @@ void put_pixel(int x, int y, uint8_t color)
 {
     if (x < 0 || y < 0 || x >= g_width || y >= g_height)
         return;
-    g_backbuf[y * g_width + x] = color;
+    store(pixel_ptr(x, y), color);
 }
 
 void fill_rect(int x, int y, int w, int h, uint8_t color)
@@ -1036,6 +1157,10 @@ void present_text()
     const int x0 = (g_width - grid_w) / 2;
     const int y0 = (g_height - grid_h) / 2;
 
+    /* The console is drawn in the palette the text mode booted with, at
+     * either depth: at 8bpp the cells are indices and present_with()
+     * expands them there, and at 32bpp they are already colours. */
+    const uint8_t (&pal)[16][3] = g_have_saved_pal ? g_saved_pal : CATT_PAL;
     clear(0);   /* the console is a screen of its own, on black */
     for (int row = 0; row < rows; ++row) {
         for (int col = 0; col < cols; ++col) {
@@ -1053,17 +1178,18 @@ void present_text()
                 const int py = y0 + row * ch + y;
                 if (py >= g_height)
                     break;
-                uint8_t* dst = g_backbuf + py * g_width + x0 + col * cw;
+                uint8_t* dst = pixel_ptr(x0 + col * cw, py);
                 for (int x = 0; x < cw; ++x) {
                     if (x0 + col * cw + x >= g_width)
                         break;
                     const bool lit = (x < 8) && (bits[y] & (0x80u >> x));
-                    *dst++ = lit ? fg : bg;
+                    store_with(dst, lit ? fg : bg, pal);
+                    dst += pixel_bytes();
                 }
             }
         }
     }
-    present_with(g_have_saved_pal ? g_saved_pal : CATT_PAL);
+    present_with(pal);
 }
 
 void present_with(const uint8_t (&pal)[16][3])
@@ -1079,21 +1205,27 @@ void present_with(const uint8_t (&pal)[16][3])
          * resource (it frees the old frames before it takes the new
          * ones, see virtio_gpu::set_resolution). The desktop keeps
          * drawing into the backbuffer either way; there is simply
-         * nothing to expand into until the next attempt gets frames. */
+         * nothing to hand over until the next attempt gets frames. */
         if (nsegs == 0)
             return;
 
         /* The scanout is a list of frame runs, so the image is written
          * run by run: a row is 4 bytes per pixel wide and can straddle
          * two of them, while a run holds many rows. Splitting per row
-         * keeps the pixel loop below free of any segment bookkeeping. */
+         * keeps the copy below free of any segment bookkeeping. */
         uint32_t seg = 0;
         vnu::virtio_gpu::ScanoutSegment s = vnu::virtio_gpu::scanout_segment(0);
         uint8_t* dst = reinterpret_cast<uint8_t*>(s.phys);
         uint32_t room = s.bytes;
         const uint32_t row_bytes = static_cast<uint32_t>(g_width) * 4u;
         for (int y = 0; y < g_height; ++y) {
-            const uint8_t* src = g_backbuf + static_cast<unsigned long>(y) * g_width;
+            /* A 32bpp frame is already B8G8R8X8 - the desktop composited
+             * straight into the scanout's format, so this is the copy
+             * the 8bpp path used to do after expanding every pixel
+             * through the DAC. An 8bpp frame is still palette indices
+             * and still has to be expanded, in the caller's palette so
+             * the console presents in the one the text mode booted with. */
+            const uint8_t* src = row_ptr(y);
             uint32_t left = row_bytes;
             while (left > 0) {
                 if (room == 0) {
@@ -1103,19 +1235,26 @@ void present_with(const uint8_t (&pal)[16][3])
                     dst = reinterpret_cast<uint8_t*>(s.phys);
                     room = s.bytes;
                 }
-                const uint32_t px = (left < room) ? (left / 4u) : (room / 4u);
-                for (uint32_t x = 0; x < px; ++x) {
-                    const uint8_t* rgb = pal[*src++];
-                    /* 6-bit DAC -> 8-bit channel, then store B,G,R,X
-                     * (pixel = 0x00RRGGBB) to match B8G8R8X8. */
-                    dst[0] = static_cast<uint8_t>((rgb[2] << 2) | (rgb[2] >> 4));
-                    dst[1] = static_cast<uint8_t>((rgb[1] << 2) | (rgb[1] >> 4));
-                    dst[2] = static_cast<uint8_t>((rgb[0] << 2) | (rgb[0] >> 4));
-                    dst[3] = 0xFF;
-                    dst += 4;
+                const uint32_t chunk = (left < room) ? left : room;
+                if (g_bpp == 32) {
+                    memcpy(dst, src, chunk);
+                    src += chunk;
+                } else {
+                    uint8_t* out = dst;
+                    const uint8_t* in = src;
+                    for (uint32_t b = 0; b < chunk; b += 4u) {
+                        const uint8_t* rgb = pal[*in++];
+                        out[0] = static_cast<uint8_t>((rgb[2] << 2) | (rgb[2] >> 4));
+                        out[1] = static_cast<uint8_t>((rgb[1] << 2) | (rgb[1] >> 4));
+                        out[2] = static_cast<uint8_t>((rgb[0] << 2) | (rgb[0] >> 4));
+                        out[3] = 0xFF;
+                        out += 4;
+                    }
+                    src += chunk / 4u;
                 }
-                room -= px * 4u;
-                left -= px * 4u;
+                room -= chunk;
+                left -= chunk;
+                dst += chunk;
             }
         }
         vnu::virtio_gpu::present();
@@ -1140,6 +1279,8 @@ void present_with(const uint8_t (&pal)[16][3])
     }
     while (!(inb(0x3DA) & 0x08)) {
     }
+    /* The VBE path never gets past resolve_bpp(): a 32bpp frame exists
+     * only where a virtio-gpu is presenting, and it went out above. */
     memcpy(reinterpret_cast<void*>(VBE_LFB_ADDR), g_backbuf,
            static_cast<unsigned long>(g_width * g_height));
 }
