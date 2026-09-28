@@ -46,16 +46,24 @@ static void join(char* dst, int cap, const char* dir, const char* name)
  * picture has been decoded (the procedural sky is not a file). */
 static void show_current(void)
 {
-    char buf[160];
+    /* The whole file, not one read: /proc/gfx reports more of the
+     * display as there is more to report - the mode, the depth, the
+     * palette, the mode ladder, the wallpaper - and a line this
+     * command needs can end up past a single short read's reach. */
+    char buf[512];
     int fd = open(PROC_GFX, 0);
     if (fd < 0) {
         we("wallpaper: cannot read " PROC_GFX "\n");
         return;
     }
-    int n = (int)read(fd, buf, sizeof(buf) - 1);
+    int n = 0;
+    while (n < (int)sizeof(buf) - 1) {
+        int r = (int)read(fd, buf + n, sizeof(buf) - 1 - n);
+        if (r <= 0)
+            break;
+        n += r;
+    }
     close(fd);
-    if (n < 0)
-        n = 0;
     buf[n] = 0;
 
     const char* p = buf;
