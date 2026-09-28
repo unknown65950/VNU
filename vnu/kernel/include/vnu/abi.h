@@ -72,6 +72,7 @@
 #define VNU_SYS_gfx_setmode 62
 #define VNU_SYS_gfx_getmode 63
 #define VNU_SYS_gfx_getinfo 64
+#define VNU_SYS_gfx_palette 65
 
 /* Which display driver is in use, as vnu_gfx_info::driver. */
 #define VNU_GFX_DRIVER_VGA        0 /* Bochs VBE, 8bpp indexed */
@@ -83,9 +84,16 @@
 struct vnu_gfx_info {
     uint32_t width;  /* pixels across the mode in use */
     uint32_t height;
-    uint32_t bpp;    /* bits per pixel a program handles: 8 today */
+    uint32_t bpp;    /* bits per pixel a program draws in: 8 or 32 */
     uint32_t driver; /* VNU_GFX_DRIVER_* */
 };
+
+/* How many slots VNU_SYS_gfx_palette answers, and how many bytes a
+ * program has to offer for it: the 16 entries of the desktop's own
+ * image palette as the same B8G8R8X8 words the frame itself holds
+ * (0xXXRRGGBB, alpha in the top byte). */
+#define VNU_GFX_PALETTE_SLOTS 16
+#define VNU_GFX_PALETTE_BYTES 64 /* SLOTS * sizeof(uint32_t) */
 
 #define VNU_EPERM 1
 #define VNU_ENOENT 2

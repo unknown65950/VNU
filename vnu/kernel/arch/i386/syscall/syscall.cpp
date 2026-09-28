@@ -551,6 +551,23 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
             return 0;
         }
 
+    case VNU_SYS_gfx_palette:
+        /* The 16 DAC entries as the frame holds them (ebx = uint32_t*,
+         * ecx = bytes offered): 0xXXRRGGBB words, the same layout a
+         * 32bpp pixel is in, so a program can put a palette colour
+         * straight into one. It is a syscall because the palette is the
+         * kernel's own - the table it composites and converts with - and
+         * a program that hardcoded those 48 bytes would be right until
+         * the palette changed under it. See ABI.md. */
+        {
+            if (tf->ebx == 0)
+                return static_cast<std::uint32_t>(-VNU_EFAULT);
+            if (tf->ecx < VNU_GFX_PALETTE_BYTES)
+                return static_cast<std::uint32_t>(-VNU_EINVAL);
+            auto* out = reinterpret_cast<std::uint32_t*>(tf->ebx);
+            return static_cast<std::uint32_t>(vnu::vgfx::palette(out, 16u));
+        }
+
     case VNU_SYS_ping:
         /* RTT to an IPv4 address (ebx, big-endian uint32); ecx is the
          * timeout in ms. Returns RTT ms or -VNU_EHOSTUNREACH/-VNU_ETIMEDOUT. */

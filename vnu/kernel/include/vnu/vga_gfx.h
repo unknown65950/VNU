@@ -59,14 +59,24 @@ const Mode* modes();
 int width();
 int height();
 
-// Bits per pixel of the pixel data a program handles. 8 on both paths
-// today: the shared canvas is one byte per pixel, so the desktop
-// composites palette indices. virtio-gpu already presents through a
-// 32bpp B8G8R8X8 scanout, but present() expands the 8bpp backbuffer
-// through the DAC on the way there, so nothing a program draws is 32bpp
-// yet and answering 32 would promise a format the canvas does not
-// have. This becomes 32 once the composited format follows the scanout.
+// Bits per pixel of the pixel data a program draws in: 8 on the VBE
+// path, 32 where a virtio-gpu holds the display. The depth follows the
+// display rather than being a mode of its own, so this is a property of
+// the machine, and the shared canvas a windowed app draws into is the
+// same depth (see wintask.h): a program that asked for 32 can put true
+// colour and alpha into a pixel and have both survive to the screen.
+// Answered before the desktop has started as what the display will be,
+// which on a machine without a virtio-gpu is 8 for good.
 uint32_t bpp();
+
+// The 16 DAC entries as the frame holds them: 0xXXRRGGBB words, the
+// same B8G8R8X8 layout a 32bpp pixel is in, so a colour the desktop
+// draws in can be put straight into a pixel. Writes up to `count` of
+// them and returns how many, 0 for a null buffer or a count under 16.
+// Both paths are answered from the same table, which is what lets a
+// program's colour constants (VGFX_LGRAY and the rest) mean the same
+// thing without either side hardcoding a palette.
+uint32_t palette(uint32_t* out, uint32_t count);
 
 // Which driver owns the display: DRIVER_VGA or DRIVER_VIRTIO_GPU.
 uint32_t driver();
@@ -131,10 +141,15 @@ void line(int x0, int y0, int x1, int y1, uint8_t color);
 void circle(int cx, int cy, int r, uint8_t color);        // outline only
 void fill_circle(int cx, int cy, int r, uint8_t color);
 
-// Nearest-neighbour stretch of an 8-bpp source into a destination
-// rectangle of any size (the fixed gfx canvas resized to the window's
-// current client area, so windows resize freely like native ones).
-void blit_scale(const uint8_t* src, int sw, int sh, int dx, int dy, int dw, int dh);
+// Nearest-neighbour stretch of a source of either depth into a
+// destination rectangle of any size (the fixed gfx canvas resized to the
+// window's current client area, so windows resize freely like native
+// ones). `src_bpp` is the source's own depth: at 8 the source is
+// palette indices, at 32 it is the display's own B8G8R8X8 words, whose
+// top byte is blended as coverage, so a canvas that carries alpha
+// composites over whatever it covers instead of hiding it.
+void blit_scale(const uint8_t* src, int sw, int sh, int dx, int dy, int dw,
+                int dh, int src_bpp);
 
 // Procedural desktop wallpaper (sky + sun + clouds + hills), drawn each
 // frame in place of the plain gradient.

@@ -1,3 +1,4 @@
+#include <vnu/vga_gfx.h>
 #include <vnu/wintask.h>
 #include <vnu/abi.h>
 #include <vnu/elf.h>
@@ -21,7 +22,6 @@ using vnu::wintask::TITLE_CAP;
 using vnu::wintask::INPUT_QUEUE_CAP;
 using vnu::wintask::MAX_TASKS;
 using vnu::wintask::GFX_SURFACE_VA;
-using vnu::wintask::GFX_SURFACE_PAGES;
 
 /* App image / stack / heap layout (per task; each is backed by private
  * physical frames in the task's own address space). Same addresses the
@@ -531,12 +531,16 @@ uint32_t task_gfx_surface()
         return GFX_SURFACE_VA; /* already mapped by an earlier call */
 
     /* Mapped on demand, not at spawn: a text window (the shell, an
-     * editor's console) never asks and so never spends the 40 frames.
-     * extend_address_space() is the same private-frame path
-     * create_address_space() used for the app image, and the frames it
-     * hands out are freed with the rest of the address space. */
+     * editor's console) never asks and so never spends the 40 frames a
+     * 8bpp canvas takes - or the 160 a 32bpp one does, which is the
+     * other reason the canvas follows the display rather than being
+     * fixed at the deep one. extend_address_space() is the same
+     * private-frame path create_address_space() used for the app image,
+     * and the frames it hands out are freed with the rest of the
+     * address space. */
     const uint32_t pgdir = cur_task().pgdir;
-    if (!vnu::paging::extend_address_space(pgdir, GFX_SURFACE_VA, GFX_SURFACE_PAGES))
+    const uint32_t pages = GFX_SURFACE_PAGES_AT(vnu::vgfx::bpp());
+    if (!vnu::paging::extend_address_space(pgdir, GFX_SURFACE_VA, pages))
         return 0;
 
     /* One address, two views: the task draws at GFX_SURFACE_VA, and

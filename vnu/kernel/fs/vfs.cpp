@@ -331,6 +331,23 @@ struct Appender {
         buf[len] = 0;
     }
 
+    /* Two hex digits, for a byte that is easier to read than to count:
+     * a colour, a bit pattern. */
+    void hex2(uint32_t v)
+    {
+        static const char hex[] = "0123456789abcdef";
+        str(hex[(v >> 4) & 0xF]);
+        str(hex[v & 0xF]);
+    }
+
+    void str(char c)
+    {
+        if (len < cap - 1) {
+            buf[len++] = c;
+            buf[len] = 0;
+        }
+    }
+
     void num(uint32_t v)
     {
         char tmp[12];
@@ -576,6 +593,24 @@ void regen_synth(Node& n)
             a.num(static_cast<uint32_t>(modes[i].width));
             a.str("x");
             a.num(static_cast<uint32_t>(modes[i].height));
+        }
+        /* The palette the slots mean, the same table gfx_palette(2)
+         * hands a program and in the same order it holds it - but as
+         * RRGGBB, which is how a person reads a colour. On a display
+         * with a DAC in front of it this is the DAC; on a 32bpp one it
+         * is still where the desktop's own colours come from, but
+         * nothing on the screen is limited to it, which is the whole
+         * difference between the two paths. */
+        a.str("\npalette\t");
+        uint32_t pal[VNU_GFX_PALETTE_SLOTS];
+        if (vnu::vgfx::palette(pal, VNU_GFX_PALETTE_SLOTS) ==
+            VNU_GFX_PALETTE_SLOTS) {
+            for (uint32_t i = 0; i < VNU_GFX_PALETTE_SLOTS; ++i) {
+                if (i)
+                    a.str(" ");
+                for (int c = 2; c >= 0; --c)
+                    a.hex2((pal[i] >> (8 * c)) & 0xFFu);
+            }
         }
         a.str("\n");
         /* The image the desktop draws behind the windows, if one was

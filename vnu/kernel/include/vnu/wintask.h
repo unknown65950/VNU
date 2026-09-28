@@ -56,7 +56,15 @@ constexpr int GFX_H = 340;
  * so the task needs no extra private page table for it, and clear of
  * both the image and the per-task heap (0x700000). */
 constexpr uint32_t GFX_SURFACE_VA = 0x00500000;
-constexpr uint32_t GFX_SURFACE_PAGES = (static_cast<uint32_t>(GFX_W) * GFX_H + 0xFFFu) / 0x1000u;
+
+/* Pages the canvas takes at a given depth: GFX_W x GFX_H is 40 at 8bpp
+ * and 160 at 32bpp. The canvas is in the depth of the display the app
+ * is drawing on (vgfx::bpp()), so a program writes the same pixels into
+ * it that the frame itself holds - which is what lets a true-colour
+ * pixel, and its alpha, reach the screen without a palette in the way.
+ * A macro, not a function: this header is read by C too. */
+#define GFX_SURFACE_PAGES_AT(bpp) \
+    ((uint32_t)(GFX_W * GFX_H * ((bpp) / 8) + 0xFFFu) / 0x1000u)
 
 /* VNU mouse protocol (delivered over the stdin escape stream, one event
  * per message so a partially-queued press can't corrupt the next):

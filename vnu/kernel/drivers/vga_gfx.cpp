@@ -1,4 +1,5 @@
 #include <vnu/vga_gfx.h>
+#include <vnu/abi.h>   /* VNU_GFX_PALETTE_*: the shape of the answer below */
 #include <vnu/font8x16.h>
 #include <vnu/pmm.h>
 #include <vnu/tty.h>
@@ -484,6 +485,35 @@ namespace vnu::vgfx {
 /* Both glyph tables are part of the image whether or not the VGA font
  * was ever captured, so the size is reportable from the start (the
  * kernel accounts for it at boot). */
+/* The 16 palette slots as colours: 0xXXRRGGBB words, the same layout a
+ * 32bpp pixel is in, so a program that knows the depth can put a slot
+ * straight into one. A program on the 8bpp path is handed the same table
+ * and has no use for the 32 bits it can see there, which is the point:
+ * the roles (VGFX_LGRAY, and so on) mean the same thing on both paths
+ * without either side hardcoding Catppuccin.
+ *
+ * It is the *desktop's* palette even before the desktop has started,
+ * because what is being asked is what a slot of a canvas means, not
+ * what the DAC is wired to at this instant: the moment anything is
+ * composited the desktop has loaded CATT_PAL, and a program that drew
+ * with any other table would be wrong from its first pixel. The DAC in
+ * text mode is the console's own business. */
+uint32_t palette(uint32_t* out, uint32_t count)
+{
+    if (!out || count < VNU_GFX_PALETTE_SLOTS)
+        return 0;
+    for (int i = 0; i < VNU_GFX_PALETTE_SLOTS; ++i) {
+        /* 6-bit DAC -> 8-bit channel, the same expansion pixel_of()
+         * makes on the way to the frame. */
+        const uint8_t* rgb = CATT_PAL[i];
+        const uint32_t b = (static_cast<uint32_t>(rgb[2] << 2) | (rgb[2] >> 4)) << 0;
+        const uint32_t g = (static_cast<uint32_t>(rgb[1] << 2) | (rgb[1] >> 4)) << 8;
+        const uint32_t r = (static_cast<uint32_t>(rgb[0] << 2) | (rgb[0] >> 4)) << 16;
+        out[i] = 0xFF000000u | r | g | b;
+    }
+    return VNU_GFX_PALETTE_SLOTS;
+}
+
 uint32_t font_bytes()
 {
     return static_cast<uint32_t>(sizeof(g_font) + sizeof(g_font8));
@@ -516,12 +546,14 @@ const Mode* modes()
 
 uint32_t bpp()
 {
-    /* 8: the backbuffer the desktop composites into is one byte per
-     * pixel on both paths. The VBE one reaches the card as is; the
-     * virtio one is expanded through the DAC into a 32bpp scanout by
-     * present(), which is a display detail and not the format a program
-     * draws in. */
-    return 8;
+    /* Resolving is a read of one driver flag, so this is asked rather
+     * than assumed: a program that asks while the desktop is not running
+     * is told what the display will be, which on a machine with no
+     * virtio-gpu is 8 for good. A window's canvas is mapped in this
+     * depth, so an answer that had to wait for the first frame would be
+     * too late for the one program that most needs it. */
+    (void)resolve_bpp();
+    return g_bpp;
 }
 
 uint32_t driver()
@@ -529,14 +561,39 @@ uint32_t driver()
     return virtio_gpu::active() ? DRIVER_VIRTIO_GPU : DRIVER_VGA;
 }
 
+/* What is on the screen, which is not always a mode this driver
+ * programmed: with the desktop not running the display is in the text
+ * mode, whose geometry is the console's own grid of 9x16 cells. The
+ * mode the *next* session will come up in is the config file's, and it
+ * is not what /proc/gfx or gfx_getinfo(2) answer here - those are asked
+ * what is on the screen now, and after a desktop has given it up the
+ * answer is 720x400 whether the card restored its own text mode or the
+ * console was drawn into a graphics framebuffer to stand in for one. */
+static void display_mode(int* w, int* h)
+{
+    if (g_in_gfx_mode) {
+        *w = g_width;
+        *h = g_height;
+        return;
+    }
+    uint16_t rows = 0, cols = 0;
+    vnu::tty::get_size(&rows, &cols);
+    *w = cols * 9;
+    *h = rows * 16;
+}
+
 int width()
 {
-    return g_width;
+    int w = 0, h = 0;
+    display_mode(&w, &h);
+    return w;
 }
 
 int height()
 {
-    return g_height;
+    int w = 0, h = 0;
+    display_mode(&w, &h);
+    return h;
 }
 
 bool mode_supported(int w, int h)
@@ -634,6 +691,39 @@ bool set_resolution(int w, int h)
      * /etc/vnuconfig/gfx.conf at boot changes the mode the desktop will
      * come up in, and the console keeps the display until something
      * actually draws. */
+    if (g_in_gfx_mode && vnu::virtio_gpu::active())
+        vnu::virtio_gpu::show_scanout();
+    return true;
+}
+
+/* Put the display back in the console's own mode: the text mode is
+ * 9x16 per cell plus the blank column VGA puts between them, so an
+ * 80x25 grid is 720x400. Same three steps as set_resolution() and for
+ * the same reasons - the new frame is taken before the old one is let
+ * go, the driver is asked second, and a machine that cannot do it keeps
+ * the mode it had rather than ending up with neither. Returns whether
+ * the display is in the console's geometry now. */
+static bool restore_console_geometry(uint16_t cols, uint16_t rows)
+{
+    const int w = cols * 9;
+    const int h = rows * 16;
+    if (g_width == w && g_height == h)
+        return true;
+
+    uint8_t* next = alloc_backbuf(w, h, g_bpp);
+    if (!next)
+        return false;
+    if (vnu::virtio_gpu::active() && !vnu::virtio_gpu::set_resolution(w, h)) {
+        vnu::pmm::free_contig(reinterpret_cast<uint32_t>(next),
+                              backbuf_frames(w, h, g_bpp));
+        return false;
+    }
+    release_backbuf();
+    g_backbuf = next;
+    g_width = w;
+    g_height = h;
+    /* A new resource is a new thing to show: the host is still pointed
+     * at the one the mode being left had. */
     if (g_in_gfx_mode && vnu::virtio_gpu::active())
         vnu::virtio_gpu::show_scanout();
     return true;
@@ -920,10 +1010,67 @@ void fill_circle(int cx, int cy, int r, uint8_t color)
     }
 }
 
-void blit_scale(const uint8_t* src, int sw, int sh, int dx, int dy, int dw, int dh)
+void blit_scale(const uint8_t* src, int sw, int sh, int dx, int dy, int dw,
+                int dh, int src_bpp)
 {
     if (!src || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0)
         return;
+    /* A 32bpp source is a window's own canvas in the display's format,
+     * and it can carry alpha in the byte the scanout has no use for: a
+     * pixel whose top byte is not opaque is blended into what it covers
+     * instead of replacing it. That is the whole reason the canvas
+     * follows the display - a PNG with an alpha channel survives the
+     * trip from px_decode to the screen instead of being quantized to
+     * the nearest of sixteen palette entries on the way. */
+    if (src_bpp == 32 && g_bpp == 32) {
+        const uint32_t* s32 = reinterpret_cast<const uint32_t*>(src);
+        for (int j = 0; j < dh; ++j) {
+            const int y = dy + j;
+            if (y < 0 || y >= g_height)
+                continue;
+            int sy = (j * sh) / dh;
+            if (sy < 0)
+                sy = 0;
+            if (sy >= sh)
+                sy = sh - 1;
+            const uint32_t* srow = s32 + static_cast<long>(sy) * sw;
+            for (int i = 0; i < dw; ++i) {
+                const int x = dx + i;
+                if (x < 0 || x >= g_width)
+                    continue;
+                int sx = (i * sw) / dw;
+                if (sx < 0)
+                    sx = 0;
+                if (sx >= sw)
+                    sx = sw - 1;
+                uint32_t src_px = srow[sx];
+                uint8_t* p = pixel_ptr(x, y);
+                const uint32_t a = src_px >> 24;
+                if (a == 0xFF) {
+                    p[0] = static_cast<uint8_t>(src_px);
+                    p[1] = static_cast<uint8_t>(src_px >> 8);
+                    p[2] = static_cast<uint8_t>(src_px >> 16);
+                    p[3] = 0xFF;
+                } else if (a == 0) {
+                    continue;   /* fully transparent: leave what is under it */
+                } else {
+                    /* src OVER dst, on the 8-bit channels the scanout
+                     * is made of. 0..255 alpha, so a>>8 is the 8-bit
+                     * weight and (255-a) the other, and the sums are
+                     * kept in 16 bits so a rounding pixel cannot wrap. */
+                    const uint32_t wa = a * 257u;   /* a -> 0..65535 */
+                    const uint32_t wb = 65535u - wa;
+                    for (int c = 0; c < 3; ++c) {
+                        const uint32_t s = (src_px >> (8 * c)) & 0xFFu;
+                        const uint32_t d = p[c];
+                        p[c] = static_cast<uint8_t>((s * wa + d * wb + 32768u) >> 16);
+                    }
+                    p[3] = 0xFF;
+                }
+            }
+        }
+        return;
+    }
     for (int j = 0; j < dh; ++j) {
         int y = dy + j;
         if (y < 0 || y >= g_height)
@@ -1145,6 +1292,16 @@ void present_text()
      * text mode of another size would be drawn as itself. */
     uint16_t rows = 0, cols = 0;
     vnu::tty::get_size(&rows, &cols);
+
+    /* In the text mode's own geometry, which is the one thing about it
+     * the host can see. A display with a text mode gets it back from
+     * the registers exit_to_text() restores; a virtio display shows
+     * whatever the scanout resource is, which after a desktop session
+     * is still the desktop's mode - so without this the console would
+     * come back 1024x768 with 720x400 of text in the middle of it, and
+     * stay that way until something changed the mode again. The console
+     * is the display's original state, so it is put back to it. */
+    (void)restore_console_geometry(cols, rows);
 
     /* A VGA text cell is 8 glyph pixels wide and 16 tall, and the text
      * mode puts a ninth, always blank, column between cells - which is

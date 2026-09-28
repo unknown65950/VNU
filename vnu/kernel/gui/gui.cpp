@@ -382,8 +382,12 @@ void draw_gfx_window(const Window& win, const vnu::wintask::Console& con, bool a
         ch = 1;
     int origin_x = win.x + 2;
     int origin_y = win.y + TITLE_H + 2;
+    /* The canvas is in the display's depth, so the blit is told which:
+     * at 32bpp the source is the frame's own format and its top byte is
+     * coverage, which is how a window with a transparent background
+     * lets the desktop through instead of a black rectangle. */
     blit_scale(con.pixel, vnu::wintask::GFX_W, vnu::wintask::GFX_H,
-               origin_x, origin_y, cw, ch);
+               origin_x, origin_y, cw, ch, static_cast<int>(bpp()));
     rect(origin_x - 1, origin_y - 1, cw + 2, ch + 2, COLOR_BLACK);
 }
 

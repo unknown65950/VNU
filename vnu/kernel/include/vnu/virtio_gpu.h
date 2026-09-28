@@ -6,11 +6,13 @@
 //
 // The device carries no scanout framebuffer of its own the way VBE
 // does: a "resource" is a block of the guest's own memory (attached as
-// backing pages) which the host copies into its display on demand. The
-// desktop therefore keeps rendering into the 8-bpp VGA backbuffer as
-// always; vga_gfx::present() expands it to true-colour B8G8R8X8 into
-// this driver's scanout buffer, then present() sends a full-frame
-// TRANSFER_TO_HOST_2D + RESOURCE_FLUSH so the host shows it.
+// backing pages) which the host copies into its display on demand. That
+// is also why this display is 32-bpp: with a resource to write into
+// there is no DAC in the way, so the desktop composites in the scanout's
+// own format (B8G8R8X8) and present() copies the runs out to the host
+// with a full-frame TRANSFER_TO_HOST_2D + RESOURCE_FLUSH. An 8-bpp
+// backbuffer - a VBE mode kept over from an earlier session - is still
+// expanded through its palette on the way, as it always was.
 //
 // The scanout buffer and every virtqueue live in physical frames from
 // vnu::pmm, which paging keeps identity-mapped, so the device can DMA
@@ -45,10 +47,11 @@ bool init();
 bool active();
 
 // The backing runs of the scanout in the mode in use, format
-// B8G8R8X8 (byte order B,G,R,X, so a pixel is 0x00RRGGBB). The desktop
-// is 8-bpp, so vgfx expands its backbuffer into them before each
-// present(). Zero segments means a mode change is between resources:
-// callers must treat that as "nothing to draw into yet".
+// B8G8R8X8 (byte order B,G,R,X, so a pixel is 0x00RRGGBB). A 32-bpp
+// backbuffer is written in this format already, so present() copies it
+// in; an 8-bpp one is expanded on the way. Zero segments means a mode
+// change is between resources: callers must treat that as "nothing to
+// draw into yet".
 uint32_t scanout_segments();
 ScanoutSegment scanout_segment(uint32_t index);
 

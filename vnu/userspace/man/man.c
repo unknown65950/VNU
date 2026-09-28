@@ -998,15 +998,21 @@ picview [file]\n\
     walks the /etc/vnu/pics directory; with a file argument (as the files\n\
     manager supplies when you open a .png/.jpg/.jpeg) it decodes and\n\
     shows just that file. Either way, BMP, PNG and JPEG are decoded\n\
-    with the embedded px.h decoder and rendered, colour-quantised to\n\
-    the 16 index Catppuccin palette, into the window's client area.\n\
+    with the embedded px.h decoder and rendered into the window's\n\
+    client area in the display's own colours. A display attached to a\n\
+    virtio-gpu shows 24 bits per pixel and the picture is drawn as it\n\
+    is; a VBE display has 16 colours behind a DAC, so the same picture\n\
+    is quantised to the nearest of them (dithered unless `d` says not\n\
+    to), which is the only thing about it that loses anything. The\n\
+    program asks the display which case it is in rather than deciding.\n\
     A file dropped onto the window (drag it from the file manager)\n\
     switches it to that file, like a file argument would.\n\
 \n\
 KEYS\n\
     [ ]   previous / next picture (gallery mode only)\n\
     z     toggle zoom (fit window / 1:1)\n\
-    d     toggle ordered dithering\n\
+    d     toggle ordered dithering (a 16-colour display only; on a\n\
+          24-bit one the picture is already finer than 16 steps)\n\
     Esc   close the window (opened from the file manager: return to it)\n\
 \n\
 FILES\n\

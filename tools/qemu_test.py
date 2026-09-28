@@ -352,7 +352,12 @@ SUITE = [
      [r"^kernel\t\d+\t1$", r"^userspace\t\d+\t\d+$",
       r"^libraries\t\d+\t2$", r"^total\t\d+\t\d+$"], []),
     ("proc-gfx", "cat /proc/gfx",
-     [r"^driver\t(vga|virtio-gpu)$", r"^resolution\t\d+x\d+$", r"^bpp\t8$"], []),
+     # The depth belongs to the driver, not to the build: 8 on the VBE
+     # card, 32 where a virtio-gpu presents. Which one this run is gets
+     # checked against the driver line in the graphics checks below,
+     # which is where the two have to agree.
+     [r"^driver\t(vga|virtio-gpu)$", r"^resolution\t\d+x\d+$",
+      r"^bpp\t(8|32)$"], []),
     ("proc-boot", "cat /proc/boot",
      [r"^rootfs\tvfs$", r"^shell\tvash$"], [r"^installed\tata"]),
     ("proc-status", "cat /proc/self/status",
@@ -684,35 +689,76 @@ def run_gfx_surface(guest, result, verbose, timeout=60.0):
                             "%dx%d before it"
                             % (after[0], after[1], before[0], before[1]))
 
-        # The check is spatial, not about colours: picview shows the very
-        # picture the desktop draws as its backdrop, so both frames hold
-        # the same palette and only the *places* differ. So look for what
-        # a window looks like on screen - a solid block of changed pixels,
-        # as wide as a 480x340 canvas scaled to a window, and hundreds of
-        # rows deep. The frame and title bar are the compositor's own work
-        # and ~20 rows tall, so a band that deep can only be the app's
-        # canvas: a window that fell back to the text path, or drew into a
-        # private buffer, leaves a blank rectangle instead.
+        # The check is spatial: picview shows the very picture the
+        # desktop draws as its backdrop, so look for what a window looks
+        # like on screen - a block hundreds of rows deep, as wide as a
+        # 480x340 canvas scaled to a window. The frame and title bar are
+        # the compositor's own work and ~20 rows tall, so a band that
+        # deep can only be the app's canvas: a window that fell back to
+        # the text path, or drew into a private buffer, leaves a blank
+        # rectangle instead.
+        #
+        # A row counts if *anything* in it changed, not if a fixed number
+        # of pixels did: a canvas that draws the picture in the display's
+        # own colours agrees with the backdrop pixel for pixel over most
+        # of the window, so a threshold on the row's pixel count would be
+        # measuring the gaps in the picture rather than the window. What
+        # has to be there is the band itself, and the width of the rows in
+        # it that did change wholesale.
         rows = changed_rows(open_[2], bare[2], open_[0], open_[1])
-        top, bottom = longest_run(rows, min_changed=300)
+        top, bottom = longest_run(rows, min_changed=1)
         if bottom - top < 200:
-            problems.append("the window changed %d rows down to 300 pixels "
-                            "each, too few for a 480x340 canvas: the app's "
-                            "pixels never reached the screen"
-                            % (bottom - top))
+            problems.append("the window changed %d rows, too few for a "
+                            "480x340 canvas: the app's pixels never reached "
+                            "the screen" % (bottom - top))
         if not top <= open_[1] // 2 <= bottom:
             problems.append("the changed band is rows %d..%d, not where a "
                             "centred window goes" % (top, bottom))
         else:
-            # And it has to be a *picture* in there, not one flat colour:
-            # the middle scanline of the real canvas changes colour ~70
-            # times, a blank window's client area a handful of times.
-            mid = (top + bottom) // 2
-            drawn = transitions(open_[2], open_[0], mid)
-            if drawn < 25:
-                problems.append("the window's middle row holds %d colour "
-                                "changes: a blank canvas, not the app's "
-                                "picture" % drawn)
+            # And it has to be a *picture* in there, not one flat colour.
+            #
+            # How many colours is the question, not how they are
+            # arranged: on a display with a DAC in front of it the
+            # picture can only ever be the palette's sixteen, and at
+            # true colour it can be everything in the PNG. So the floor
+            # is the palette on one driver and above it on the other,
+            # and a canvas that never got its pixels onto the screen -
+            # blank, or drawn in a format the compositor cannot read -
+            # fails both.
+            proc, _ = guest.sh("cat /proc/gfx", timeout)
+            drv, depth = driver_name(proc), depth_name(proc)
+            pal = palette_colours(proc)
+            if drv is None or depth is None or not pal:
+                problems.append("/proc/gfx has no driver, bpp or palette "
+                                "line: %r" % proc)
+            else:
+                x0, x1 = window_columns(open_[2], bare[2], open_[0], rows,
+                                        300)
+                colours = distinct_colours(open_[2], open_[0], top, bottom,
+                                           x0, x1)
+                if x1 - x0 < 400:
+                    problems.append("the window is %d pixels wide, too "
+                                    "narrow for a 480-wide canvas: the app's "
+                                    "pixels did not reach the screen"
+                                    % (x1 - x0))
+                elif len(colours) < 6:
+                    problems.append("the window holds %d colours, not the "
+                                    "handful a picture needs: a blank canvas, "
+                                    "or one drawn in a format the compositor "
+                                    "cannot read" % len(colours))
+                elif depth == "32" and not (colours - pal):
+                    # The window is nothing but colours the palette could
+                    # have produced, so nothing on the screen says the
+                    # canvas was 32bpp: either the app drew nothing, or
+                    # what it drew came back through sixteen slots. A
+                    # true-colour picture of a posterised drawing could
+                    # look like this, but the sky in this one cannot -
+                    # its gradient is finer than sixteen steps, and no
+                    # amount of dithering reaches past them.
+                    problems.append("every one of the window's %d colours "
+                                    "is a palette entry: on a 32bpp canvas "
+                                    "the picture is not being drawn in true "
+                                    "colour" % len(colours))
         # The console is bracketed around two desktop sessions, and the
         # harness types a command for each one, so compare it allowing
         # for the lines that scrolled (scrolled_diff) rather than pixel
@@ -859,27 +905,49 @@ def run_gfx_resolution(guest, result, verbose, timeout=60.0):
         bare_top = step_to(MODE_TOP, "top.ppm")
         if not esc_to_shell(guest, timeout):
             problems.append("the desktop did not give the console back")
+        # With the console back, the display is in the console's own mode
+        # again - TEXT_W x TEXT_H, the text mode it booted in - because
+        # that is where it was before the desktop started and where the
+        # user left it. run_gfx_surface is the other half of that: the
+        # screendump has to come back at the text mode's size, not stay
+        # at whatever the desktop was using. The mode the *next* session
+        # comes up in is the config file's business, checked below.
         output, _ = guest.sh("cat /proc/gfx", timeout)
         check("mode-proc", output,
-              [r"^resolution\t%dx%d$" % MODE_TOP,
+              [r"^resolution\t%dx%d$" % (TEXT_W, TEXT_H),
                r"^modes\t640x480,800x600,1024x768,1280x1024$"], [], result,
               verbose)
 
+        # The depth is the driver's, so the driver and the depth on the
+        # same line have to be the pair that belongs together: 8bpp
+        # palette indices on the VBE card, 32bpp B8G8R8X8 where a
+        # virtio-gpu presents. Either one wrong is a driver that lost
+        # track of what it is drawing into.
+        if not driver_name(output) or not depth_name(output):
+            problems.append("/proc/gfx has no driver or bpp line: %r"
+                            % output)
+        elif depth_name(output) != WANT_DEPTH[driver_name(output)]:
+            problems.append("/proc/gfx says driver %s at %sbpp, which is "
+                            "not a pair this driver has"
+                            % (driver_name(output), depth_name(output)))
+
         # The same display asked for through the syscall instead of
         # through /proc: `vnu fetch` prints what gfx_getinfo(2) answered.
-        # The mode is not the compiled-in default, so this is not a
-        # tautology - a struct still carrying the default, or a driver
-        # that disagreed with the text file, fails here. When the ladder
-        # grows a second depth the two must be checked together again.
+        # Every field of the line is read out of the file rather than
+        # written here, so the two have to agree: a struct still carrying
+        # a stale mode, or a driver that disagreed with the text file,
+        # fails this.
         driver = re.search(r"^driver\t(\S+)$", output, re.MULTILINE)
         depth = re.search(r"^bpp\t(\d+)$", output, re.MULTILINE)
+        res = re.search(r"^resolution\t(\d+)x(\d+)$", output, re.MULTILINE)
         fetch, _ = guest.sh("vnu fetch", timeout)
-        if not driver or not depth:
-            problems.append("/proc/gfx has no driver or bpp line: %r" % output)
+        if not driver or not depth or not res:
+            problems.append("/proc/gfx has no driver, bpp or resolution "
+                            "line: %r" % output)
         else:
             check("mode-info", fetch,
-                  [r"^Graphics +: +%s %dx%d %sbpp$"
-                   % (driver.group(1), MODE_TOP[0], MODE_TOP[1],
+                  [r"^Graphics +: +%s %sx%s %sbpp$"
+                   % (driver.group(1), res.group(1), res.group(2),
                       depth.group(1))], [], result, verbose)
         output, _ = guest.sh("cat /etc/vnuconfig/gfx.conf", timeout)
         check("mode-config", output, [r"^mode %dx%d$" % MODE_TOP], [],
@@ -1261,6 +1329,38 @@ def console_mask(frame):
     return bytes(out)
 
 
+def driver_name(proc_gfx):
+    """The driver /proc/gfx says owns the display."""
+    m = re.search(r"^driver\t(\S+)$", proc_gfx, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def palette_colours(proc_gfx):
+    """The palette /proc/gfx reports, as (r, g, b) tuples: sixteen
+    RRGGBB words, the same table a program gets from gfx_palette(2)."""
+    m = re.search(r"^palette\t([0-9a-f ]+)$", proc_gfx, re.MULTILINE)
+    if not m:
+        return set()
+    out = set()
+    for word in m.group(1).split():
+        if len(word) != 6:
+            return set()
+        out.add((int(word[0:2], 16), int(word[2:4], 16), int(word[4:6], 16)))
+    return out
+
+
+def depth_name(proc_gfx):
+    """The depth /proc/gfx reports, as a string."""
+    m = re.search(r"^bpp\t(\d+)$", proc_gfx, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+# The depth each driver composites in, which is the depth a program draws
+# in (see vgfx.h): the VBE card is 8bpp with a DAC in front of it, a
+# virtio-gpu scanout is 32bpp with none.
+WANT_DEPTH = {"vga": "8", "virtio-gpu": "32"}
+
+
 def scrolled_diff(before, after):
     """How much a text console changed, allowing for what scrolled.
 
@@ -1343,17 +1443,45 @@ def longest_run(counts, min_changed):
     return best_top, best_bottom
 
 
-def transitions(px, width, y):
-    """How often the colour changes along one scanline - a cheap way to
-    tell a drawn canvas from a rectangle of one flat colour."""
-    base = y * width * 3
-    prev, changes = None, 0
-    for x in range(width):
-        colour = px[base + x * 3:base + x * 3 + 3]
-        if prev is not None and colour != prev:
-            changes += 1
-        prev = colour
-    return changes
+def window_columns(px, q, width, rows, min_changed):
+    """The columns the window covers, from the rows of `rows` that
+    changed wholesale: those are canvas rows, and the first and the last
+    column that differ from the bare desktop on any of them are the two
+    edges of the frame.
+
+    Rows that changed only in a few columns cannot be used to measure
+    the width, and the middle of the window is often one of them: a
+    canvas in the display's own colours agrees with the backdrop the
+    desktop drew there, and what is left is the frame - two columns."""
+    x0, x1 = None, None
+    for y, n in enumerate(rows):
+        if n < min_changed:
+            continue
+        base = y * width * 3
+        for x in range(width):
+            if px[base + x * 3:base + x * 3 + 3] != q[base + x * 3:base + x * 3 + 3]:
+                if x0 is None:
+                    x0 = x
+                x1 = x
+                break
+        for x in range(width - 1, -1, -1):
+            if px[base + x * 3:base + x * 3 + 3] != q[base + x * 3:base + x * 3 + 3]:
+                if x1 is None or x > x1:
+                    x1 = x
+                break
+    return (x0, x1) if x0 is not None else (0, width - 1)
+
+
+def distinct_colours(px, width, top, bottom, x0, x1):
+    """The colours inside the window's rows and columns, sampled every
+    fourth pixel: a picture in one of them, a blank canvas in one or
+    two, a canvas the compositor could not read in none at all."""
+    seen = set()
+    for y in range(top, bottom + 1, 4):
+        base = y * width * 3
+        for x in range(x0, x1 + 1, 4):
+            seen.add(px[base + x * 3:base + x * 3 + 3])
+    return seen
 
 
 # The name the installed system is given, and therefore the one its

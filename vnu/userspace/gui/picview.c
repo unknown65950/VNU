@@ -13,9 +13,13 @@
  * Either way it reads the picture's bytes with open/read/close (the
  * pattern prefs.c uses), decodes BMP / PNG / JPEG with the self-contained
  * px.h decoder and renders the picture cropped/scaled to the window's
- * client area (VGFX_W x VGFX_H) by colour-quantising each RGB888 pixel
- * to the nearest of the 16 Catppuccin DAC palette indices with an
- * optional ordered dither mask.
+ * client area (VGFX_W x VGFX_H) through the vgfx picture primitives,
+ * which know what the display can show: a 24-bit one is given the
+ * RGB888 pixel as it is, a 16-colour one is given the nearest of its
+ * slots with an optional ordered dither mask. This program used to
+ * carry a copy of the palette, a nearest match and a Bayer matrix of
+ * its own, and threw 24 bits of every pixel away on a display that
+ * could have shown them.
  *
  * The window is pre-created by the desktop (title = app name); we never
  * call vgfx_open — just draw, vgfx_flush and service events via
@@ -61,22 +65,6 @@ static int   g_have;                  /* g_pic_rgb holds a decoded image */
 static int   g_err;                   /* the last load attempt failed */
 static int   g_zoom;
 static int   g_dither = 1;
-
-/* Catppuccin Mocha DAC palette (6-bit per channel), mirrors
- * kernel/drivers/vga_gfx.cpp CATT_PAL. */
-static const uint8_t PAL[16][3] = {
-    {7, 7, 11}, {34, 45, 62}, {41, 56, 40}, {29, 49, 59},
-    {60, 34, 42}, {50, 41, 61}, {62, 44, 33}, {12, 12, 17},
-    {6, 6, 9}, {45, 47, 63}, {37, 56, 53}, {34, 55, 58},
-    {58, 40, 43}, {61, 48, 57}, {62, 56, 43}, {51, 53, 61},
-};
-
-static const uint8_t BAYER[4][4] = {
-    {0, 8, 2, 10},
-    {12, 4, 14, 6},
-    {3, 11, 1, 9},
-    {15, 7, 13, 5},
-};
 
 static void pcat(char* out, int cap, const char* a, const char* b)
 {
@@ -192,36 +180,6 @@ static int load_current(void)
     return load_file(path);
 }
 
-/* Colour-quantise one source pixel of the decoded RGB picture to the
- * nearest Catppuccin palette index. */
-static int map_color(int sx, int sy)
-{
-    int r = g_pic_rgb[(sy * g_pic_w + sx) * 3 + 0];
-    int g = g_pic_rgb[(sy * g_pic_w + sx) * 3 + 1];
-    int b = g_pic_rgb[(sy * g_pic_w + sx) * 3 + 2];
-
-    int best = 0;
-    int bd = 1 << 30;
-    for (int c = 0; c < 16; ++c) {
-        int dr = (r >> 2) - PAL[c][0];
-        int dg = (g >> 2) - PAL[c][1];
-        int db = (b >> 2) - PAL[c][2];
-        int dd = dr * dr + dg * dg + db * db;
-        if (dd < bd) {
-            bd = dd;
-            best = c;
-        }
-    }
-
-    if (g_dither) {
-        int e = (r * 77 + g * 150 + b * 29) >> 8; /* brightness 0..254 */
-        int th = BAYER[sy & 3][sx & 3];
-        if ((e & 15) > th)
-            best = (best + 1) & 15;
-    }
-    return best;
-}
-
 static void draw(void)
 {
     vgfx_clear(VGFX_BLACK);
@@ -258,7 +216,21 @@ static void draw(void)
                 sx = g_pic_w - 1;
             if (sy >= g_pic_h)
                 sy = g_pic_h - 1;
-            vgfx_put_pixel(x + ox, y + oy, map_color(sx, sy));
+            /* The picture's own colours, in that order. The canvas is
+             * in the depth of the display (vgfx.h), so on a 32bpp one
+             * these 24 bits land as they are - which is the whole point
+             * of that depth, and why this program used to throw 24 bits
+             * of every pixel away - and on an 8bpp one they are
+             * quantized to the nearest of the display's sixteen slots,
+             * dithered when the user asked for it. Which of the two
+             * this machine is, vgfx knows and this program does not. */
+            const uint8_t* px = g_pic_rgb + (sy * g_pic_w + sx) * 3;
+            const unsigned int rgb = ((unsigned)px[0] << 16) |
+                                     ((unsigned)px[1] << 8) | px[2];
+            if (g_dither)
+                vgfx_put_rgb_dither(x + ox, y + oy, rgb);
+            else
+                vgfx_put_rgb(x + ox, y + oy, rgb);
         }
     }
 

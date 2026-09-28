@@ -1161,3 +1161,84 @@ console that came back a screenful lower than it started still passes
 while one that did not come back matches at no offset at all.
 
 - `make test` 86/86, `make test-gpu` 86/86, `make test-install` 9/9.
+
+### Fifteenth drop: a 32bpp canvas a program can actually draw into
+
+The fourteenth drop left the framebuffer in the depth of the display
+presenting it, so the desktop composites B8G8R8X8 on a virtio-gpu and
+palette indices on the VBE card. Nothing above the driver could *use*
+that: a window's canvas was still 480x340 one byte per pixel, the only
+way to name a colour was a `VGFX_*` slot, and `gfx_getinfo`'s `bpp` had
+no way to say which of the two a program was looking at. This drop is
+that last mile - the depth, the palette and alpha are all reachable from
+a program now.
+
+**The palette is a syscall, not a guess.**
+
+    VNU_SYS_gfx_palette (65)   ebx = uint32_t out[16]
+
+Sixteen `0xXXRRGGBB` words, `VNU_GFX_PALETTE_SLOTS` of them and
+`VNU_GFX_PALETTE_BYTES` bytes in total, in both `abi.h` files. A word is
+`B8G8R8X8` - bytes B, G, R, X - so a slot and a 32bpp pixel are the same
+number, and a program on the 8bpp path can use the same table to blend
+against, to name a colour in `/etc/vnu/palette`, or to dither into. It is
+the table `pixel_of()` already had (`CATT_PAL`, the image palette the
+desktop installs) and not the DAC's: what a slot of a canvas *means* does
+not change when the desktop is not running, and a program that drew with
+any other table would be wrong from its first pixel. `X` is `0xFF`; the
+scanout has no use for it, which is exactly the byte alpha lives in.
+`/proc/gfx` reports the same sixteen words on a `palette` line, and
+`vgfx_palette()` in vlibc wraps the call next to `vgfx_get_info()`.
+
+**A window's canvas is in the display's format.** `GFX_SURFACE_PAGES_AT(bpp)`
+is 40 pages at 8bpp and 160 at 32bpp, and `gfx_surface()` maps the
+canvas - the *same* pages the compositor blits - at the depth
+`gfx_getinfo` reported. So a PNG with an alpha channel survives
+`px_decode` to the screen instead of being quantized to the nearest of
+sixteen entries on the way, which is what `blit_scale()`'s new 32bpp
+branch is for: `src OVER dst` on the three 8-bit channels, a fully
+transparent pixel skipped and an opaque one stored straight through.
+
+**vlibc asks, and can name a colour.** `vgfx::bpp()` and
+`vgfx::palette()` resolve the depth through the two syscalls on first
+use, and the picture primitives are three new ones:
+
+- `vgfx_put_rgb(x, y, rgb)` - the colour, at the depth of the display.
+- `vgfx_put_rgba(x, y, rgb, a)` - alpha on 32bpp; on 8bpp it quantizes
+  the colour and drops alpha, which is all that display can carry.
+- `vgfx_put_rgb_dither(x, y, rgb)` - for a program that has to go
+  through sixteen entries, ordered 4x4 Bayer against the palette
+  fetched above. On a 32bpp display it is `vgfx_put_rgb()`: a 24-bit
+  picture on a 24-bit screen wants no dithering, and only the depths
+  that force it should have to think about it.
+
+`picview` was the reason: it had a private 16-entry table, a nearest
+match and a hand-written Bayer matrix of its own, and now draws the
+decoded image through the vgfx calls and asks the display how deep it
+is. The suite's `gfx-surface` check changed with it - it looked for
+pixels in the window that are *not* palette entries, which is only a
+fair question at 32bpp, so it now asks `/proc/gfx` for the driver and
+the depth and requires the picture to beat the palette's sixteen on
+virtio-gpu and only to be a picture on the VBE path.
+
+**The console comes back in its own geometry.** A display with a text
+mode gets it back from the registers. A virtio display shows whatever
+its scanout resource is, and after a desktop that is still the desktop's
+mode - so the console returned as 1024x768 with 720x400 of text in the
+middle of it, and stayed that way until something else changed the mode.
+`present_text()` now puts the geometry back first
+(`restore_console_geometry()`: new frame, then driver, then swap, the
+same order `set_resolution()` uses), and `width()`/`height()` report
+720x400 whenever the desktop is not running, because that is what is
+really on screen. The mode the *next* session will use is still the
+config file's, and `gfx_setmode` still takes a width and a height: the
+depth is what the hardware the display hangs off costs, not a mode.
+
+**One reader that could not keep up.** `wallpaper` read `/proc/gfx` in
+a single 160-byte read to find its own line, which the new `palette`
+line pushed out of reach - `wallpaper` with no arguments printed
+nothing, and `prefs` said the desktop had no wallpaper. It reads the
+whole file now, in a loop, and the three wallpaper cases that the new
+line had broken pass on both drivers.
+
+- `make test` 86/86, `make test-gpu` 86/86, `make test-install` 9/9.

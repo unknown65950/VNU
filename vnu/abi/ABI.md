@@ -77,6 +77,7 @@ must never be renumbered.
 | 62 | gfx_setmode |
 | 63 | gfx_getmode |
 | 64 | gfx_getinfo |
+| 65 | gfx_palette |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
@@ -138,7 +139,10 @@ with `-1` leaves a field unchanged; only root may chown.
   cheaper - the decoded image is kept, so only the scaling over the new
   screen runs again. Root only.
 - `gfx_surface()` — returns where a windowed task draws: the address of
-  its 480x340 pixel canvas, one byte per pixel, palette indices 0..15.
+  its 480x340 pixel canvas. A window draws in the *display's* format, so
+  one byte per pixel with palette indices 0..15 on the VGA path and four
+  bytes per pixel B8G8R8X8 on virtio-gpu — which is what `gfx_getinfo`'s
+  `bpp` reports, so a program asks instead of assuming.
   The pages are *shared*. They are mapped into the calling task at
   0x500000 (on the first call; inside the app window's 4 MiB page, so no
   extra page table) and into the kernel through their physical address
@@ -182,12 +186,28 @@ with `-1` leaves a field unchanged; only root may chown.
   `uint32_t` fields, so there is no packing to disagree about. Returns 0,
   or `-VNU_EFAULT` if `ebx` is null. vlibc wraps it as
   `vgfx_get_info()`; `vnu fetch` prints the result as its `Graphics` line.
-  `bpp` is 8 on both paths today, and that is not a typo: the canvas
-  windows draw into is one byte per pixel, so the desktop composites
-  palette indices either way, and virtio-gpu's 32bpp B8G8R8X8 scanout
-  receives those indices expanded through the DAC by `present()`. It
-  becomes 32 where a program can actually use it — when the composited
-  format follows the scanout.
+  `bpp` is the depth of that pixel data, and it follows the driver: 8
+  on the VBE path, where the mode is a DAC in front of 8-bit indices,
+  and 32 on virtio-gpu, whose scanout resource has no DAC to go
+  through — there the desktop composites straight into B8G8R8X8 and
+  a program gets true colour instead of a 16-entry indirection. It
+  also describes the *window* canvases, not just the screen, so one
+  number is enough for a program that draws either.
+- `gfx_palette(ebx=uint32_t*, ecx=uint32_t bytes)` — writes the
+  display's 16 palette entries to the caller's array, one `uint32_t`
+  per slot in the order the pixels are: `0xXXRRGGBB` (bytes B, G, R,
+  X, so a 32bpp pixel is the same word with its own alpha in X).
+  Sixteen slots is `VNU_GFX_PALETTE_SLOTS` and the array is
+  `VNU_GFX_PALETTE_BYTES` (64) bytes, which is what `ecx` must be at
+  least. Returns 0, or `-VNU_EFAULT` if `ebx` is null and `-VNU_EINVAL`
+  for a buffer too small to hold the table. It is the image palette the
+  desktop composites with (`CATT_PAL`, the one `/etc/vnu/palette`
+  names), which is also what a slot of a canvas means while no desktop
+  is running: the roles (`VGFX_LGRAY` and the rest) mean the same thing
+  on both paths, and a program that drew against another table would be
+  wrong from its first pixel. The console presents through its own
+  text-mode palette, which is its business. vlibc wraps it as
+  `vgfx_palette()` next to `vgfx_get_info()`.
 - `ping(ebx, ecx)` — `ebx` is the target IPv4 address as a
   big-endian uint32 (10.0.2.2 = `0x0A000202`), `ecx` the timeout in
   milliseconds (kernel clamps to 10..2000).
