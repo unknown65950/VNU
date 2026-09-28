@@ -19,9 +19,10 @@ if [ -z "${BASH_VERSION:-}" ]; then exec env bash "$0" "$@"; fi
 #   ./vnu/run.sh installed --headless — the same, serial in this terminal
 #
 # The word virtio-gpu attaches a virtio-gpu display (QEMU `-device
-# virtio-vga` instead of the usual std VGA); the kernel draws the desktop
-# on it while the console and the font capture stay on the VGA-compatible
-# part of the device:
+# virtio-vga` instead of the usual std VGA); the kernel drives both the
+# desktop and the text console on it — the console is drawn as pixels
+# into the virtio scanout, because the host does not hand the display
+# back to the device's VGA text plane once a scanout has been used:
 #   ./vnu/run.sh virtio-gpu           — desktop through virtio-gpu
 #   ./vnu/run.sh virtio-gpu --headless — the same, serial in this terminal
 #
@@ -102,9 +103,10 @@ fi
 
 QEMU_GPU_ARGS=()
 if [[ "$VIRTIO_GPU" == 1 ]]; then
-    # virtio-vga is a VGA-compatible virtio-gpu: the kernel keeps the
-    # console and the font capture on the VGA part and drives the desktop
-    # through virtio.
+    # virtio-vga is a VGA-compatible virtio-gpu: the kernel programs its
+    # modes, draws the desktop on it, and draws the console there too —
+    # the host keeps showing the virtio scanout and no text plane, so a
+    # console on this display is pixels in that scanout.
     QEMU_GPU_ARGS=(-vga none -device virtio-vga)
 fi
 

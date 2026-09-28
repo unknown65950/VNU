@@ -1103,3 +1103,61 @@ B8G8R8X8 scanout, but `present()` expands the 8bpp backbuffer through
 the DAC on the way there. Reporting 32 would promise a pixel format no
 program can draw into yet; the field becomes 32 when the composited
 format follows the scanout (Milestone B).
+
+### Fourteenth drop: a console on a display that has no text mode
+
+`./vnu/run.sh virtio-gpu` booted to a window with nothing in it: the
+prompt was on the serial line and nowhere else. The same display had a
+second version of the same fault - a desktop that quit left its last
+frame on the monitor, because a virtio-gpu has no text mode for the host
+to fall back to. Both come from the same place, and neither is a
+driver bug in the sense of a missing register write.
+
+The host shows whichever plane a virtio-vga was pointed at last: its own
+VGA text plane, or a virtio-gpu scanout resource. The driver pointed it
+at the resource in `init()`, so a machine sitting at its prompt was
+showing a scanout that nothing had drawn yet - a black screen with a
+prompt somewhere else entirely. And the obvious way back does not work:
+unpointing the resource (`SET_SCANOUT` with `resource_id 0`) does not
+hand the display back to the text plane, it freezes the last frame the
+card was given, and nothing transferred afterwards ever shows up
+(QEMU 11.1). That is why quitting the desktop used to `blank()` the
+frames and present them: the console's own black, with the console
+itself nowhere on it.
+
+So the resource is built and backed at `init()` and left alone, and a
+desktop session takes the display over when it enters graphics mode -
+once the mode is programmed, so a mode change that fails leaves the
+console on the screen where it already was, and again when a session
+changes the mode, because a new resource is a new thing to be shown.
+The console a session ends in is drawn into the scanout the way the
+desktop draws: `vgfx::present_text()` puts the 80x25 grid on black in
+the 9x16 cell the text mode uses (8 wide where a mode is too narrow for
+a row of 80, which lands on 640), in the palette the text mode booted
+with, and presents it before the mode is given up. A cell is read
+through `tty::cell()`, which is the console's own saved copy while a
+saved screen is saved: `0xB8000` is not the text plane then, it is
+inside the aperture the mode has pointed at the framebuffer instead.
+
+The text needs a font, and the font capture came back empty: a
+virtio-gpu has no 8K of glyph ROM, so the font window reads back zeroes
+and every glyph drawn from that table is a blank cell - which is what
+the desktop's own small text was drawing. A card that hands back no font
+at all is given the one it would have had: the VGA 8x16 font the BIOS
+ROMs carry, kept as `kernel/console/font8x16.cpp` (the same bytes
+QEMU's `vgabios` has at offset `0x6720`, so it is the letterforms a VGA
+text mode would have shown). Captured or built in, the console and a gfx
+app draw the same shapes.
+
+The suite gained a full-screen check of it. `console-screen` takes a
+screendump and looks for the console as a text mode puts it on a
+display: at boot the 720x400 grid, in the mode the desktop ran in the
+same grid centred and at text-mode ink density, so a scanout full of
+flat gray fails it. `gfx-surface` still brackets a session and compares
+the two consoles, now through the same helpers and allowing for the
+scrollback the commands typed in between have moved: the frames are
+compared at every line offset and the smallest difference decides, so a
+console that came back a screenful lower than it started still passes
+while one that did not come back matches at no offset at all.
+
+- `make test` 86/86, `make test-gpu` 86/86, `make test-install` 9/9.

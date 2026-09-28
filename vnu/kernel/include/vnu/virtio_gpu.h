@@ -57,11 +57,19 @@ ScanoutSegment scanout_segment(uint32_t index);
 // are segments.
 void present();
 
-// Show a blank frame: zero the scanout and push it. Called when the
-// desktop hands the display back (vgfx::exit_to_text), because this
-// display has no text mode of its own and the host would otherwise keep
-// showing the last desktop frame for good.
-void blank();
+// Who the host is showing. A virtio-vga is a VGA-compatible display
+// with two planes, and the host renders whichever one is pointed at it:
+// the legacy VGA text mode, or a virtio-gpu scanout resource. Pointing
+// at the resource is a command (SET_SCANOUT); unpointing is the same
+// command with resource_id 0, and it does not hand the display back to
+// the text plane - the host simply freezes the last frame it was given
+// and nothing transferred afterwards shows up (QEMU 11.1). So the
+// resource is built and backed at init() but not shown, leaving a
+// machine at a text prompt on its console, and a desktop session takes
+// the display over for good: the console a session ends in is drawn
+// into the scanout (see vgfx::present_text) rather than handed back.
+// No-op when no device is live.
+void show_scanout();
 
 // Move the display to w x h: the scanout resource in use is released,
 // its frames go back to the pool and a resource of the new size is built

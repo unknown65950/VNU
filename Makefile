@@ -30,6 +30,14 @@ TEST_ARGS  ?=
 # kernel links against; the kernel cannot be built without them.
 EMBEDDED := $(wildcard $(KERNEL_DIR)/proc/embedded_*.h)
 
+# Everything vnu/vnu.iso is built from. The build artifacts are left out
+# on purpose: they are written into these very trees (embedded_*.h,
+# vnu/kernel/build), so counting them would make the ISO look older than
+# its own sources for ever and rebuild it every time.
+ISO_SOURCES := $(shell find $(KERNEL_DIR) $(VNU)/userspace vlibc tools \
+                      -type f -not -path '$(KERNEL_DIR)/build/*' \
+                      -not -name 'embedded_*.h' 2>/dev/null)
+
 .PHONY: help all iso kernel userspace vhd \
         run run-headless run-gpu run-headless-gpu run-vhd run-headless-vhd \
         run-installed run-headless-installed \
@@ -58,7 +66,12 @@ help: ## list every target (this is the default goal)
 
 all: iso ## same as iso (reads better in a script)
 
-iso: ## build userspace, the kernel and vnu/vnu.iso
+iso: $(ISO) ## build userspace, the kernel and vnu/vnu.iso (if a source changed)
+
+# The ISO is a file target, so everything that boots or tests it gets the
+# image the sources actually describe. Without it a target depending on
+# the mere existence of an old vnu/vnu.iso would test yesterday's kernel.
+$(ISO): $(ISO_SOURCES)
 	@./vnu/build_iso.sh
 
 userspace: ## build the userspace binaries and embedded_*.h
@@ -70,22 +83,22 @@ kernel: $(if $(EMBEDDED),,userspace) ## build only the kernel (cmake, no ISO)
 
 ## @running in QEMU
 
-run: ## boot the ISO in a QEMU window (builds the ISO if it is missing)
+run: $(ISO) ## boot the ISO in a QEMU window (rebuilt first if a source changed)
 	@./vnu/run.sh $(RUN_ARGS)
 
-run-headless: ## boot without graphics, serial console in this terminal
+run-headless: $(ISO) ## boot without graphics, serial console in this terminal
 	@./vnu/run.sh --headless $(RUN_ARGS)
 
-run-gpu: ## boot in a window with the desktop on virtio-gpu
+run-gpu: $(ISO) ## boot in a window with the desktop on virtio-gpu
 	@./vnu/run.sh virtio-gpu $(RUN_ARGS)
 
-run-headless-gpu: ## boot headless, but still on a virtio-gpu display
+run-headless-gpu: $(ISO) ## boot headless, but still on a virtio-gpu display
 	@./vnu/run.sh virtio-gpu --headless $(RUN_ARGS)
 
-run-vhd: vhd ## boot in a window with the test disk vnu/vnu.vhd attached
+run-vhd: vhd $(ISO) ## boot in a window with the test disk vnu/vnu.vhd attached
 	@./vnu/run.sh vhd $(RUN_ARGS)
 
-run-headless-vhd: vhd ## the same, with the serial console in this terminal
+run-headless-vhd: vhd $(ISO) ## the same, with the serial console in this terminal
 	@./vnu/run.sh vhd --headless $(RUN_ARGS)
 
 run-installed: ## boot the installed disk alone, no ISO (see `vnu install`)
@@ -104,16 +117,16 @@ vhd: ## create the test disk vnu/vnu.vhd (VHD_SIZE=size in MiB)
 
 ## @tests
 
-test: $(if $(wildcard $(ISO)),,iso) ## automated guest tests in QEMU (ISO boot)
+test: $(ISO) ## automated guest tests in QEMU (ISO boot)
 	@python3 tools/qemu_test.py $(TEST_ARGS)
 
-test-gpu: $(if $(wildcard $(ISO)),,iso) ## the same suite on a virtio-gpu display
+test-gpu: $(ISO) ## the same suite on a virtio-gpu display
 	@python3 tools/qemu_test.py --gpu $(TEST_ARGS)
 
-test-install: $(if $(wildcard $(ISO)),,iso) ## install to a disk, boot that disk
+test-install: $(ISO) ## install to a disk, boot that disk
 	@python3 tools/qemu_test.py --install-only $(TEST_ARGS)
 
-test-all: $(if $(wildcard $(ISO)),,iso) ## everything: ISO suite + virtio-gpu + install
+test-all: $(ISO) ## everything: ISO suite + virtio-gpu + install
 	@python3 tools/qemu_test.py $(TEST_ARGS)
 	@python3 tools/qemu_test.py --gpu $(TEST_ARGS)
 	@python3 tools/qemu_test.py --install-only $(TEST_ARGS)

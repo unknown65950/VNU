@@ -110,6 +110,7 @@ add_executable(kernel.elf
     fs/fat16.cpp
     console/console.cpp
     console/tty.cpp
+    console/font8x16.cpp
     drivers/kbd.cpp
     drivers/vga_gfx.cpp
     drivers/ps2mouse.cpp

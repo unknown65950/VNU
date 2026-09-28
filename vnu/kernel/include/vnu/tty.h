@@ -17,6 +17,13 @@ void get_cursor(uint16_t* row, uint16_t* col);
 void get_size(uint16_t* rows, uint16_t* cols);
 /* Flush pending hardware cursor update (after a batch of putc). */
 void flush_cursor();
+/* The character and attribute word of one cell: the character in the
+ * low byte, the attribute above it. The console renderer on a display
+ * with no text mode of its own draws these as pixels (see
+ * vgfx::present_text), and it reads them from here rather than from
+ * 0xB8000 itself. */
+uint16_t cell(uint16_t row, uint16_t col);
+
 /* Put the text plane aside / put it back, around a graphics mode that
  * has the same VRAM as the console. See tty.cpp for why. */
 void save_screen();

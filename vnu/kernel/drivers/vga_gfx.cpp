@@ -1,4 +1,5 @@
 #include <vnu/vga_gfx.h>
+#include <vnu/font8x16.h>
 #include <vnu/pmm.h>
 #include <vnu/tty.h>
 #include <vnu/virtio_gpu.h>
@@ -211,10 +212,13 @@ void capture_font()
 {
     FontWindow w = enter_font_window();
 
-    volatile uint8_t* src = reinterpret_cast<volatile uint8_t*>(0xA0000);
+    volatile const uint8_t* src = reinterpret_cast<volatile const uint8_t*>(0xA0000);
+    bool captured_anything = false;
     for (int c = 0; c < 256; ++c)
-        for (int r = 0; r < 16; ++r)
+        for (int r = 0; r < 16; ++r) {
             g_font[c][r] = src[c * 32 + r];
+            captured_anything = captured_anything || g_font[c][r] != 0;
+        }
 
     /* Derive the compact 8x8 font by OR-pairing adjacent rows of the
      * captured 8x16 glyphs, so the desktop's small text keeps the
@@ -226,6 +230,18 @@ void capture_font()
                                                  g_font[c][r * 2 + 1]);
 
     leave_font_window(w);
+
+    /* A display with no font memory behind it - a virtio-gpu has no
+     * 8K of glyph ROM and its font aperture reads back empty - hands
+     * back nothing at all, and text drawn from an empty table is a
+     * screen full of blank cells. Such a card is given the font it
+     * would have had, so the text mode and the text a gfx program
+     * draws are the same letterforms either way. */
+    if (!captured_anything) {
+        for (int c = 0; c < 256; ++c)
+            for (int r = 0; r < 16; ++r)
+                g_font[c][r] = vnu::font8x16[c][r];
+    }
 
     g_have_font = true;
 }
@@ -466,6 +482,14 @@ bool enter_gfx_mode()
     program_mode(g_width, g_height);
     g_in_gfx_mode = true;
 
+    /* On a virtio-vga the host shows whichever plane it was pointed at
+     * last, and a text-mode console is the legacy VGA one. The desktop
+     * is what changes that, so the scanout is claimed here - after the
+     * mode is programmed, never before, so a failed mode change leaves
+     * the console on the screen where it already was. */
+    if (vnu::virtio_gpu::active())
+        vnu::virtio_gpu::show_scanout();
+
     /* Swap in the Catppuccin DAC the first time we enter graphics mode;
      * the boot palette is saved so exit_to_text() can hand it back. */
     if (!g_have_saved_pal)
@@ -508,11 +532,26 @@ bool set_resolution(int w, int h)
     g_backbuf = next;
     g_width = w;
     g_height = h;
+    /* A new resource is a new thing to be shown: the host is still
+     * pointed at the one the mode being left had. This is where the new
+     * size is already on record, which is what the host is told along
+     * with the resource. Only inside a session - a mode applied from
+     * /etc/vnuconfig/gfx.conf at boot changes the mode the desktop will
+     * come up in, and the console keeps the display until something
+     * actually draws. */
+    if (g_in_gfx_mode && vnu::virtio_gpu::active())
+        vnu::virtio_gpu::show_scanout();
     return true;
 }
 
 void exit_to_text()
 {
+    /* The console goes on the screen while the framebuffer is still
+     * ours to draw it in, and before the mode is given up: the text
+     * mode below only reaches the monitor on a display that has one. */
+    if (vnu::virtio_gpu::active())
+        present_text();
+
     /* The framebuffer goes back to the pool before the text mode is
      * restored, so a machine that boots to the console holds none of
      * it: the next desktop session takes a fresh run for whatever mode
@@ -527,12 +566,6 @@ void exit_to_text()
     write_registers(g_saved.misc, g_saved.seq, g_saved.crtc, g_saved.gc, g_saved.ac);
     restore_font();
     vnu::tty::restore_screen();
-    /* The virtio-gpu display has no text mode to fall back to and the
-     * host keeps showing whatever was last presented, so a desktop that
-     * quit would stay on the monitor: it gets the console's own blank
-     * instead, the way the VGA side gets its text mode back. */
-    if (vnu::virtio_gpu::active())
-        vnu::virtio_gpu::blank();
 }
 
 void clear(uint8_t color)
@@ -978,6 +1011,63 @@ void draw_cursor_at(int x, int y, CursorShape shape)
 
 void present()
 {
+    present_with(CATT_PAL);
+}
+
+/* The console as pixels. See vga_gfx.h for why this exists. */
+void present_text()
+{
+    if (!g_backbuf)
+        return;
+
+    /* The console is drawn on the grid the tty keeps its cells in, so a
+     * text mode of another size would be drawn as itself. */
+    uint16_t rows = 0, cols = 0;
+    vnu::tty::get_size(&rows, &cols);
+
+    /* A VGA text cell is 8 glyph pixels wide and 16 tall, and the text
+     * mode puts a ninth, always blank, column between cells - which is
+     * what makes the mode 720 wide rather than 640. A screen too narrow
+     * for a row of those (640x480) gets 8-wide cells, and lands on 640. */
+    constexpr int ch = 16;
+    const int cw = (g_width >= cols * 9) ? 9 : 8;
+    const int grid_w = cols * cw;
+    const int grid_h = rows * ch;
+    const int x0 = (g_width - grid_w) / 2;
+    const int y0 = (g_height - grid_h) / 2;
+
+    clear(0);   /* the console is a screen of its own, on black */
+    for (int row = 0; row < rows; ++row) {
+        for (int col = 0; col < cols; ++col) {
+            const uint16_t c = vnu::tty::cell(row, col);
+            const uint8_t* bits = g_font[c & 0xFF];
+            /* A cell is a character and an attribute: bits 0..3 of the
+             * attribute are the foreground, 4..6 the background and bit
+             * 7 blink, which the text mode ignores. These are the text
+             * mode's own color numbers, so they are looked up in the
+             * palette it booted with, not in the desktop's. */
+            const uint8_t attr = static_cast<uint8_t>(c >> 8);
+            const uint8_t fg = static_cast<uint8_t>(attr & 0x0F);
+            const uint8_t bg = static_cast<uint8_t>((attr >> 4) & 0x07);
+            for (int y = 0; y < ch; ++y) {
+                const int py = y0 + row * ch + y;
+                if (py >= g_height)
+                    break;
+                uint8_t* dst = g_backbuf + py * g_width + x0 + col * cw;
+                for (int x = 0; x < cw; ++x) {
+                    if (x0 + col * cw + x >= g_width)
+                        break;
+                    const bool lit = (x < 8) && (bits[y] & (0x80u >> x));
+                    *dst++ = lit ? fg : bg;
+                }
+            }
+        }
+    }
+    present_with(g_have_saved_pal ? g_saved_pal : CATT_PAL);
+}
+
+void present_with(const uint8_t (&pal)[16][3])
+{
     /* Virtio-gpu path (when QEMU was given a virtio display device):
      * the host scanout is a 32-bpp resource backed by guest memory, so
      * expand the 8-bpp backbuffer through the DAC palette first, then
@@ -1015,7 +1105,7 @@ void present()
                 }
                 const uint32_t px = (left < room) ? (left / 4u) : (room / 4u);
                 for (uint32_t x = 0; x < px; ++x) {
-                    const uint8_t* rgb = CATT_PAL[*src++];
+                    const uint8_t* rgb = pal[*src++];
                     /* 6-bit DAC -> 8-bit channel, then store B,G,R,X
                      * (pixel = 0x00RRGGBB) to match B8G8R8X8. */
                     dst[0] = static_cast<uint8_t>((rgb[2] << 2) | (rgb[2] >> 4));

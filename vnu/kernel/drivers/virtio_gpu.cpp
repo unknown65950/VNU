@@ -711,15 +711,18 @@ bool scanout_alloc(int w, int h)
  * step can fail, and a half-built resource is not something to hand
  * back: the caller unrefs it. Returns the step that refused, or null
  * when the resource is up - the driver logs its verdicts, so a mode
- * that cannot be shown says so instead of just not appearing. */
+ * that cannot be shown says so instead of just not appearing.
+ *
+ * The resource is built and left alone: whether the host shows it is a
+ * separate question (show_scanout), because a resource that is ready to
+ * be presented into is not a display that is being driven. init() and
+ * set_resolution() both leave a machine at its console on the console. */
 const char* build_scanout(uint32_t id, uint32_t w, uint32_t h)
 {
     if (!gpu_create_2d(id, w, h))
         return "create_2d";
     if (!gpu_attach_backing(id))
         return "attach_backing";
-    if (!gpu_set_scanout(id, w, h))
-        return "set_scanout";
     return nullptr;
 }
 
@@ -865,19 +868,19 @@ void present()
     (void)submit_and_wait(sizeof(GpuFlush), GPU_RESP_OK_NODATA);
 }
 
-/* Blank the display: zero every scanout run and push it. The VGA side
- * has a text mode to fall back to, this one has not - the host keeps
- * showing whatever was last transferred, so a desktop that quit would
- * stay on the monitor. Zero is the text console's own background, which
- * is what the VGA side shows after its mode switch. */
-void blank()
+/* Point the display at the scanout resource: the virtio-gpu side has no
+ * text plane of its own, so the console is drawn into the scanout (see
+ * vgfx::present_text) and the display is left pointing at it, which is
+ * also what the desktop draws into. Unpointing it does not bring the
+ * legacy VGA plane back - the host keeps the last frame it was given
+ * - so the scanout stays, and the next session presents into it again
+ * (see set_resolution) instead of waiting for a mode change to build
+ * another. */
+void show_scanout()
 {
-    if (!g_active || g_seg_count == 0)
+    if (!g_active || g_scanout_id == 0)
         return;
-    for (uint32_t i = 0; i < g_seg_count; ++i)
-        memset(reinterpret_cast<void*>(g_segs[i].phys), 0,
-               static_cast<size_t>(g_segs[i].frames) * 4096u);
-    present();
+    (void)gpu_set_scanout(g_scanout_id, vgfx::width(), vgfx::height());
 }
 
 /* Move the display to w x h. The scanout resource is exactly the size

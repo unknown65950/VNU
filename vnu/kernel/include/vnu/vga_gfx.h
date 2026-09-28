@@ -165,4 +165,27 @@ void draw_cursor(int x, int y, uint8_t color = COLOR_BLACK);
 // Flip the backbuffer to the VBE linear framebuffer (0xFD000000).
 void present();
 
+/* present() with the caller's palette instead of the desktop's, for a
+ * frame whose pixels are not desktop pixels: the console is drawn in the
+ * palette the text mode booted with (see present_text). Only the
+ * virtio-gpu expansion reads the palette here - it has no card DAC to ask,
+ * so it goes through a kernel-side table - while the VBE path presents
+ * the framebuffer as it stands, with whatever the DAC was loaded with. */
+void present_with(const uint8_t (&pal)[16][3]);
+
+/* Draw the text console into the framebuffer and present it.
+ *
+ * A virtio-gpu display has no text mode of its own, and the host does
+ * not go back to the legacy VGA plane once a scanout has been used, so
+ * a desktop that quits would otherwise leave its last frame on the
+ * monitor with the prompt nowhere on it. The console is therefore drawn
+ * the way the desktop draws: into the 8-bpp backbuffer, with the
+ * captured VGA font, and handed over. The text keeps its natural 9x16
+ * VGA cell (8 wide where the screen is too narrow for 80 of them) and
+ * sits centered on black - the same 8x16 grid the gfx apps put their
+ * own text in, so the console looks the size it always looked.
+ *
+ * Needs the backbuffer, so it is called before the mode is given up. */
+void present_text();
+
 } // namespace vnu::vgfx

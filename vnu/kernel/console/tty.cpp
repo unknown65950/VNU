@@ -338,6 +338,17 @@ void get_size(uint16_t* r, uint16_t* c)
 uint16_t g_saved_screen[W * H];
 bool g_screen_saved = false;
 
+uint16_t cell(uint16_t row, uint16_t col)
+{
+    if (row >= H || col >= W)
+        return 0x0720;   /* a blank light-on-black space */
+    /* A saved screen is the console's own copy, and while it is saved
+     * the live cells cannot be read: 0xB8000 is not the text plane
+     * then, it is inside the card's aperture, which a mode with a
+     * linear framebuffer has pointed at that framebuffer instead. */
+    return g_screen_saved ? g_saved_screen[row * W + col] : vga[row * W + col];
+}
+
 void save_screen()
 {
     for (size_t i = 0; i < W * H; ++i)
@@ -351,6 +362,7 @@ void restore_screen()
         return;
     for (size_t i = 0; i < W * H; ++i)
         vga[i] = g_saved_screen[i];
+    g_screen_saved = false;   /* the live cells are the console's again */
     cursor_dirty = true;
     flush_cursor();
 }

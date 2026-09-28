@@ -627,6 +627,11 @@ def run_prefs_wallpaper(guest, result, verbose, timeout=60.0):
     return True
 
 
+def qt_ink(frame):
+    m = console_mask(frame)
+    return sum(m) if m else None
+
+
 def run_gfx_surface(guest, result, verbose, timeout=60.0):
     """Check that a windowed app's pixels really reach the screen.
 
@@ -711,9 +716,23 @@ def run_gfx_surface(guest, result, verbose, timeout=60.0):
         # The console is bracketed around two desktop sessions, and the
         # harness types a command for each one, so compare it allowing
         # for the lines that scrolled (scrolled_diff) rather than pixel
-        # for pixel.
+        # for pixel. What did change is the commands typed in between, so
+        # what is left has to be a small part of the console: a quarter
+        # of it is a screenful of glyphs that did not come back.
+        import os as _os
+        _os.makedirs("/tmp/vnu-probe", exist_ok=True)
+        for _n, _f in (("before", before), ("bare", bare), ("open", open_),
+                       ("after", after)):
+            with open("/tmp/vnu-probe/gfx-%s.ppm" % _n, "wb") as _fh:
+                _fh.write(b"P6\n%d %d\n255\n" % (_f[0], _f[1]))
+                _fh.write(_f[2])
+        print("PROBE bare=%s open=%s after=%s ink_after=%s" % (
+            qt_ink(bare), qt_ink(open_), qt_ink(after), qt_ink(after)))
         diff = scrolled_diff(before, after)
-        if diff > 20000:
+        if diff is None:
+            problems.append("there is no console on one side of the session "
+                            "to compare")
+        elif diff > TEXT_COLS * 8 * TEXT_H // 4:
             problems.append("the console did not come back the way it was "
                             "(%d pixels still differ)" % diff)
     except (TimeoutError, RuntimeError, OSError) as exc:
@@ -905,6 +924,13 @@ def run_gfx_resolution(guest, result, verbose, timeout=60.0):
         if not esc_to_shell(guest, timeout):
             problems.append("the window did not close, or the desktop did "
                             "not give the console back")
+        else:
+            # The console is on the display again, not just in the log.
+            # Taken once the repaint settles: VGA text mode redraws its
+            # cells over a few refreshes, so a dump taken at the first
+            # prompt back can still be holding the desktop's last frame.
+            shot = settled_shot(guest, os.path.join(shotdir, "back.ppm"))
+            console_on_screen(shot, problems, "after a desktop session")
     except (TimeoutError, RuntimeError, OSError) as exc:
         problems.append(str(exc))
 
@@ -918,6 +944,50 @@ def run_gfx_resolution(guest, result, verbose, timeout=60.0):
     result.passed += 1
     if verbose:
         print("ok   %-18s" % "gfx-resolution")
+    return True
+
+
+def run_console_screen(guest, result, verbose, timeout=60.0):
+    """The text console is on the display, on whichever display there is.
+
+    Not a SUITE case because the answer is in pixels: nothing typed
+    reaches the screen, and the serial log is exactly where the text
+    *is* even when the monitor shows nothing at all. So the check looks
+    at what QEMU is showing, on a machine at its boot prompt and again
+    after a desktop session has given the display back.
+    """
+    print("==> console on screen (screendump)")
+    shotdir = tempfile.mkdtemp(prefix="vnu-console-")
+    problems = []
+    try:
+        # At the prompt, before anything has taken the display.
+        shot = settled_shot(guest, os.path.join(shotdir, "boot.ppm"))
+        console_at_boot(shot, problems, "at the boot prompt")
+
+        # And after a desktop has run and quit: a driver that takes the
+        # screen and does not hand it back leaves the last frame there.
+        # Typed, not sh(): the desktop owns the terminal until Esc, so
+        # there is no prompt for sh() to wait on.
+        guest._type("gui\n")
+        time.sleep(3.0)
+        if not esc_to_shell(guest, timeout):
+            problems.append("the desktop did not give the console back")
+        else:
+            shot = settled_shot(guest, os.path.join(shotdir, "back.ppm"))
+            console_on_screen(shot, problems, "after a desktop session")
+    except (TimeoutError, RuntimeError, OSError) as exc:
+        problems.append(str(exc))
+
+    if problems:
+        keep_frames(shotdir, "console-screen")
+    shutil.rmtree(shotdir, ignore_errors=True)
+    if problems:
+        result.failed.append(("console-screen", "", problems))
+        print("FAIL %-18s %s" % ("console-screen", "; ".join(problems)))
+        return False
+    result.passed += 1
+    if verbose:
+        print("ok   %-18s" % "console-screen")
     return True
 
 
@@ -1016,35 +1086,211 @@ def diff_pixels(a, b):
                if a[k:k + 3] != b[k:k + 3])
 
 
-# The text cell height in the one text mode the kernel programs, 720x400
-# as 25 rows of 16. Only the scrolled-console comparison needs it, and
-# only to step a line at a time.
-TEXT_ROW_H = 16
+# The console is 80x25 cells of 16 pixels, the text mode QEMU renders as
+# 720x400 with a 9-pixel cell (the ninth column of a VGA text cell is
+# blank, and it is what makes the mode 720 rather than 640 wide). A
+# display too narrow for 80 such cells gets 8-pixel ones - that is what
+# the kernel draws on a 640-wide screen - so a console on a graphics
+# display is 720 wide, or 640 on a narrow one.
+TEXT_COLS, TEXT_ROWS = 80, 25
+TEXT_CELL_W, TEXT_ROW_H = 9, 16
+TEXT_W, TEXT_H = TEXT_COLS * TEXT_CELL_W, TEXT_ROWS * TEXT_ROW_H
+TEXT_CELL_W_NARROW = 8
+TEXT_W_NARROW = TEXT_COLS * TEXT_CELL_W_NARROW
+
+# Pixels brighter than this count as "something is on the screen". A
+# VGA text cell is never lit everywhere (a space is black), so this is
+# well under the lit area of a single glyph and well over a black frame.
+LIT_MIN = 24
+
+# A text console with a boot banner and a prompt on it lights a few
+# thousand pixels; a blinking cursor lights a few dozen. The floor sits
+# between the two on purpose: a screen that lost its console is black
+# (0), and anything that drew something at all passes.
+CONSOLE_LIT_MIN = 1000
+
+# A text console is mostly nothing: a few lines of text and a cursor in
+# 2000 cells. A frame that is a desktop with something on it is not, and
+# the floor below is far enough under 80% to notice either way.
+BLANK_CELLS_MIN = 0.70
 
 
-def scrolled_diff(before, after, lines=4):
+def lit_pixels(frame):
+    """How many pixels of a frame are not (near) black."""
+    data = frame[2]
+    return sum(1 for k in range(0, len(data), 3)
+               if data[k] > LIT_MIN or data[k + 1] > LIT_MIN or
+                  data[k + 2] > LIT_MIN)
+
+
+def console_cells(frame, x0=0, y0=0, cell_w=TEXT_CELL_W):
+    """The console-sized region of a frame, as 9x16 cells of lit counts.
+
+    A text mode is redrawn over a few refreshes, so two frames of the same
+    console differ in more than the cursor cell and a pixel-for-pixel
+    comparison of the two would be a flaky test. What a console has and
+    a picture of a desktop does not is its shape: text in a few lines of
+    cells, and nothing at all in the rest.
+    """
+    width, height, data = frame
+    grid_w = TEXT_COLS * cell_w
+    if x0 < 0 or y0 < 0 or x0 + grid_w > width or y0 + TEXT_H > height:
+        return None
+    cells = []
+    for row in range(TEXT_ROWS):
+        for col in range(TEXT_COLS):
+            lit = 0
+            for y in range(y0 + row * TEXT_ROW_H, y0 + row * TEXT_ROW_H + TEXT_ROW_H):
+                base = (y * width + x0 + col * cell_w) * 3
+                for k in range(base, base + cell_w * 3, 3):
+                    if (data[k] > LIT_MIN or data[k + 1] > LIT_MIN or
+                            data[k + 2] > LIT_MIN):
+                        lit += 1
+            cells.append(lit)
+    return cells
+
+
+def console_grid(frame):
+    """Where the console is in a frame, and how wide its cells are.
+
+    Two kinds of display can show one. A text mode is the console, the
+    whole frame, 720x400 with 9-pixel cells. A display with no text mode
+    of its own - a virtio-gpu - has the same grid drawn in the middle of
+    whatever graphics mode was last in use, 9-pixel cells too unless the
+    screen is too narrow for 80 of those, which is 8-pixel cells and a
+    640-wide grid. None if the frame cannot hold a console at all.
+    """
+    width, height = frame[0], frame[1]
+    if (width, height) == (TEXT_W, TEXT_H):
+        return 0, 0, TEXT_CELL_W
+    narrow = width < TEXT_W
+    cell_w = TEXT_CELL_W_NARROW if narrow else TEXT_CELL_W
+    grid_w = TEXT_W_NARROW if narrow else TEXT_W
+    if width < grid_w or height < TEXT_H:
+        return None
+    return (width - grid_w) // 2, (height - TEXT_H) // 2, cell_w
+
+
+def console_at_boot(frame, problems, where):
+    """At a prompt, before anything has taken the display, what the host
+    shows is the card's own text mode: 720x400, with the console on it.
+
+    A display that comes up as a black graphics mode instead - a driver
+    that took the scanout and never gave it back - fails here, which is
+    what the report of this bug looked like.
+    """
+    if (frame[0], frame[1]) != (TEXT_W, TEXT_H):
+        problems.append("%s: the display is %dx%d, the text mode is %dx%d "
+                        "- the console is not on the screen"
+                        % (where, frame[0], frame[1], TEXT_W, TEXT_H))
+        return
+    check_console_shape(frame, 0, 0, TEXT_CELL_W, problems, where)
+
+
+def console_on_screen(frame, problems, where):
+    """The console is on the display, and not only in the serial log.
+
+    A prompt lives in 0xB8000, and a host pointed at a virtio-gpu scanout
+    renders that nowhere: a driver that takes the screen for itself and
+    does not give it back leaves the last frame there while the serial log
+    goes on typing into a console nobody can see. So this is checked on
+    pixels.
+
+    Two kinds of display can show a console. One does a text mode, and the
+    console is the whole frame. The other has none - a virtio-gpu - and
+    draws the same 720x400 grid in the middle of whatever graphics mode was
+    last in use, which is what vgfx::present_text does when a desktop
+    session ends.
+    """
+    grid = console_grid(frame)
+    if grid is None:
+        problems.append("%s: the display is %dx%d, too small for a console"
+                        % (where, frame[0], frame[1]))
+        return
+    x0, y0, cell_w = grid
+    check_console_shape(frame, x0, y0, cell_w, problems, where)
+
+
+def check_console_shape(frame, x0, y0, cell_w, problems, where):
+    """Text is on the console region, and it is shaped like a console."""
+    cells = console_cells(frame, x0, y0, cell_w)
+    if cells is None:
+        problems.append("%s: no console in the %dx%d display"
+                        % (where, frame[0], frame[1]))
+        return
+    lit = sum(cells)
+    if lit < CONSOLE_LIT_MIN:
+        problems.append("%s: a console with %d lit pixels, expected more "
+                        "than %d - the console is on the screen and nobody "
+                        "can read it"
+                        % (where, lit, CONSOLE_LIT_MIN))
+    blank = sum(1 for c in cells if not c) / float(len(cells))
+    if blank < BLANK_CELLS_MIN:
+        problems.append("%s: %.0f%% of the console cells are empty, expected "
+                        "at least %.0f%% - what is on the screen is not a "
+                        "text console" % (where, blank * 100.0,
+                                          BLANK_CELLS_MIN * 100.0))
+
+
+def console_mask(frame):
+    """The console grid of a frame as lit pixels, on 8-pixel cells.
+
+    A 9-pixel cell's ninth column is blank, so a grid of 9-pixel cells
+    and one of 8-pixel cells are the same console at two sizes. Dropping
+    that column puts every console on 8-pixel cells, which is what lets
+    frames from displays in different modes be compared at all.
+
+    A text mode redraws its cells over a few refreshes and a console drawn
+    as pixels rounds the DAC to 8-bit channels differently (168 against
+    170 for the same 6-bit gray), so what two frames of the same console
+    have in common is the pattern of what is lit, not the bytes.
+    """
+    grid = console_grid(frame)
+    if grid is None:
+        return None
+    x0, y0, cell_w = grid
+    width, data = frame[0], frame[2]
+    out = bytearray()
+    for y in range(y0, y0 + TEXT_H):
+        base = (y * width + x0) * 3
+        for col in range(TEXT_COLS):
+            cell = base + col * cell_w * 3
+            for k in range(cell, cell + 8 * 3, 3):
+                out.append(1 if (data[k] > LIT_MIN or data[k + 1] > LIT_MIN or
+                                 data[k + 2] > LIT_MIN) else 0)
+    return bytes(out)
+
+
+def scrolled_diff(before, after):
     """How much a text console changed, allowing for what scrolled.
 
     The console frames a desktop session is bracketed by are not taken at
     the same point in the same scrollback: between them the harness types
-    the command that starts the desktop, and a command's echo is a line,
-    so the console has legitimately scrolled by then. A full screen of
-    text shifted one line looks like a wholesale change even though every
-    glyph came back, so compare the frames at a few line offsets and take
-    the smallest difference - which is what says whether the console came
-    back the way it was. Anything actually broken (a garbled font, the
-    desktop still up) differs at every offset.
+    the commands that start and stop the desktop, and every command's echo
+    is a line, so the console has legitimately scrolled by then - by more
+    than a line or two when a lot has been typed since the last clear. A
+    full screen of text shifted even one line looks like a wholesale
+    change even though every glyph came back, so the frames are compared
+    at every line offset and the smallest difference is what says whether
+    the console came back the way it was. Anything actually broken (a
+    garbled font, the desktop still up) matches at no offset at all.
+
+    Only the console is compared, and only for what is lit in it: a
+    display with no text mode shows the same grid drawn into the middle of
+    a graphics frame, and the two spellings of the same gray are not the
+    same bytes. None if either frame has no console in it to compare.
     """
-    if (before[0], before[1]) != (after[0], after[1]):
-        return diff_pixels(after[2], before[2])
-    width, height = before[0], before[1]
+    a = console_mask(after)
+    b = console_mask(before)
+    if a is None or b is None:
+        return None
+    width = TEXT_COLS * 8
     best = None
-    for step in range(0, lines + 1):
+    for step in range(0, TEXT_ROWS):
         top = step * TEXT_ROW_H
-        if top >= height:
-            break
-        span = (height - top) * width * 3
-        diff = diff_pixels(before[2][top * width * 3:], after[2][:span])
+        span = (TEXT_ROWS - step) * width * TEXT_ROW_H
+        diff = sum(1 for x, y in zip(b[top * width * TEXT_ROW_H:], a[:span])
+                   if x != y)
         if best is None or diff < best:
             best = diff
     return best
@@ -1243,6 +1489,8 @@ def main():
     if args.list:
         for name, command, _, _ in SUITE:
             print("%-18s %s" % (name, command))
+        print("%-18s %s" % ("console-screen",
+                            "text prompt on the display (screendump)"))
         print("%-18s %s" % ("man-pager", "man vcc (keys, then q)"))
         print("%-18s %s" % ("prefs-wallpaper",
                             "/apps/prefs/bin (arrows, enter, esc)"))
@@ -1265,8 +1513,8 @@ def main():
 
     # The interactive checks are functions, not SUITE rows, so a filter
     # that names one of them selects no shell case and still runs.
-    interactive = ("man-pager", "prefs-wallpaper", "gfx-surface",
-                   "gfx-resolution")
+    interactive = ("console-screen", "man-pager", "prefs-wallpaper",
+                   "gfx-surface", "gfx-resolution")
     cases = SUITE
     if args.only:
         cases = [c for c in SUITE
@@ -1282,6 +1530,10 @@ def main():
         if not args.install_only and not args.wizard_only:
             with Guest(iso=args.iso, gpu=args.gpu, log=args.log) as guest:
                 run_suite(guest, cases, result, args.verbose, args.timeout)
+                if not args.only or any(sel in "console-screen"
+                                        for sel in args.only):
+                    run_console_screen(guest, result, args.verbose,
+                                       args.timeout)
                 if not args.only or any(sel in "man-pager"
                                         for sel in args.only):
                     run_man_pager(guest, result, args.verbose, args.timeout)
