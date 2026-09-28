@@ -405,6 +405,21 @@ const Mode* modes()
     return g_modes;
 }
 
+uint32_t bpp()
+{
+    /* 8: the backbuffer the desktop composites into is one byte per
+     * pixel on both paths. The VBE one reaches the card as is; the
+     * virtio one is expanded through the DAC into a 32bpp scanout by
+     * present(), which is a display detail and not the format a program
+     * draws in. */
+    return 8;
+}
+
+uint32_t driver()
+{
+    return virtio_gpu::active() ? DRIVER_VIRTIO_GPU : DRIVER_VGA;
+}
+
 int width()
 {
     return g_width;

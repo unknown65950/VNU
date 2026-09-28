@@ -22,6 +22,8 @@
 #include <vlibc/fcntl.h>
 #include <vlibc/time.h>
 #include <vlibc/sys/utsname.h>
+#include <vlibc/sys/syscall.h>
+#include <vnu/abi.h>
 
 /* vcc's own version number, shared with the compiler binary. */
 #include "../vcc/vcc_version.h"
@@ -348,19 +350,24 @@ static int cmd_fetch(void)
         w(")\n");
     }
 
-    if (read_proc("/proc/gfx", proc, sizeof(proc)) > 0) {
-        char drv[32];
-        char res[32];
-        set_str(drv, sizeof(drv), "?");
-        set_str(res, sizeof(res), "?");
-        field(proc, "driver", drv, sizeof(drv));
-        field(proc, "resolution", res, sizeof(res));
-        label("Graphics");
-        w(":  ");
-        w(drv);
-        w(" ");
-        w(res);
-        w("\n");
+    /* The display is asked for, not parsed: gfx_getinfo(2) answers with
+     * the mode in use, its depth and the driver that owns it, in one
+     * call, so this line keeps working when the depth stops being 8. */
+    {
+        struct vnu_gfx_info gfx;
+        if (syscall(SYS_gfx_getinfo, (unsigned long)&gfx) == 0) {
+            label("Graphics");
+            w(":  ");
+            w(gfx.driver == VNU_GFX_DRIVER_VIRTIO_GPU ? "virtio-gpu"
+                                                      : "vga");
+            w(" ");
+            put_uint(gfx.width);
+            w("x");
+            put_uint(gfx.height);
+            w(" ");
+            put_uint(gfx.bpp);
+            w("bpp\n");
+        }
     }
 
     row("VCC", VCC_VERSION);

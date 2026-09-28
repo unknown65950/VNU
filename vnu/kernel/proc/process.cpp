@@ -642,7 +642,7 @@ int sys_execve(Registers* trap, const char* path, char* const* argv)
 
 extern "C" void vnu_enter_user(uint32_t entry, uint32_t user_esp);
 
-static int enter_program(const char* path, int ppid)
+static int enter_program(const char* path)
 {
     const EmbeddedProg* prog = find_embedded(path);
     if (!prog)
@@ -1053,7 +1053,7 @@ const uint8_t* find_embedded_data(const char* path, uint32_t& out_size)
 
 int run_program(const char* path)
 {
-    return enter_program(path, 0);
+    return enter_program(path);
 }
 
 /* How many 4 KiB pages does an ELF payload span in the app region,

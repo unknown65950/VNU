@@ -632,9 +632,10 @@ DESCRIPTION\n\
     the session runs in, the display, and how much space each part of\n\
     the system image takes.\n\
 \n\
-    Every value is read from the running system (uname(2), the /proc\n\
-    files listed below, and the size accounting in the kernel, so the\n\
-    output describes the machine you are on, not a built-in table.\n\
+    Every value is read from the running system (uname(2), gfx_getinfo(2)\n\
+    for the display, the /proc files listed below, and the size\n\
+    accounting in the kernel, so the output describes the machine you\n\
+    are on, not a built-in table.\n\
     Nothing is written to disk and no other process is disturbed, so\n\
     vnu is safe to run at any time, including from scripts.\n\
 \n\
@@ -642,8 +643,9 @@ DESCRIPTION\n\
 \n\
 COMMANDS\n\
     fetch     overview of the running system: OS and kernel version,\n\
-              uptime, host name, memory, shell, file system, display,\n\
-              compiler version and build date\n\
+              uptime, host name, memory, shell, file system, display\n\
+              with its depth and driver, compiler version and build\n\
+              date\n\
     version   version block: OS, kernel, compiler, ABI version and\n\
               build date\n\
     size      image size per component (kernel, userspace, libraries,\n\
@@ -682,7 +684,7 @@ VNU INSTALL\n\
 \n\
 EXAMPLES\n\
     vnu\n\
-    vnu fetch\n\
+    vnu fetch      the Graphics line: driver, WxH and depth\n\
     vnu version\n\
     vnu size\n\
     vnu install           the wizard\n\
@@ -692,7 +694,6 @@ FILES\n\
     /proc/version  OS, kernel and build versions\n\
     /proc/meminfo  total and free memory\n\
     /proc/boot     root file system, install state, session shell\n\
-    /proc/gfx      display driver and mode\n\
     /proc/images   per-component image sizes\n\
     /etc/hostname  the name of this machine\n\
 \n\

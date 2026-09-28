@@ -42,6 +42,11 @@ struct Mode {
     int height;
 };
 
+/* vnu_gfx_info::driver in vnu/abi.h, spelled here so the kernel headers
+ * do not have to include the userspace ABI to name a driver. */
+constexpr uint32_t DRIVER_VGA = 0;
+constexpr uint32_t DRIVER_VIRTIO_GPU = 1;
+
 constexpr int MODE_COUNT = 4;
 constexpr Mode DEFAULT_MODE = {1024, 768};
 constexpr Mode MAX_MODE = {1280, 1024};
@@ -53,6 +58,18 @@ const Mode* modes();
 // width() x height() is the mode actually programmed right now.
 int width();
 int height();
+
+// Bits per pixel of the pixel data a program handles. 8 on both paths
+// today: the shared canvas is one byte per pixel, so the desktop
+// composites palette indices. virtio-gpu already presents through a
+// 32bpp B8G8R8X8 scanout, but present() expands the 8bpp backbuffer
+// through the DAC on the way there, so nothing a program draws is 32bpp
+// yet and answering 32 would promise a format the canvas does not
+// have. This becomes 32 once the composited format follows the scanout.
+uint32_t bpp();
+
+// Which driver owns the display: DRIVER_VGA or DRIVER_VIRTIO_GPU.
+uint32_t driver();
 
 // One of modes(), or DEFAULT_MODE before anything changed it.
 bool mode_supported(int w, int h);

@@ -30,6 +30,8 @@
 #define VGFX_W 480
 #define VGFX_H 340
 
+#include <vnu/abi.h> /* struct vnu_gfx_info, VNU_GFX_DRIVER_* */
+
 /* Palette indices (VGA layout: 0..7 dark-slot names, 8..15 bright-slot
  * names). The actual RGB values are not fixed: the kernel programs these
  * 16 DAC entries to the Catppuccin Mocha palette on entering graphics
@@ -114,6 +116,15 @@ int  vnu_dnd_declare(const char* path);
  * or /etc/vnuconfig/gfx.conf on the next boot - so a program can ask
  * where it stands instead of assuming the compile-time default. */
 void vgfx_get_resolution(int* w, int* h);
+
+/* The whole answer in one read: the mode in use, its depth in bits per
+ * pixel and the driver that owns the display (VNU_GFX_DRIVER_VGA or
+ * VNU_GFX_DRIVER_VIRTIO_GPU). Answers the same way whether the mode was
+ * reached through vgfx_set_resolution(), the desktop's F12 key or
+ * /etc/vnuconfig/gfx.conf, so a program that needs the depth does not
+ * have to parse /proc/gfx to get it. Returns 0, or -1 with `info`
+ * untouched if the kernel is too old to answer. */
+int  vgfx_get_info(struct vnu_gfx_info* info);
 
 /* Put the display into w x h. Only the sizes this build supports are
  * accepted (the driver's ladder: 640x480, 800x600, 1024x768, 1280x1024);

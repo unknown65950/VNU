@@ -1,4 +1,10 @@
 #pragma once
+
+/* uint32_t, for the structs below. Freestanding clang and the vlibc
+ * build both have it; the kernel's own headers include it the same way
+ * (see vnu/pmm.h). */
+#include <stdint.h>
+
 #define VNU_ABI_VERSION 1
 
 #define VNU_SYS_read      0
@@ -65,6 +71,21 @@
 #define VNU_SYS_gfx_surface 61
 #define VNU_SYS_gfx_setmode 62
 #define VNU_SYS_gfx_getmode 63
+#define VNU_SYS_gfx_getinfo 64
+
+/* Which display driver is in use, as vnu_gfx_info::driver. */
+#define VNU_GFX_DRIVER_VGA        0 /* Bochs VBE, 8bpp indexed */
+#define VNU_GFX_DRIVER_VIRTIO_GPU 1 /* virtio-gpu, 32bpp B8G8R8X8 scanout */
+
+/* Out-parameter of VNU_SYS_gfx_getinfo: what the display is, in one
+ * read. Plain uint32 fields, so it is the same struct on both sides of
+ * the boundary with no packing to get wrong. */
+struct vnu_gfx_info {
+    uint32_t width;  /* pixels across the mode in use */
+    uint32_t height;
+    uint32_t bpp;    /* bits per pixel a program handles: 8 today */
+    uint32_t driver; /* VNU_GFX_DRIVER_* */
+};
 
 #define VNU_EPERM 1
 #define VNU_ENOENT 2

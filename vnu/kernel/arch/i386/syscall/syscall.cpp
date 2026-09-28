@@ -532,6 +532,25 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
             return 0;
         }
 
+    case VNU_SYS_gfx_getinfo:
+        /* Everything about the display in one struct (ebx =
+         * struct vnu_gfx_info*): the mode in use, its depth and the
+         * driver that owns it. This is a syscall of its own rather than
+         * a third out-pointer on gfx_getmode because that one takes
+         * two pointers and a caller written against it leaves edx
+         * holding whatever it happened to hold - the kernel would
+         * write through it. See ABI.md. */
+        {
+            if (tf->ebx == 0)
+                return static_cast<std::uint32_t>(-VNU_EFAULT);
+            auto* info = reinterpret_cast<vnu_gfx_info*>(tf->ebx);
+            info->width = static_cast<std::uint32_t>(vnu::vgfx::width());
+            info->height = static_cast<std::uint32_t>(vnu::vgfx::height());
+            info->bpp = vnu::vgfx::bpp();
+            info->driver = vnu::vgfx::driver();
+            return 0;
+        }
+
     case VNU_SYS_ping:
         /* RTT to an IPv4 address (ebx, big-endian uint32); ecx is the
          * timeout in ms. Returns RTT ms or -VNU_EHOSTUNREACH/-VNU_ETIMEDOUT. */

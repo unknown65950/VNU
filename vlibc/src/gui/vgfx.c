@@ -183,6 +183,16 @@ void vgfx_get_resolution(int* w, int* h)
     (void)syscall(VNU_SYS_gfx_getmode, (long)w, (long)h);
 }
 
+int vgfx_get_info(struct vnu_gfx_info* info)
+{
+    /* The kernel fills the struct in place. Unlike vgfx_get_resolution()
+     * there is nothing to leave out: a program that wants the depth
+     * wants all of it, and one call is one call. */
+    if (!info)
+        return -1;
+    return (int)syscall(VNU_SYS_gfx_getinfo, (long)info) == 0 ? 0 : -1;
+}
+
 int vgfx_set_resolution(int w, int h)
 {
     return (int)syscall(VNU_SYS_gfx_setmode, (long)w, (long)h);

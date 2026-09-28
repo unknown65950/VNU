@@ -324,7 +324,7 @@ SUITE = [
      [r"VNU system information", r"^OS +: +VNU 0\.5 \(vibe\)$",
       r"^Kernel +: +0\.5\.0$", r"^Host +: +vnu$", r"^Uptime +: +\d+ s$",
       r"^Shell +: +vash$",
-      r"^Graphics +: +\w[\w-]* \d+x\d+$", r"^VCC +: +0\.5$",
+      r"^Graphics +: +\w[\w-]* \d+x\d+ \d+bpp$", r"^VCC +: +0\.5$",
       r"^Build +: +\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"], []),
     ("vnu-version", "vnu version",
      [r"VNU version information", r"^OS +: +VNU 0\.5$",
@@ -845,6 +845,23 @@ def run_gfx_resolution(guest, result, verbose, timeout=60.0):
               [r"^resolution\t%dx%d$" % MODE_TOP,
                r"^modes\t640x480,800x600,1024x768,1280x1024$"], [], result,
               verbose)
+
+        # The same display asked for through the syscall instead of
+        # through /proc: `vnu fetch` prints what gfx_getinfo(2) answered.
+        # The mode is not the compiled-in default, so this is not a
+        # tautology - a struct still carrying the default, or a driver
+        # that disagreed with the text file, fails here. When the ladder
+        # grows a second depth the two must be checked together again.
+        driver = re.search(r"^driver\t(\S+)$", output, re.MULTILINE)
+        depth = re.search(r"^bpp\t(\d+)$", output, re.MULTILINE)
+        fetch, _ = guest.sh("vnu fetch", timeout)
+        if not driver or not depth:
+            problems.append("/proc/gfx has no driver or bpp line: %r" % output)
+        else:
+            check("mode-info", fetch,
+                  [r"^Graphics +: +%s %dx%d %sbpp$"
+                   % (driver.group(1), MODE_TOP[0], MODE_TOP[1],
+                      depth.group(1))], [], result, verbose)
         output, _ = guest.sh("cat /etc/vnuconfig/gfx.conf", timeout)
         check("mode-config", output, [r"^mode %dx%d$" % MODE_TOP], [],
               result, verbose)

@@ -39,6 +39,7 @@
 #define SYS_gfx_surface VNU_SYS_gfx_surface
 #define SYS_gfx_setmode VNU_SYS_gfx_setmode
 #define SYS_gfx_getmode VNU_SYS_gfx_getmode
+#define SYS_gfx_getinfo VNU_SYS_gfx_getinfo
 
 #ifdef __cplusplus
 extern "C" {

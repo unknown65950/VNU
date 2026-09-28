@@ -41,4 +41,12 @@ SECTIONS
         *(.bss)
         __bss_end = .;
     }
+
+    /* The PMM pool starts where .bss ends (mm/pmm.cpp reads __bss_end),
+     * so a .bss that grew past the pool's top would leave the kernel with
+     * no memory to allocate at all: every frame request fails, and the
+     * failure is at runtime, on a machine, far from the cause. Fail the
+     * link instead, here, where the number that grew is visible. */
+    ASSERT(__bss_end < 0x01F70000,
+           "kernel .bss overlaps the PMM pool: move POOL_END up or shrink .bss")
 }

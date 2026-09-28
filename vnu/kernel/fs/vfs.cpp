@@ -563,7 +563,9 @@ void regen_synth(Node& n)
         a.num(static_cast<uint32_t>(vnu::vgfx::width()));
         a.str("x");
         a.num(static_cast<uint32_t>(vnu::vgfx::height()));
-        a.str("\nbpp\t8\n");
+        a.str("\nbpp\t");
+        a.num(vnu::vgfx::bpp());
+        a.str("\n");
         /* The modes this build can switch between, so a script can see
          * the whole ladder and not just where it stands on it. */
         a.str("modes\t");

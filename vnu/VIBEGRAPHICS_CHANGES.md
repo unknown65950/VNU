@@ -1043,7 +1043,7 @@ return null outside a decode.
 
 ### Verified in QEMU
 
-- `make test` 84/84, `make test-gpu` 84/84, `make test-install` 9/9.
+- `make test` 85/85, `make test-gpu` 85/85, `make test-install` 9/9.
 - `gfx-resolution` cycles the whole ladder (F12) on both displays with
   the desktop drawing a wallpaper throughout, and `gfx-surface` still
   sees a window's pixels on the screen - both are the checks that would
@@ -1059,6 +1059,47 @@ return null outside a decode.
   (the Expose-style change named in `vga_gfx.h`).
 - The pool base is now read at runtime, so a kernel whose `.bss` grew
   past `POOL_END` would come up with an empty pool and a machine that
-  fails every allocation. That is a loud failure rather than a
-  corruption, which is the point, but it is a build-time mistake that
-  nothing checks yet.
+  fails every allocation. The link checks it now
+  (`vnu/kernel/linker.ld`: `ASSERT(__bss_end < 0x01F70000, ...)`), so
+  the mistake is a link error next to the `.bss` that caused it.
+
+### Thirteenth drop: a program can ask what the display is
+
+`gfx_getmode` (63) answered two out-pointers: the width and the height
+of the mode in use. The depth of that mode had nowhere to go. It could
+have been a third pointer, and that is exactly the shape that must not
+be added to an existing syscall: vlibc's `syscall()` is variadic, so a
+caller that passes two arguments leaves whatever it happened to have in
+`edx`, and a kernel that wrote a `uint32` through `edx` would be writing
+to a stack address picked out of a register that nobody meant. So the
+answer is a syscall of its own:
+
+    VNU_SYS_gfx_getinfo (64)   ebx = struct vnu_gfx_info*
+
+    struct vnu_gfx_info {
+        uint32_t width;   /* pixels */
+        uint32_t height;
+        uint32_t bpp;     /* bits per pixel a program handles */
+        uint32_t driver;  /* VNU_GFX_DRIVER_VGA | _VIRTIO_GPU */
+    };
+
+The struct lives in `vnu/abi.h` on both sides of the boundary, so the
+kernel and vlibc cannot disagree about it - the first shared struct in
+the ABI that is defined once. `vgfx_get_info()` wraps it for vgfx apps,
+and `vnu fetch` prints the result instead of parsing `/proc/gfx`:
+
+    Graphics :  vga 1024x768 8bpp        (no virtio display)
+    Graphics :  virtio-gpu 1024x768 8bpp (with one)
+
+`/proc/gfx` reports its `bpp` from the same `vgfx::bpp()` the syscall
+does, so the text file and the syscall cannot tell a program two
+different stories - and the suite now checks that, at a mode that is
+not the default, where a stale struct would show up.
+
+`bpp` is 8 on both paths and that is honest rather than lazy: a window's
+canvas is 480x340 one byte per pixel, so the desktop composites palette
+indices either way. virtio-gpu already presents through a 32bpp
+B8G8R8X8 scanout, but `present()` expands the 8bpp backbuffer through
+the DAC on the way there. Reporting 32 would promise a pixel format no
+program can draw into yet; the field becomes 32 when the composited
+format follows the scanout (Milestone B).

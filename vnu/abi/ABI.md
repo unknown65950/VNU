@@ -76,6 +76,7 @@ must never be renumbered.
 | 61 | gfx_surface |
 | 62 | gfx_setmode |
 | 63 | gfx_getmode |
+| 64 | gfx_getinfo |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
@@ -167,6 +168,26 @@ with `-1` leaves a field unchanged; only root may chown.
   null, as with `tty_size`. Both drivers answer the same, whether the
   mode was reached through the syscall, the F12 key or the config file,
   so a program can ask where it stands without parsing `/proc/gfx`.
+  Depth is deliberately *not* a third pointer here: a program compiled
+  against this shape passes two arguments, and whatever the vlibc
+  `syscall()` stub happens to leave in `edx` would become a third
+  pointer the kernel writes through. `gfx_getinfo` is the way to ask for
+  the whole answer.
+- `gfx_getinfo(ebx=struct vnu_gfx_info*)` — fills in one struct with
+  everything about the display in a single read: `width` and `height`
+  (pixels), `bpp` (bits per pixel of the pixel data a program handles)
+  and `driver` (`VNU_GFX_DRIVER_VGA` for the Bochs VBE path,
+  `VNU_GFX_DRIVER_VIRTIO_GPU` for virtio-gpu). Same struct in
+  `vnu/kernel/include/vnu/abi.h` and `vlibc/include/vnu/abi.h`, plain
+  `uint32_t` fields, so there is no packing to disagree about. Returns 0,
+  or `-VNU_EFAULT` if `ebx` is null. vlibc wraps it as
+  `vgfx_get_info()`; `vnu fetch` prints the result as its `Graphics` line.
+  `bpp` is 8 on both paths today, and that is not a typo: the canvas
+  windows draw into is one byte per pixel, so the desktop composites
+  palette indices either way, and virtio-gpu's 32bpp B8G8R8X8 scanout
+  receives those indices expanded through the DAC by `present()`. It
+  becomes 32 where a program can actually use it — when the composited
+  format follows the scanout.
 - `ping(ebx, ecx)` — `ebx` is the target IPv4 address as a
   big-endian uint32 (10.0.2.2 = `0x0A000202`), `ecx` the timeout in
   milliseconds (kernel clamps to 10..2000).
