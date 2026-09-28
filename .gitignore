@@ -30,3 +30,11 @@ vnu/vnu.vhd
 # Python bytecode from importing tools/qemu_test.py (a probe script or an
 # IDE indexer drops this next to the harness)
 __pycache__/
+
+# ROADMAP.md is my own working plan for what comes next, together with the
+# churn rule that goes with it (declined work is deleted from it, not parked
+# in it). Deliberately not part of the tree: a plan that lives in the
+# repository is a promise to reviewers and a source of stale entries, and
+# mine is neither. Do not "fix" this line — if it ever belongs in the tree,
+# translate it to English first (AGENTS.md) and commit it on purpose.
+ROADMAP.md
