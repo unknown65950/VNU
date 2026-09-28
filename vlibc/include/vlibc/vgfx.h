@@ -1,8 +1,9 @@
 /*
  * vgfx — pixel framebuffer API for VNU gfx-windowed apps.
  *
- * The app renders into a 480x340 pixel buffer and flushes it to
- * the kernel's gfx surface (fd 3).  Mouse clicks over the client
+ * The app draws straight into its window's canvas: 480x340 bytes of
+ * memory the kernel shares with it (gfx_surface(2)), which the
+ * compositor blits on its next pass.  Mouse clicks over the client
  * area arrive as an escape stream on stdin (fd 0) which vgfx_poll
  * parses into easy-to-use event structs.
  *
@@ -28,7 +29,6 @@
  * the GUI displays this canvas 1:1. */
 #define VGFX_W 480
 #define VGFX_H 340
-#define VGFX_FD 3
 
 /* Palette indices (VGA layout: 0..7 dark-slot names, 8..15 bright-slot
  * names). The actual RGB values are not fixed: the kernel programs these
@@ -63,7 +63,10 @@ typedef struct {
     int type;     /* VGFX_EV_* */
     int x, y;    /* valid for PRESS / RELEASE */
     int button;  /* 1 = left press, 2 = release, 4 = drag cancelled */
-    char key;    /* valid for KEY */
+    /* Unsigned on purpose: the kernel normalises the PS/2 scancodes for
+     * the arrows into 0x81..0x87 (see keys.h), and a signed char would
+     * make every comparison against them false. */
+    unsigned char key; /* valid for KEY */
     const char* drop; /* valid for DROP: full VFS path delivered onto us */
 } vgfx_event_t;
 
@@ -87,7 +90,9 @@ void vgfx_char8(int x, int y, char ch, int color);
 void vgfx_str8(int x, int y, const char* s, int color);
 int  vgfx_text_width8(const char* s);
 
-/* Flush the in-process framebuffer to the kernel's gfx surface. */
+/* Ends a frame. Nothing has to be pushed - the pixels are already in
+ * the shared canvas the compositor reads - so this only exists because
+ * it reads well at the end of a draw call. */
 void vgfx_flush(void);
 
 /* Blocks until a keyboard or mouse event is ready, then fills `ev`
@@ -103,20 +108,6 @@ int  vgfx_poll(vgfx_event_t* ev);
  * calls it with the pressed entry on every PRESS over a file). Safe to
  * call from any task; console tasks are a no-op. */
 int  vnu_dnd_declare(const char* path);
-
-/* The display mode, in pixels. Both drivers answer the same, whether the
- * mode was reached through vgfx_set_resolution(), the desktop's F12 key
- * or /etc/vnuconfig/gfx.conf on the next boot - so a program can ask
- * where it stands instead of assuming the compile-time default. */
-void vgfx_get_resolution(int* w, int* h);
-
-/* Put the display into w x h. Only the sizes this build supports are
- * accepted (the driver's ladder: 640x480, 800x600, 1024x768, 1280x1024);
- * anything else returns 0. Windows are moved back inside the new screen
- * rather than closed, the wallpaper is re-stretched for it, and the
- * choice is recorded in /etc/vnuconfig/gfx.conf. Either pointer of
- * vgfx_get_resolution() may be null. */
-int  vgfx_set_resolution(int w, int h);
 
 #ifdef __cplusplus
 }

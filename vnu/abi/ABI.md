@@ -72,7 +72,6 @@ must never be renumbered.
 | 57 | dnd_declare |
 | 58 | sleep |
 | 59 | tty_size |
-
 | 60 | wallpaper |
 | 61 | gfx_surface |
 | 62 | gfx_setmode |
@@ -120,6 +119,19 @@ with `-1` leaves a field unchanged; only root may chown.
   is a fixed 80x25 today, so a full-screen program (the `man` pager) asks
   for the numbers through this call instead of hardcoding them: when the
   mode changes, only the kernel changes.
+- `gfx_surface()` — returns where a windowed task draws: the address of
+  its 480x340 pixel canvas, one byte per pixel, palette indices 0..15.
+  The pages are *shared*. They are mapped into the calling task at
+  0x500000 (on the first call; inside the app window's 4 MiB page, so no
+  extra page table) and into the kernel through their physical address
+  (the PMM pool is identity-mapped in every page directory), so the app
+  writes pixels and the compositor blits those same bytes on its next
+  pass — no copy, no syscall per frame. Asking is also what puts the
+  window into pixel mode (it starts as an 80x24 text grid), which is
+  how the GUI knows to size the window to the canvas. Returns 0 when
+  the caller has no window — a plain process drawing with vgfx gets a
+  private buffer it can draw into but that is never displayed. There
+  is no unmap: the frames go back with the task's address space.
 - `gfx_setmode(ebx=w, ecx=h)` — put the display into `w` x `h`. Only the
   sizes in the ladder are accepted; the kernel's list is `640x480`,
   `800x600`, `1024x768` (the default) and `1280x1024`, and `/proc/gfx`
@@ -245,7 +257,12 @@ with `-1` leaves a field unchanged; only root may chown.
 
 Not applicable — numbers are never reused; old gaps stay reserved.
 
-### Future (append-only, start at 59)
+One *behaviour* is gone, not a number: a windowed task used to push
+pixels with `write(3, ...)` (repositioned by `lseek(3, ...)`) and the
+kernel copied them into the window's buffer. `gfx_surface` (61) replaced
+it; fd 3 is an ordinary descriptor now, as is every fd from 3 up.
+
+### Future (append-only, start at 64)
 
 Unsupported calls return `-VNU_ENOSYS`.
 

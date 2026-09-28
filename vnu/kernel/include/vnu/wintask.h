@@ -32,10 +32,10 @@ using TaskHandle = int;
 constexpr TaskHandle NO_TASK = -1;
 
 /* Graphics window size in pixels (the window's client area). A windowed
- * task can flip its console into a "gfx" surface by writing pixels to
- * fd 3 (see task_gfx_write): the GUI then renders this buffer 1:1
- * instead of the character grid, and mouse clicks over the client area
- * get delivered to the app as escape-sequence events on stdin.
+ * task can flip its console into a "gfx" surface by asking for it
+ * (task_gfx_surface): the GUI then renders that buffer 1:1 instead of
+ * the character grid, and mouse clicks over the client area get
+ * delivered to the app as escape-sequence events on stdin.
  *
  * The canvas is a native 8x16 two-column pitch: 480x340 = 60 cols x 21
  * rows of the VGA text face, so a gfx app's text renders at the same
@@ -43,6 +43,19 @@ constexpr TaskHandle NO_TASK = -1;
  * window's client area, so a gfx window behaves like any other one. */
 constexpr int GFX_W = 480;
 constexpr int GFX_H = 340;
+
+/* Where the shared surface sits in a windowed task's address space, and
+ * how many frames it takes. It is *shared*: the same physical pages are
+ * mapped here in the task and identity-mapped in every page directory
+ * (they come from the PMM pool, 17..30.75 MiB), so the app writes pixels
+ * at GFX_SURFACE_VA while the compositor reads the very same RAM through
+ * the physical address. No copy, no syscall per frame.
+ *
+ * 0x500000 sits in the same 4 MiB window as the app image (0x400000),
+ * so the task needs no extra private page table for it, and clear of
+ * both the image and the per-task heap (0x700000). */
+constexpr uint32_t GFX_SURFACE_VA = 0x00500000;
+constexpr uint32_t GFX_SURFACE_PAGES = (static_cast<uint32_t>(GFX_W) * GFX_H + 0xFFFu) / 0x1000u;
 
 /* VNU mouse protocol (delivered over the stdin escape stream, one event
  * per message so a partially-queued press can't corrupt the next):
@@ -74,11 +87,12 @@ struct Console {
     int in_head;
     int in_tail;
     char title[TITLE_CAP];
-    /* Gfx mode state: writing to fd 3 flips this task to a pixel
-     * framebuffer window. `gfx_cursor` is the current fill offset for
-     * subsequent fd 3 writes (lseek(3) positions it, like /dev/fb). */
-    uint8_t pixel[GFX_W * GFX_H];
-    uint32_t gfx_cursor;
+    /* Gfx mode state: asking for the surface (task_gfx_surface) flips
+     * this task to a pixel framebuffer window. `pixel` is then the
+     * identity-mapped view of the pages the app writes at
+     * GFX_SURFACE_VA - the compositor blits straight out of them, and
+     * stays null for a text window, which never asks. */
+    uint8_t* pixel;
     bool gfx;
 };
 
@@ -156,11 +170,14 @@ void feed_mouse(TaskHandle h, int button, int px, int py);
 // to do with it (picview loads the file; files refreshes its listing).
 void feed_drop(TaskHandle h, const char* path);
 
-// --- Gfx surface for fd 3 write/lseek (pixels → pixel buffer) ---
-// (operate on the currently executing task, see current_is_task())
+// --- Gfx surface (operates on the currently executing task, see
+// current_is_task()) ---
 
-uint32_t task_gfx_write(const char* buf, uint32_t n);
-int task_gfx_seek(int32_t offset, int whence);
+/* Gfx surface: maps the shared pages into the calling task (first call
+ * only) and returns where to draw, i.e. GFX_SURFACE_VA. Asking is also
+ * what puts the window into pixel mode. Returns 0 when the caller is
+ * not a windowed task, or when the pages could not be mapped. */
+uint32_t task_gfx_surface();
 
 // Per-task heap break. The task's heap is pre-mapped (BRK_MIN..BRK_MAX),
 // so this is just bookkeeping for vlibc's malloc(). Called from the

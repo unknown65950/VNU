@@ -26,9 +26,9 @@ Fd table[MAX_FD];
 
 int alloc_fd()
 {
-    /* fd 3 is the windowed-task gfx surface; keep it out of the real
-     * wrapper. */
-    for (int i = 4; i < MAX_FD; ++i)
+    /* Past stdio, like every other descriptor: a windowed app's canvas
+     * is shared memory, not a pipe. */
+    for (int i = 3; i < MAX_FD; ++i)
         if (!table[i].used)
             return i;
     return -1;

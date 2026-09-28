@@ -65,13 +65,6 @@ DevKind fd_dev_kind(int fd);
  * always reach the screen and `> file` could never work. */
 bool fd_is_redirected(int fd);
 
-/* True if `fd` is currently open as a real VFS file (not the default
- * stdio meaning). The syscall gfx-surface intercept must not steal a
- * descriptor that a windowed task has genuinely opened: vash's history
- * file lands on fd 3, and blind interception would flip that task's
- * window into gfx mode and paint garbage. */
-bool fd_is_open(int fd);
-
 /* Put fd 0/1/2 back to their default console meaning. Called when a
  * fresh shell session starts, since the VFS fd table is global to the
  * kernel — otherwise one command's redirection would silently persist

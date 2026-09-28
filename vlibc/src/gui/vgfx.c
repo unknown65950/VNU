@@ -18,19 +18,41 @@
 #include <vlibc/sys/syscall.h>
 #include <vnu/abi.h>
 
-static unsigned char fb[VGFX_W * VGFX_H];
+/* The canvas this program draws into.
+ *
+ * In a window it is *shared memory*: gfx_surface(2) maps one set of
+ * pages into the app at VGFX_SURFACE_VA and into the kernel, so the
+ * pixels are written once, in place, and the compositor blits those
+ * very bytes on its next pass. Nothing is copied and no frame ever
+ * crosses a syscall.
+ *
+ * fb_private is only for a program drawing with no window at all (vgfx
+ * called from a console, or a task whose surface could not be mapped):
+ * it has to draw into something, and the result simply is not shown. */
+static unsigned char* fb;
+static unsigned char fb_private[VGFX_W * VGFX_H];
+
+static unsigned char* pixels(void)
+{
+    if (!fb) {
+        long va = syscall(SYS_gfx_surface, 0UL);
+        fb = va ? (unsigned char*)va : fb_private;
+    }
+    return fb;
+}
 
 void vgfx_clear(int color)
 {
+    unsigned char* p = pixels();
     for (int i = 0; i < VGFX_W * VGFX_H; ++i)
-        fb[i] = (unsigned char)color;
+        p[i] = (unsigned char)color;
 }
 
 void vgfx_put_pixel(int x, int y, int color)
 {
     if (x < 0 || y < 0 || x >= VGFX_W || y >= VGFX_H)
         return;
-    fb[y * VGFX_W + x] = (unsigned char)color;
+    pixels()[y * VGFX_W + x] = (unsigned char)color;
 }
 
 void vgfx_fill_rect(int x, int y, int w, int h, int color)
@@ -133,10 +155,12 @@ int vgfx_text_width(const char* s)
 
 void vgfx_flush(void)
 {
-    long rc = lseek(VGFX_FD, 0, 0);
-    if (rc < 0)
-        return;
-    write(VGFX_FD, fb, (unsigned long)(VGFX_W * VGFX_H));
+    /* Kept because every app ends a frame with it, and it says what the
+     * frame is now: it is already where the compositor reads it, so
+     * there is nothing to push. Asking for the surface here (rather
+     * than in every primitive) keeps a windowless program from claiming
+     * a pixel window it cannot have. */
+    (void)pixels();
 }
 
 /* --- Input: parse the ESC '[' 'M' btn xl xh yl yh stream on fd 0 --- */
@@ -150,18 +174,6 @@ static char drop_buf[DROP_BUF];
 int vnu_dnd_declare(const char* path)
 {
     return (int)syscall(VNU_SYS_dnd_declare, (long)path);
-}
-
-void vgfx_get_resolution(int* w, int* h)
-{
-    /* Pointers are the caller's, and the kernel validates them like any
-     * other; a null one is allowed on both sides. */
-    (void)syscall(VNU_SYS_gfx_getmode, (long)w, (long)h);
-}
-
-int vgfx_set_resolution(int w, int h)
-{
-    return (int)syscall(VNU_SYS_gfx_setmode, (long)w, (long)h);
 }
 
 int vgfx_poll(vgfx_event_t* ev)

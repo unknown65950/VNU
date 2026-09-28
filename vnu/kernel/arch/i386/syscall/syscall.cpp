@@ -45,19 +45,6 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
 {
     switch (tf->eax) {
     case VNU_SYS_write: {
-        /* Gfx surface fd 3: when running as a windowed task, writes
-         * to fd 3 go into the pixel framebuffer (not the VFS) — as
-         * long as that descriptor isn't a real file the task opened
-         * (the shell's history/redirection files land on fd 3 and must
-         * NOT be intercepted). The app opens /dev/fb or just
-         * lseek+writes to fd 3 directly. */
-        if (tf->ebx == 3 && vnu::wintask::current_is_task() &&
-            !vnu::vfs::fd_is_open(3) && !vnu::pipe::is_pipe_fd(3)) {
-            return static_cast<std::uint32_t>(
-                vnu::wintask::task_gfx_write(
-                    reinterpret_cast<const char*>(tf->ecx), tf->edx));
-        }
-
         if (vnu::pipe::is_pipe_fd(static_cast<int>(tf->ebx))) {
             return static_cast<std::uint32_t>(vnu::pipe::write_fd(
                 static_cast<int>(tf->ebx), reinterpret_cast<const void*>(tf->ecx), tf->edx));
@@ -174,22 +161,16 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
             vnu::audio::close_device();
         return static_cast<std::uint32_t>(vnu::vfs::close(fd));
     }
-    case VNU_SYS_lseek: {
-        /* Gfx surface fd 3: reposition the cursor into the pixel
-         * framebuffer before the next task_gfx_write, exactly like
-         * lseek() on /dev/fb.  Only intercepted for windowed tasks
-         * — normal processes go straight to the VFS. */
-        if (tf->ebx == 3 && vnu::wintask::current_is_task() &&
-            !vnu::vfs::fd_is_open(3) && !vnu::pipe::is_pipe_fd(3)) {
-            return static_cast<std::uint32_t>(
-                vnu::wintask::task_gfx_seek(
-                    static_cast<std::int32_t>(tf->ecx),
-                    static_cast<int>(tf->edx)));
-        }
+    case VNU_SYS_lseek:
         return static_cast<std::uint32_t>(vnu::vfs::lseek(
             static_cast<int>(tf->ebx), static_cast<int32_t>(tf->ecx),
             static_cast<int>(tf->edx)));
-    }
+    case VNU_SYS_gfx_surface:
+        /* Where this window's pixels are: shared pages the app writes
+         * and the compositor blits. Asking also switches the window
+         * from the text grid to that canvas. 0 when the caller has no
+         * window (see wintask::task_gfx_surface). */
+        return vnu::wintask::task_gfx_surface();
     case VNU_SYS_stat:
         return static_cast<std::uint32_t>(vnu::vfs::stat(
             reinterpret_cast<const char*>(tf->ebx),

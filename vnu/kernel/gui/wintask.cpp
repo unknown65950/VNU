@@ -20,6 +20,8 @@ using vnu::wintask::Console;
 using vnu::wintask::TITLE_CAP;
 using vnu::wintask::INPUT_QUEUE_CAP;
 using vnu::wintask::MAX_TASKS;
+using vnu::wintask::GFX_SURFACE_VA;
+using vnu::wintask::GFX_SURFACE_PAGES;
 
 /* App image / stack / heap layout (per task; each is backed by private
  * physical frames in the task's own address space). Same addresses the
@@ -49,12 +51,12 @@ struct Task {
     uint32_t brk = 0; /* per-task heap break (SYS_brk bookkeeping) */
 };
 
-/* The whole task table lives in PMM frames. .bss ends at ~0x3F8000 and
- * each task's Console holds a 163200-byte pixel buffer (480x340), so
- * (~160 KiB × MAX_TASKS) simply doesn't fit below the 4 MiB line. The
- * PMM pool (20-30 MiB) is identity-mapped in *every* page directory, so
- * GUI and tasks alike can always reach this array. It's one contiguous
- * block so we can index it as an array. */
+/* The whole task table lives in PMM frames: .bss ends at ~0xF94000, so
+ * there is no room for it in the kernel image. The PMM pool (17-30.75 MiB)
+ * is identity-mapped in *every* page directory, so GUI and tasks alike
+ * can always reach this array. It's one contiguous block so we can index
+ * it as an array. A pixel window's canvas is not here: it lives in
+ * frames the task and the compositor share (see GFX_SURFACE_VA). */
 Task* g_tasks = nullptr;
 
 uint32_t g_base_pgdir = 0; /* page directory the GUI's own stack lives in */
@@ -517,51 +519,35 @@ void feed_drop(TaskHandle h, const char* path)
         push(path[i]);
 }
 
-/* --- Gfx surface: fd 3 writes fill the pixel framebuffer --- */
+/* --- Gfx surface: pages the app and the compositor share --- */
 
-uint32_t task_gfx_write(const char* buf, uint32_t n)
-{
-    if (!g_active || n == 0 || !buf)
-        return 0;
-    Console& c = cur_task().con;
-    c.gfx = true;
-    constexpr uint32_t buf_size = static_cast<uint32_t>(GFX_W) * GFX_H;
-    if (c.gfx_cursor >= buf_size)
-        return 0;
-    uint32_t room = buf_size - c.gfx_cursor;
-    uint32_t count = n < room ? n : room;
-    for (uint32_t i = 0; i < count; ++i)
-        c.pixel[c.gfx_cursor + i] = static_cast<uint8_t>(buf[i]);
-    c.gfx_cursor += count;
-    return count;
-}
-
-int task_gfx_seek(int32_t offset, int whence)
+uint32_t task_gfx_surface()
 {
     if (!g_active)
-        return -1;
+        return 0; /* the console track has no window to draw in */
     Console& c = cur_task().con;
-    constexpr uint32_t buf_size = static_cast<uint32_t>(GFX_W) * GFX_H;
-    int32_t new_pos = static_cast<int32_t>(c.gfx_cursor);
-    switch (whence) {
-    case 0:
-        new_pos = offset;
-        break;
-    case 1:
-        new_pos += offset;
-        break;
-    case 2:
-        new_pos = static_cast<int32_t>(buf_size) + offset;
-        break;
-    default:
-        return -1;
-    }
-    if (new_pos < 0)
-        new_pos = 0;
-    if (static_cast<uint32_t>(new_pos) > buf_size)
-        new_pos = static_cast<int32_t>(buf_size);
-    c.gfx_cursor = static_cast<uint32_t>(new_pos);
-    return new_pos;
+    if (c.pixel)
+        return GFX_SURFACE_VA; /* already mapped by an earlier call */
+
+    /* Mapped on demand, not at spawn: a text window (the shell, an
+     * editor's console) never asks and so never spends the 40 frames.
+     * extend_address_space() is the same private-frame path
+     * create_address_space() used for the app image, and the frames it
+     * hands out are freed with the rest of the address space. */
+    const uint32_t pgdir = cur_task().pgdir;
+    if (!vnu::paging::extend_address_space(pgdir, GFX_SURFACE_VA, GFX_SURFACE_PAGES))
+        return 0;
+
+    /* One address, two views: the task draws at GFX_SURFACE_VA, and
+     * the GUI - running in the kernel's identity-mapped low memory -
+     * reads the same pages through the physical address. Single core,
+     * no caches to worry about: the pixels are simply RAM. */
+    const uint32_t phys = vnu::paging::phys_frame_at(pgdir, GFX_SURFACE_VA);
+    if (!phys)
+        return 0;
+    c.pixel = reinterpret_cast<uint8_t*>(phys);
+    c.gfx = true; /* asking is what makes this a pixel window */
+    return GFX_SURFACE_VA;
 }
 
 uint32_t task_brk(uint32_t req)

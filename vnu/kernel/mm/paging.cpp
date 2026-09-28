@@ -229,9 +229,25 @@ uint32_t create_address_space(const MapRange* ranges, int count)
 /* Adds `num_pages` more mapped pages to an existing private address
  * space, starting at vaddr_start. Used by execve() when the new image
  * (e.g. a large guest-compiled binary) needs a bigger app region than
- * the process was spawned with. Mirrors the mapping loop of
+ * the process was spawned with, and by the GUI when a window asks for
+ * its pixel surface. Mirrors the mapping loop of
  * create_address_space(): PDEs that are still shared identity entries
  * first get a private table seeded with the identity mapping. */
+
+/* Does `frame` belong to this space, i.e. is it one of the private frames
+ * handed out for it? A page table seeded from the identity map also has
+ * *present* entries, but those are shared with every other address space
+ * (and with the kernel), so they must not count as "already mapped" here:
+ * extending over them has to install a private frame, or two address
+ * spaces (and the kernel) would keep sharing the same physical page. */
+static bool owns_frame(const AddrSpaceMeta* meta, uint32_t frame)
+{
+    for (int i = 0; i < meta->data_frame_count; ++i)
+        if ((meta->data_frames[i] & ~0xFFFu) == (frame & ~0xFFFu))
+            return true;
+    return false;
+}
+
 bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages)
 {
     AddrSpaceMeta* meta = find_meta(pgdir_phys);
@@ -273,7 +289,7 @@ bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t nu
         pt = reinterpret_cast<uint32_t*>(pgdir[pde_idx] & ~0xFFFu);
 
         uint32_t pte = pt[pte_idx];
-        if (pte & PTE_PRESENT)
+        if ((pte & PTE_PRESENT) && owns_frame(meta, pte & ~0xFFFu))
             continue; /* already mapped by an earlier range in this exec */
         if (meta->data_frame_count >= MAX_FRAMES_PER_SPACE)
             return false;

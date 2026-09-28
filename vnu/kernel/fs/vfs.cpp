@@ -894,12 +894,10 @@ int open(const char* path, uint32_t flags)
      * current values rather than whatever the last reader saw. */
     if (nodes[ni].synth != SynthKind::None)
         regen_synth(nodes[ni]);
-    /* fd 3 is reserved as the gfx surface for windowed tasks (see
-     * syscall.cpp's write/lseek intercept), so real VFS descriptors
-     * start at 4 — otherwise any file a gfx app opens (the file
-     * manager's directories, vash's history, ...) would silently
-     * steal the surface descriptor and break its framebuffer. */
-    for (int i = 4; i < MAX_FD; ++i) {
+    /* Real descriptors start at 3, right after stdio: a windowed app's
+     * canvas is shared memory it holds a virtual address for now (see
+     * wintask::GFX_SURFACE_VA), not a descriptor. */
+    for (int i = 3; i < MAX_FD; ++i) {
         if (!files[i].used) {
             files[i] = {true, 0, flags, ni};
             /* Truncating a character device is meaningless (and would
@@ -1133,11 +1131,6 @@ bool fd_is_redirected(int fd)
     return files[fd].node >= 0;
 }
 
-bool fd_is_open(int fd)
-{
-    return fd >= 0 && fd < MAX_FD && files[fd].used;
-}
-
 void reset_stdio()
 {
     for (int i = 0; i < 3; ++i)
@@ -1148,7 +1141,7 @@ int dup_fd(int fd)
 {
     if (fd < 0 || fd >= MAX_FD || !files[fd].used)
         return -VNU_EBADF;
-    for (int i = 4; i < MAX_FD; ++i) {
+    for (int i = 3; i < MAX_FD; ++i) {
         if (!files[i].used) {
             files[i] = files[fd];
             return i;
