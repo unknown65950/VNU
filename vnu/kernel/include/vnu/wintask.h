@@ -47,7 +47,8 @@ constexpr int GFX_H = 340;
 /* Where the shared surface sits in a windowed task's address space, and
  * how many frames it takes. It is *shared*: the same physical pages are
  * mapped here in the task and identity-mapped in every page directory
- * (they come from the PMM pool, 17..30.75 MiB), so the app writes pixels
+ * (they come from the PMM pool, which starts just above the kernel's
+ * .bss), so the app writes pixels
  * at GFX_SURFACE_VA while the compositor reads the very same RAM through
  * the physical address. No copy, no syscall per frame.
  *

@@ -51,10 +51,11 @@ struct Task {
     uint32_t brk = 0; /* per-task heap break (SYS_brk bookkeeping) */
 };
 
-/* The whole task table lives in PMM frames: .bss ends at ~0xF94000, so
- * there is no room for it in the kernel image. The PMM pool (17-30.75 MiB)
- * is identity-mapped in *every* page directory, so GUI and tasks alike
- * can always reach this array. It's one contiguous block so we can index
+/* The whole task table lives in PMM frames: the kernel's .bss ends at
+ * ~0xAE4000 and there is no room for it in the kernel image. The PMM
+ * pool (everything from there up to 30.75 MiB) is identity-mapped in
+ * *every* page directory, so GUI and tasks alike can always reach this
+ * array. It's one contiguous block so we can index
  * it as an array. A pixel window's canvas is not here: it lives in
  * frames the task and the compositor share (see GFX_SURFACE_VA). */
 Task* g_tasks = nullptr;
