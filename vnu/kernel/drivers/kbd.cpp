@@ -121,6 +121,26 @@ int decode_scancode(uint8_t s, DecoderState& st)
         }
     }
 
+    /* Function keys, set 1 scancodes 0x3B..0x44 with F11/F12 at
+     * 0x57/0x58. They report the same code whatever the modifiers do,
+     * like the arrows do. Checked before the table lookup because 0x58
+     * is one past its end. */
+    switch (s) {
+    case 0x3B: return vnu::kbd::K_F1;
+    case 0x3C: return vnu::kbd::K_F2;
+    case 0x3D: return vnu::kbd::K_F3;
+    case 0x3E: return vnu::kbd::K_F4;
+    case 0x3F: return vnu::kbd::K_F5;
+    case 0x40: return vnu::kbd::K_F6;
+    case 0x41: return vnu::kbd::K_F7;
+    case 0x42: return vnu::kbd::K_F8;
+    case 0x43: return vnu::kbd::K_F9;
+    case 0x44: return vnu::kbd::K_F10;
+    case 0x57: return vnu::kbd::K_F11;
+    case 0x58: return vnu::kbd::K_F12;
+    default: break;
+    }
+
     if (s >= sizeof(map))
         return -1;
 

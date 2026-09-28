@@ -1,4 +1,5 @@
 #include <vnu/vga_gfx.h>
+#include <vnu/tty.h>
 #include <vnu/virtio_gpu.h>
 #include <vnu/wallpaper.h>
 
@@ -58,12 +59,6 @@ constexpr uint16_t VBE_LFB = 0x40;
  * identity-maps it so present() can memcpy straight to it. */
 constexpr uintptr_t VBE_LFB_ADDR = 0xFD000000u;
 
-uint16_t vbe_read(uint16_t index)
-{
-    outw(VBE_INDEX_PORT, index);
-    return inw(VBE_DATA_PORT);
-}
-
 void vbe_write(uint16_t index, uint16_t val)
 {
     outw(VBE_INDEX_PORT, index);
@@ -72,7 +67,7 @@ void vbe_write(uint16_t index, uint16_t val)
 
 struct VgaState {
     uint8_t misc;
-    uint8_t seq[5];
+    uint8_t seq[8];
     uint8_t crtc[25];
     uint8_t gc[9];
     uint8_t ac[21];
@@ -86,7 +81,7 @@ void write_registers(uint8_t misc, const uint8_t* seq, const uint8_t* crtc,
 {
     outb(0x3C2, misc);
 
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 8; ++i) {
         outb(0x3C4, static_cast<uint8_t>(i));
         outb(0x3C5, seq[i]);
     }
@@ -110,15 +105,20 @@ void write_registers(uint8_t misc, const uint8_t* seq, const uint8_t* crtc,
         outb(0x3C0, static_cast<uint8_t>(i));
         outb(0x3C0, ac[i]);
     }
+    /* Video enable (the attribute controller's index 0x20 write) goes
+     * last, and the status read in front of it matters: the attribute
+     * controller shares a single flip-flop between its index and its
+     * data writes, so without that read the 0x20 below is taken as a
+     * data byte instead and the display never comes back. */
     (void)inb(0x3DA);
-    outb(0x3C0, 0x20); /* re-enable video output (PAS bit) */
+    outb(0x3C0, 0x20);
 }
 
 void read_registers(VgaState& s)
 {
     s.misc = inb(0x3CC);
 
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 8; ++i) {
         outb(0x3C4, static_cast<uint8_t>(i));
         s.seq[i] = inb(0x3C5);
     }
@@ -141,23 +141,43 @@ void read_registers(VgaState& s)
 
 /* --- Font capture: pull the 8x16 glyphs currently loaded in VGA plane 2
  * (the font the text console is rendering with) before we leave text
- * mode, so graphics-mode text keeps looking like the console. */
+ * mode, so graphics-mode text keeps looking like the console.
+ *
+ * The glyphs are not somewhere the frame buffer cannot reach: a card
+ * keeps the console font in plane 2 of the same VRAM the frame buffer
+ * is painted into, and the text cells in planes 0/1 right next to them.
+ * A graphics mode that fills VRAM therefore takes the font with it, and
+ * a text mode whose characters are back but whose glyphs are not renders
+ * as stripes of garbage. So the 4 KiB of glyphs have to be saved on the
+ * way in and written back on the way out.
+ *
+ * Reaching them means pointing the memory map at 0xA0000 and selecting
+ * plane 2, which is what enter_font_window() does. */
 uint8_t g_font[256][16];
 uint8_t g_font8[256][8];
 bool g_have_font = false;
 
-void capture_font()
+struct FontWindow {
+    uint8_t sr2;
+    uint8_t sr4;
+    uint8_t gc4;
+    uint8_t gc5;
+    uint8_t gc6;
+};
+
+FontWindow enter_font_window()
 {
+    FontWindow w;
     outb(0x3C4, 2);
-    uint8_t seq2 = inb(0x3C5);
+    w.sr2 = inb(0x3C5);
     outb(0x3C4, 4);
-    uint8_t seq4 = inb(0x3C5);
+    w.sr4 = inb(0x3C5);
     outb(0x3CE, 4);
-    uint8_t gc4 = inb(0x3CF);
+    w.gc4 = inb(0x3CF);
     outb(0x3CE, 5);
-    uint8_t gc5 = inb(0x3CF);
+    w.gc5 = inb(0x3CF);
     outb(0x3CE, 6);
-    uint8_t gc6 = inb(0x3CF);
+    w.gc6 = inb(0x3CF);
 
     outb(0x3C4, 2);
     outb(0x3C5, 0x04); /* write plane 2 only */
@@ -169,6 +189,26 @@ void capture_font()
     outb(0x3CF, 0x00); /* read mode 0 */
     outb(0x3CE, 6);
     outb(0x3CF, 0x00); /* map at 0xA0000, no odd/even */
+    return w;
+}
+
+void leave_font_window(const FontWindow& w)
+{
+    outb(0x3C4, 2);
+    outb(0x3C5, w.sr2);
+    outb(0x3C4, 4);
+    outb(0x3C5, w.sr4);
+    outb(0x3CE, 4);
+    outb(0x3CF, w.gc4);
+    outb(0x3CE, 5);
+    outb(0x3CF, w.gc5);
+    outb(0x3CE, 6);
+    outb(0x3CF, w.gc6);
+}
+
+void capture_font()
+{
+    FontWindow w = enter_font_window();
 
     volatile uint8_t* src = reinterpret_cast<volatile uint8_t*>(0xA0000);
     for (int c = 0; c < 256; ++c)
@@ -184,24 +224,32 @@ void capture_font()
             g_font8[c][r] = static_cast<uint8_t>(g_font[c][r * 2] |
                                                  g_font[c][r * 2 + 1]);
 
-    outb(0x3C4, 2);
-    outb(0x3C5, seq2);
-    outb(0x3C4, 4);
-    outb(0x3C5, seq4);
-    outb(0x3CE, 4);
-    outb(0x3CF, gc4);
-    outb(0x3CE, 5);
-    outb(0x3CF, gc5);
-    outb(0x3CE, 6);
-    outb(0x3CF, gc6);
+    leave_font_window(w);
 
     g_have_font = true;
 }
 
+/* Put the console glyphs back after a graphics mode painted over VRAM.
+ * Called once the text register table is in place again: this only
+ * borrows the sequencer and graphics controller, and hands them back
+ * exactly as it found them. */
+void restore_font()
+{
+    if (!g_have_font)
+        return;
+
+    FontWindow w = enter_font_window();
+    volatile uint8_t* dst = reinterpret_cast<volatile uint8_t*>(0xA0000);
+    for (int c = 0; c < 256; ++c)
+        for (int r = 0; r < 16; ++r)
+            dst[c * 32 + r] = g_font[c][r];
+    leave_font_window(w);
+}
+
 /* Catppuccin Mocha DAC palette for the first 16 palette registers (the
  * ones COLOR_* references). The desktop renders 8-bpp palette indices,
- * so programming the DAC once restyles every surface — wallpaper, window
- * chrome, icons and the gfx apps' own drawing — with no app-code churn.
+ * so programming the DAC once restyles every surface - wallpaper, window
+ * chrome, icons and the gfx apps' own drawing - with no app-code churn.
  * Values are 6-bit per channel (0..63), as the VGA DAC expects. */
 constexpr uint8_t CATT_PAL[16][3] = {
     {7, 7, 11},    /*  0 BLACK   base      #1e1e2e */
@@ -252,7 +300,26 @@ void save_palette()
     g_have_saved_pal = true;
 }
 
-uint8_t g_backbuf[vnu::vgfx::WIDTH * vnu::vgfx::HEIGHT];
+/* The ladder, smallest first: the index is what F12 cycles through and
+ * what /proc/gfx lists. DEFAULT_MODE is the entry the desktop starts on
+ * (and the one a /etc/vnuconfig/gfx.conf can pick instead). */
+const vnu::vgfx::Mode g_modes[vnu::vgfx::MODE_COUNT] = {
+    {640, 480},
+    {800, 600},
+    {1024, 768},
+    {1280, 1024},
+};
+
+int g_width = vnu::vgfx::DEFAULT_MODE.width;
+int g_height = vnu::vgfx::DEFAULT_MODE.height;
+bool g_in_gfx_mode = false;
+
+/* Sized for the largest mode, not the current one: a resolution change
+ * is then a register write and the backbuffer keeps its contents, so
+ * nothing has to be reallocated (or repainted from scratch) mid-frame.
+ * The cost is the .bss the unused head of it sits in - see the note on
+ * MAX_MODE in the header for why that is a deliberate trade. */
+uint8_t g_backbuf[vnu::vgfx::MAX_MODE.width * vnu::vgfx::MAX_MODE.height];
 
 /* Quarter-sine profile (0..255) used to carve the wallpaper's hill
  * silhouettes; indexed by column so the ranges stay procedural. */
@@ -279,8 +346,54 @@ uint32_t font_bytes()
     return static_cast<uint32_t>(sizeof(g_font) + sizeof(g_font8));
 }
 
+/* Bochs VBE (the "std" VGA in QEMU): disable first, then select the
+ * size/colour depth, then re-enable with the linear-framebuffer bit set
+ * so the whole frame is a flat 8-bpp array at 0xFD000000. With LFB set,
+ * the bank register (index 5) is ignored.
+ *
+ * Only the VBE registers change here: a mode switch reprograms the DAC,
+ * which is the caller's business (both callers reload CATT_PAL right
+ * after), and the backbuffer is left alone on purpose. */
+void program_mode(int w, int h)
+{
+    vbe_write(VBE_INDEX_X_OFFSET, 0);
+    vbe_write(VBE_INDEX_Y_OFFSET, 0);
+    vbe_write(VBE_INDEX_ENABLE, VBE_DISABLED);
+    vbe_write(VBE_INDEX_XRES, static_cast<uint16_t>(w));
+    vbe_write(VBE_INDEX_YRES, static_cast<uint16_t>(h));
+    vbe_write(VBE_INDEX_VIRT_WIDTH, static_cast<uint16_t>(w));
+    vbe_write(VBE_INDEX_BPP, 8);
+    vbe_write(VBE_INDEX_ENABLE, VBE_ENABLED | VBE_LFB | VBE_8BIT_DAC);
+}
+
+const Mode* modes()
+{
+    return g_modes;
+}
+
+int width()
+{
+    return g_width;
+}
+
+int height()
+{
+    return g_height;
+}
+
+bool mode_supported(int w, int h)
+{
+    for (int i = 0; i < MODE_COUNT; ++i)
+        if (g_modes[i].width == w && g_modes[i].height == h)
+            return true;
+    return false;
+}
+
 void enter_gfx_mode()
 {
+    /* Before the mode is programmed: from here on the framebuffer covers
+     * the console's own characters. */
+    vnu::tty::save_screen();
     if (!g_have_font)
         capture_font();
     if (!g_have_saved) {
@@ -288,18 +401,8 @@ void enter_gfx_mode()
         g_have_saved = true;
     }
 
-    /* Bochs VBE (the "std" VGA in QEMU): disable first, then select
-     * the size/colour depth, then re-enable with the linear-framebuffer
-     * bit set so the whole frame is a flat 8-bpp array at 0xFD000000.
-     * With LFB set, the bank register (index 5) is ignored. */
-    vbe_write(VBE_INDEX_X_OFFSET, 0);
-    vbe_write(VBE_INDEX_Y_OFFSET, 0);
-    vbe_write(VBE_INDEX_ENABLE, VBE_DISABLED);
-    vbe_write(VBE_INDEX_XRES, WIDTH);
-    vbe_write(VBE_INDEX_YRES, HEIGHT);
-    vbe_write(VBE_INDEX_VIRT_WIDTH, WIDTH);
-    vbe_write(VBE_INDEX_BPP, 8);
-    vbe_write(VBE_INDEX_ENABLE, VBE_ENABLED | VBE_LFB | VBE_8BIT_DAC);
+    program_mode(g_width, g_height);
+    g_in_gfx_mode = true;
 
     /* Swap in the Catppuccin DAC the first time we enter graphics mode;
      * the boot palette is saved so exit_to_text() can hand it back. */
@@ -308,20 +411,78 @@ void enter_gfx_mode()
     load_palette(CATT_PAL);
 }
 
+bool set_resolution(int w, int h)
+{
+    if (!mode_supported(w, h))
+        return false;
+    if (w == g_width && h == g_height)
+        return true;
+
+    /* The virtio-gpu path owns a scanout resource of its own and is the
+     * one part of this that can run out of memory, so it is asked first:
+     * a mode that cannot be shown must not be programmed into the VGA
+     * side, or the two drivers would disagree about the screen. */
+    if (virtio_gpu::active() && !virtio_gpu::set_resolution(w, h))
+        return false;
+
+    if (g_in_gfx_mode) {
+        program_mode(w, h);
+        /* The DAC is reprogrammed by the mode switch, so the desktop
+         * palette has to go in again. */
+        load_palette(CATT_PAL);
+    }
+    g_width = w;
+    g_height = h;
+    return true;
+}
+
 void exit_to_text()
 {
     if (!g_have_saved)
         return;
+    g_in_gfx_mode = false;
     if (g_have_saved_pal)
         load_palette(g_saved_pal);
     vbe_write(VBE_INDEX_ENABLE, VBE_DISABLED);
     write_registers(g_saved.misc, g_saved.seq, g_saved.crtc, g_saved.gc, g_saved.ac);
+    restore_font();
+    vnu::tty::restore_screen();
+    /* The virtio-gpu display has no text mode to fall back to and the
+     * host keeps showing whatever was last presented, so a desktop that
+     * quit would stay on the monitor: it gets the console's own blank
+     * instead, the way the VGA side gets its text mode back. */
+    if (vnu::virtio_gpu::active())
+        vnu::virtio_gpu::blank();
 }
 
 void clear(uint8_t color)
 {
-    for (int i = 0; i < WIDTH * HEIGHT; ++i)
+    for (int i = 0; i < g_width * g_height; ++i)
         g_backbuf[i] = color;
+}
+
+/* The procedural wallpaper is authored in 1024x768 coordinates, so the
+ * drawing calls below read as the pixels they were designed as and these
+ * three helpers carry them into whichever mode is programmed now: px and
+ * py for a position, pr for a radius (scaled like py, which is what the
+ * vertical proportions of the scene - sun, clouds, hill heights - are
+ * written against). */
+constexpr int ART_W = 1024;
+constexpr int ART_H = 768;
+
+int px(int x)
+{
+    return x * g_width / ART_W;
+}
+
+int py(int y)
+{
+    return y * g_height / ART_H;
+}
+
+int pr(int r)
+{
+    return r * g_height / ART_H;
 }
 
 /* Desktop wallpaper: a three-band sky (dithered, like clear_gradient),
@@ -336,7 +497,7 @@ void draw_wallpaper()
 {
     if (vnu::wallpaper::ready()) {
         memcpy(g_backbuf, vnu::wallpaper::frame(),
-               static_cast<unsigned long>(WIDTH * HEIGHT));
+               static_cast<unsigned long>(g_width * g_height));
         return;
     }
     static const uint8_t B4[4][4] = {
@@ -347,8 +508,8 @@ void draw_wallpaper()
     };
     /* Sky: bright blue at the top, fading through cyan toward a pale
      * horizon (three dithered bands so the 16-color palette is smooth). */
-    for (int y = 0; y < HEIGHT; ++y) {
-        unsigned t = (unsigned)y * 256u / (unsigned)HEIGHT;
+    for (int y = 0; y < g_height; ++y) {
+        unsigned t = (unsigned)y * 256u / (unsigned)g_height;
         uint8_t top, bottom;
         unsigned lo, hi;
         if (t <= 96) {
@@ -369,44 +530,46 @@ void draw_wallpaper()
         }
         unsigned u = (t - lo) * 256u / (hi - lo + 1);
         const uint8_t* bayer = B4[y & 3];
-        uint8_t* row = g_backbuf + y * WIDTH;
-        for (int x = 0; x < WIDTH; ++x)
+        uint8_t* row = g_backbuf + y * g_width;
+        for (int x = 0; x < g_width; ++x)
             row[x] = (u >= (unsigned)(bayer[x & 3] * 17)) ? bottom : top;
     }
 
     /* Sun: peach halo around a warm yellow core (Mocha dusk). */
-    fill_circle(848, 150, 58, COLOR_BROWN);
-    fill_circle(848, 150, 40, COLOR_YELLOW);
+    fill_circle(px(848), py(150), pr(58), COLOR_BROWN);
+    fill_circle(px(848), py(150), pr(40), COLOR_YELLOW);
 
     /* Clouds: puffy white blobs. */
-    fill_circle(180, 140, 26, COLOR_WHITE);
-    fill_circle(206, 150, 26, COLOR_WHITE);
-    fill_circle(148, 152, 22, COLOR_WHITE);
-    fill_circle(560, 120, 20, COLOR_WHITE);
-    fill_circle(582, 128, 20, COLOR_WHITE);
-    fill_circle(540, 130, 16, COLOR_WHITE);
+    fill_circle(px(180), py(140), pr(26), COLOR_WHITE);
+    fill_circle(px(206), py(150), pr(26), COLOR_WHITE);
+    fill_circle(px(148), py(152), pr(22), COLOR_WHITE);
+    fill_circle(px(560), py(120), pr(20), COLOR_WHITE);
+    fill_circle(px(582), py(128), pr(20), COLOR_WHITE);
+    fill_circle(px(540), py(130), pr(16), COLOR_WHITE);
 
     /* Hills: per-column sine-profile silhouettes (far range first, then
      * a nearer, greener range, then a ground strip). */
-    uint8_t* row7 = g_backbuf;
-    for (int x = 0; x < WIDTH; ++x) {
-        int idx = (x * 3 * 64 / WIDTH) % 64;
-        int h = 150 * static_cast<int>(HILL_T[idx]) / 256;
-        for (int y = 700 - h; y < 700; ++y)
-            g_backbuf[y * WIDTH + x] = COLOR_DGRAY;
+    const int far_base = py(700);
+    const int far_h = py(150);
+    const int near_base = py(748);
+    const int near_h = py(110);
+    for (int x = 0; x < g_width; ++x) {
+        int idx = (x * 3 * 64 / g_width) % 64;
+        int h = far_h * static_cast<int>(HILL_T[idx]) / 256;
+        for (int y = far_base - h; y < far_base; ++y)
+            g_backbuf[y * g_width + x] = COLOR_DGRAY;
     }
-    for (int x = 0; x < WIDTH; ++x) {
-        int idx = (x * 2 * 64 / WIDTH + 16) % 64;
-        int h = 110 * static_cast<int>(HILL_T[idx]) / 256;
-        for (int y = 748 - h; y < 748; ++y)
-            g_backbuf[y * WIDTH + x] = COLOR_GREEN;
+    for (int x = 0; x < g_width; ++x) {
+        int idx = (x * 2 * 64 / g_width + 16) % 64;
+        int h = near_h * static_cast<int>(HILL_T[idx]) / 256;
+        for (int y = near_base - h; y < near_base; ++y)
+            g_backbuf[y * g_width + x] = COLOR_GREEN;
     }
-    for (int y = 748; y < HEIGHT; ++y) {
-        uint8_t* row = g_backbuf + y * WIDTH;
-        for (int x = 0; x < WIDTH; ++x)
+    for (int y = near_base; y < g_height; ++y) {
+        uint8_t* row = g_backbuf + y * g_width;
+        for (int x = 0; x < g_width; ++x)
             row[x] = COLOR_GREEN;
     }
-    (void)row7;
 }
 
 /* Vertical background fade between two palette colors using a 4x4
@@ -420,20 +583,20 @@ void clear_gradient(uint8_t top, uint8_t bottom)
         {3, 11, 1, 9},
         {15, 7, 13, 5},
     };
-    for (int y = 0; y < HEIGHT; ++y) {
-        unsigned t = (unsigned)y * 256u / (unsigned)HEIGHT;
+    for (int y = 0; y < g_height; ++y) {
+        unsigned t = (unsigned)y * 256u / (unsigned)g_height;
         const uint8_t* bayer = B4[y & 3];
-        uint8_t* row = g_backbuf + y * WIDTH;
-        for (int x = 0; x < WIDTH; ++x)
+        uint8_t* row = g_backbuf + y * g_width;
+        for (int x = 0; x < g_width; ++x)
             row[x] = (t >= (unsigned)(bayer[x & 3] * 17)) ? bottom : top;
     }
 }
 
 void put_pixel(int x, int y, uint8_t color)
 {
-    if (x < 0 || y < 0 || x >= WIDTH || y >= HEIGHT)
+    if (x < 0 || y < 0 || x >= g_width || y >= g_height)
         return;
-    g_backbuf[y * WIDTH + x] = color;
+    g_backbuf[y * g_width + x] = color;
 }
 
 void fill_rect(int x, int y, int w, int h, uint8_t color)
@@ -529,7 +692,7 @@ void blit_scale(const uint8_t* src, int sw, int sh, int dx, int dy, int dw, int 
         return;
     for (int j = 0; j < dh; ++j) {
         int y = dy + j;
-        if (y < 0 || y >= HEIGHT)
+        if (y < 0 || y >= g_height)
             continue;
         int sy = (j * sh) / dh;
         if (sy < 0)
@@ -539,7 +702,7 @@ void blit_scale(const uint8_t* src, int sw, int sh, int dx, int dy, int dw, int 
         const uint8_t* row = src + sy * sw;
         for (int i = 0; i < dw; ++i) {
             int x = dx + i;
-            if (x < 0 || x >= WIDTH)
+            if (x < 0 || x >= g_width)
                 continue;
             int sx = (i * sw) / dw;
             if (sx < 0)
@@ -741,16 +904,49 @@ void present()
      * hand the true-colour buffer over to the driver, which transfers
      * and flushes it. No VBE frame involved. */
     if (vnu::virtio_gpu::active()) {
-        uint8_t* fb = vnu::virtio_gpu::framebuffer();
-        for (int i = 0; i < WIDTH * HEIGHT; ++i) {
-            const uint8_t* rgb = CATT_PAL[g_backbuf[i]];
-            uint8_t* p = fb + static_cast<unsigned long>(i) * 4;
-            /* 6-bit DAC -> 8-bit channel, then store B,G,R,X (pixel =
-             * 0x00RRGGBB) to match GPU_FORMAT_B8G8R8X8. */
-            p[0] = static_cast<uint8_t>((rgb[2] << 2) | (rgb[2] >> 4));
-            p[1] = static_cast<uint8_t>((rgb[1] << 2) | (rgb[1] >> 4));
-            p[2] = static_cast<uint8_t>((rgb[0] << 2) | (rgb[0] >> 4));
-            p[3] = 0xFF;
+        const uint32_t nsegs = vnu::virtio_gpu::scanout_segments();
+        /* A mode change can leave the driver a moment without a scanout
+         * resource (it frees the old frames before it takes the new
+         * ones, see virtio_gpu::set_resolution). The desktop keeps
+         * drawing into the backbuffer either way; there is simply
+         * nothing to expand into until the next attempt gets frames. */
+        if (nsegs == 0)
+            return;
+
+        /* The scanout is a list of frame runs, so the image is written
+         * run by run: a row is 4 bytes per pixel wide and can straddle
+         * two of them, while a run holds many rows. Splitting per row
+         * keeps the pixel loop below free of any segment bookkeeping. */
+        uint32_t seg = 0;
+        vnu::virtio_gpu::ScanoutSegment s = vnu::virtio_gpu::scanout_segment(0);
+        uint8_t* dst = reinterpret_cast<uint8_t*>(s.phys);
+        uint32_t room = s.bytes;
+        const uint32_t row_bytes = static_cast<uint32_t>(g_width) * 4u;
+        for (int y = 0; y < g_height; ++y) {
+            const uint8_t* src = g_backbuf + static_cast<unsigned long>(y) * g_width;
+            uint32_t left = row_bytes;
+            while (left > 0) {
+                if (room == 0) {
+                    if (++seg == nsegs)
+                        return;   /* the list ran out: leave the rest alone */
+                    s = vnu::virtio_gpu::scanout_segment(seg);
+                    dst = reinterpret_cast<uint8_t*>(s.phys);
+                    room = s.bytes;
+                }
+                const uint32_t px = (left < room) ? (left / 4u) : (room / 4u);
+                for (uint32_t x = 0; x < px; ++x) {
+                    const uint8_t* rgb = CATT_PAL[*src++];
+                    /* 6-bit DAC -> 8-bit channel, then store B,G,R,X
+                     * (pixel = 0x00RRGGBB) to match B8G8R8X8. */
+                    dst[0] = static_cast<uint8_t>((rgb[2] << 2) | (rgb[2] >> 4));
+                    dst[1] = static_cast<uint8_t>((rgb[1] << 2) | (rgb[1] >> 4));
+                    dst[2] = static_cast<uint8_t>((rgb[0] << 2) | (rgb[0] >> 4));
+                    dst[3] = 0xFF;
+                    dst += 4;
+                }
+                room -= px * 4u;
+                left -= px * 4u;
+            }
         }
         vnu::virtio_gpu::present();
         return;
@@ -774,7 +970,8 @@ void present()
     }
     while (!(inb(0x3DA) & 0x08)) {
     }
-    memcpy(reinterpret_cast<void*>(VBE_LFB_ADDR), g_backbuf, sizeof(g_backbuf));
+    memcpy(reinterpret_cast<void*>(VBE_LFB_ADDR), g_backbuf,
+           static_cast<unsigned long>(g_width * g_height));
 }
 
 } // namespace vnu::vgfx

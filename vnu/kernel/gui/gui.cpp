@@ -6,6 +6,8 @@
 #include <vnu/wintask.h>
 #include <vnu/vfs.h>
 #include <vnu/wallpaper.h>
+#include <vnu/gfxconf.h>
+#include <vnu/abi.h>
 
 namespace {
 
@@ -242,8 +244,8 @@ void clamp_to_desktop(Window& win)
 {
     if (win.x < 0) win.x = 0;
     if (win.y < 0) win.y = 0;
-    if (win.x + win.w > vnu::vgfx::WIDTH) win.x = vnu::vgfx::WIDTH - win.w;
-    if (win.y + win.h > vnu::vgfx::HEIGHT) win.y = vnu::vgfx::HEIGHT - win.h;
+    if (win.x + win.w > vnu::vgfx::width()) win.x = vnu::vgfx::width() - win.w;
+    if (win.y + win.h > vnu::vgfx::height()) win.y = vnu::vgfx::height() - win.h;
 }
 
 void draw_chrome(const Window& win, bool active)
@@ -491,6 +493,12 @@ int find_app_by_title(const vnu::apps::AppEntry* apps, int count, const char* ti
 void draw_panel(const PBtn* out, int n, const vnu::apps::AppEntry* apps, int app_count);
 int layout_panel(PBtn* out, int focused, const vnu::apps::AppEntry* apps, int app_count);
 
+/* Set when a resolution change happened while the desktop was up, so the
+ * event loop can re-place what it owns (window geometry, the cursor)
+ * against the new screen. Cleared by the loop, which is the only thing
+ * that can act on it. */
+bool g_relayout = false;
+
 int layout_panel(PBtn* out, int focused, const vnu::apps::AppEntry* apps, int app_count)
 {
     using namespace vnu::vgfx;
@@ -530,7 +538,7 @@ int layout_panel(PBtn* out, int focused, const vnu::apps::AppEntry* apps, int ap
     }
 
     /* --- Right cluster --- */
-    x = WIDTH - 6;
+    x = width() - 6;
     if (focused >= 0) {
         w2 = 22;
         x -= w2;
@@ -565,9 +573,9 @@ void draw_clock(int cx, int cy, int r);
 void draw_panel(const PBtn* out, int n, const vnu::apps::AppEntry* apps, int app_count)
 {
     using namespace vnu::vgfx;
-    fill_rect(0, 0, WIDTH, PANEL_H, COLOR_LGRAY);
-    hline(0, 0, WIDTH, COLOR_WHITE);
-    hline(0, PANEL_H - 1, WIDTH, COLOR_BLACK);
+    fill_rect(0, 0, width(), PANEL_H, COLOR_LGRAY);
+    hline(0, 0, width(), COLOR_WHITE);
+    hline(0, PANEL_H - 1, width(), COLOR_BLACK);
 
     for (int i = 0; i < n; ++i) {
         const PBtn& b = out[i];
@@ -728,6 +736,14 @@ void reboot_now()
     }
 }
 
+bool name_is(const char* a, const char* b)
+{
+    int i = 0;
+    while (a[i] && a[i] == b[i])
+        ++i;
+    return a[i] == 0 && b[i] == 0;
+}
+
 } // namespace
 
 namespace vnu::gui {
@@ -751,8 +767,31 @@ void dnd_declare(const char* path)
     drag_path[i] = 0;
 }
 
-void run()
+int set_resolution(int w, int h)
 {
+    if (!vnu::vgfx::set_resolution(w, h))
+        return -VNU_EINVAL;
+    /* Remember the choice: the next boot reads it back before it
+     * programs the card (see gfxconf.h). A setting that could not be
+     * written is not a reason to refuse the switch the user can see. */
+    (void)vnu::gfxconf::store(w, h);
+    /* The wallpaper is stretched to the desktop when it is decoded, so
+     * it has to be rebuilt for the new geometry or the next frame would
+     * blit a frame of the wrong size. */
+    vnu::wallpaper::resize();
+    /* The desktop redraws every frame, so only the geometry it *keeps*
+     * between frames needs fixing up, and that is the event loop's job:
+     * it owns the window rectangles and the cursor position. */
+    g_relayout = true;
+    return 0;
+}
+
+void run(const char* open_app)
+{
+    /* The mode from the last session, while the card is still in text
+     * mode: vgfx::set_resolution() only records it here, and
+     * enter_gfx_mode() below programs the card for it. */
+    (void)vnu::gfxconf::load();
     vnu::vgfx::enter_gfx_mode();
     vnu::vgfx::draw_wallpaper();
     vnu::kbd::drain_excess();
@@ -794,14 +833,8 @@ void run()
     auto window_by_title = [&](const char* name) -> TaskHandle {
         for (int i = 0; i < order_len; ++i) {
             vnu::wintask::Console* c = vnu::wintask::console(order[i]);
-            if (c) {
-                const char* t = c->title;
-                int k = 0;
-                while (name[k] && t[k] && name[k] == t[k])
-                    ++k;
-                if (name[k] == 0 && t[k] == 0)
-                    return order[i];
-            }
+            if (c && name_is(name, c->title))
+                return order[i];
         }
         return NO_TASK;
     };
@@ -932,8 +965,8 @@ void run()
         }
     };
 
-    int mx = vnu::vgfx::WIDTH / 2;
-    int my = vnu::vgfx::HEIGHT / 2;
+    int mx = vnu::vgfx::width() / 2;
+    int my = vnu::vgfx::height() / 2;
     DragOp drag_op = DragOp::None;
     TaskHandle drag_h = NO_TASK;
     int drag_off_x = 0, drag_off_y = 0;
@@ -949,7 +982,46 @@ void run()
     int panel_n = 0;
     uint32_t last_tick_sod = 0;
 
+    /* "gui <app>" — the window is up before the first frame, so the
+     * desktop never flashes an empty desktop on the way in. */
+    if (open_app && open_app[0]) {
+        for (int i = 0; i < app_count; ++i) {
+            if (name_is(apps[i].name, open_app)) {
+                spawn_from_icon(i);
+                break;
+            }
+        }
+    }
+
     for (;;) {
+        /* A resolution change (VNU_SYS_gfx_setmode, or the key below)
+         * left the window rectangles and the cursor placed for the old
+         * screen. Policy: a mode change never closes a window and never
+         * loses what is on it -- it only moves windows back into view.
+         * A window too big for the new screen shrinks to fit it (a text
+         * window just shows fewer columns/rows: fit_cols/fit_rows read
+         * the client area off the rectangle), a window that fits keeps
+         * its size and only gets clamped. The cascade offset restarts,
+         * since a step chosen for the old geometry would land off the
+         * new screen. Everything else the desktop shows is redrawn from
+         * scratch every frame, so nothing else needs redoing. */
+        if (g_relayout) {
+            g_relayout = false;
+            int max_h = vnu::vgfx::height() - PANEL_H;
+            for (int h = 0; h < MAX_TASKS; ++h) {
+                if (!vnu::wintask::is_running(h))
+                    continue;
+                if (geom[h].w > vnu::vgfx::width())
+                    geom[h].w = vnu::vgfx::width();
+                if (geom[h].h > max_h)
+                    geom[h].h = max_h;
+                clamp_to_desktop(geom[h]);
+            }
+            cascade = 0;
+            if (mx >= vnu::vgfx::width()) mx = vnu::vgfx::width() - 1;
+            if (my >= vnu::vgfx::height()) my = vnu::vgfx::height() - 1;
+        }
+
         /* Give every live task a burst; each either blocks on empty
          * input or exits, so this always comes straight back. */
         vnu::wintask::run_all_slices();
@@ -965,7 +1037,23 @@ void run()
         }
 
         int key = vnu::kbd::poll_char();
-        if (key >= 0) {
+        if (key == vnu::kbd::K_F12) {
+            /* Step to the next resolution in the ladder. A desktop key
+             * rather than a command: the modes are a property of the
+             * display, so the key belongs to the desktop, and the same
+             * switch is open to any program through
+             * VNU_SYS_gfx_setmode. */
+            const vnu::vgfx::Mode* modes = vnu::vgfx::modes();
+            for (int i = 0; i < vnu::vgfx::MODE_COUNT; ++i) {
+                if (modes[i].width != vnu::vgfx::width() ||
+                    modes[i].height != vnu::vgfx::height())
+                    continue;
+                const vnu::vgfx::Mode& next =
+                    modes[(i + 1) % vnu::vgfx::MODE_COUNT];
+                (void)set_resolution(next.width, next.height);
+                break;
+            }
+        } else if (key >= 0) {
             if (dnd_active && key == 27) {
                 /* Esc cancels an in-flight drag-and-drop. */
                 dnd_active = false;
@@ -995,8 +1083,8 @@ void run()
             my += dy;
             if (mx < 0) mx = 0;
             if (my < 0) my = 0;
-            if (mx >= vnu::vgfx::WIDTH) mx = vnu::vgfx::WIDTH - 1;
-            if (my >= vnu::vgfx::HEIGHT) my = vnu::vgfx::HEIGHT - 1;
+            if (mx >= vnu::vgfx::width()) mx = vnu::vgfx::width() - 1;
+            if (my >= vnu::vgfx::height()) my = vnu::vgfx::height() - 1;
 
             bool left_down = (buttons & 0x01) != 0;
             bool just_pressed = left_down && !left_was_down;
@@ -1142,10 +1230,10 @@ void run()
                 vnu::wintask::Console* con = vnu::wintask::console(drag_h);
                 bool g = con && con->gfx;
                 int minw = g ? GFX_MIN_CLIENT_W + 8 : 20 * CELL_W + 8;
-                int maxw = g ? vnu::vgfx::WIDTH - 8 : CON_COLS * CELL_W + 8;
+                int maxw = g ? vnu::vgfx::width() - 8 : CON_COLS * CELL_W + 8;
                 int minh = g ? TITLE_H + GFX_MIN_CLIENT_H + 12
                              : TITLE_H + 3 * CELL_H + 12;
-                int maxh = g ? vnu::vgfx::HEIGHT - (PANEL_H + 8)
+                int maxh = g ? vnu::vgfx::height() - (PANEL_H + 8)
                              : TITLE_H + CON_ROWS * CELL_H + 12;
                 auto cw = [&](int v) -> int { return v < minw ? minw : (v > maxw ? maxw : v); };
                 auto ch = [&](int v) -> int { return v < minh ? minh : (v > maxh ? maxh : v); };
@@ -1235,8 +1323,8 @@ void run()
             if (!con)
                 continue;
             /* If the app flipped between text and gfx mode, re-fit the
-             * window to the new client area (e.g. a gfx app writing to
-             * fd 3, or one that never did). */
+             * window to the new client area (an app that asked for its
+             * shared canvas, or one that never did). */
             bool g = con->gfx;
             if (g != was_gfx[h]) {
                 was_gfx[h] = g;

@@ -36,7 +36,12 @@ root@vnu:~$ man ls
   `cpuinfo`, `meminfo`, `mounts`, `uptime`, `self/status`).
 - **GUI (VibeGraphics)**: the `gui` command launches a windowed environment
   with icons — terminal `term` (embedded vash), `vedit`, `calc`, `files`,
-  `prefs`.
+  `prefs`. The desktop background is a picture the kernel decodes
+  (`/etc/vnu/wallpaper`, set with `wallpaper` or from the prefs Wallpaper
+  pane). F12 steps the display through 640x480, 800x600, 1024x768 and
+  1280x1024 while the desktop runs; the choice is kept in
+  `/etc/vnuconfig/gfx.conf` and the next `gui` (and the next boot) come up
+  in it.
 - **Disks**: ATA driver + FAT16, syscalls `blkcount`/`install` — the kernel
   can write itself (GRUB + partition) to a disk, together with the host name
   the machine should boot with (see `/etc/hostname`).
@@ -57,6 +62,7 @@ External `/bin/*` (each a standalone binary):
 | `cp` `mv` `basename` `dirname` | file operations |
 | `seq` `man` `vedit` `ttytest` | number generation, docs, editor, terminal test |
 | `id` `whoami` `groups` `useradd` `passwd` `su` | accounts/identity tools (`su` starts a fresh shell as the user) |
+| `wallpaper` | show or set the desktop background (`/etc/vnu/wallpaper`) |
 | `vnu install` | write the VNU image to an ATA disk, naming the machine (root) |
 | `hello` (and `hello_cxx`) | userspace program examples |
 | `gui` | virtual command → VibeGraphics windowed environment (intercepted by the kernel in `execve`) |
@@ -178,9 +184,9 @@ Kernel output and userspace fd1/fd2 are mirrored to COM1, which is the log
 the assertions read.
 
 ```bash
-make test                      # 63 cases: vnu, /proc, uname, hostname, coreutils,
-                               #   man, /etc/vnu media, plus the interactive
-                               #   man pager session
+make test                      # 76 cases: vnu, /proc, uname, hostname, coreutils,
+                               #   man, /etc/vnu media and wallpaper, plus the
+                               #   interactive man pager and prefs sessions
 make test-gpu                  # the same suite on a virtio-gpu display
 make test-install              # vnu install onto a fresh disk, boot that disk,
                                #   and check the name it boots with

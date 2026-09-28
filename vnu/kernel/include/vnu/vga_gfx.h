@@ -14,10 +14,59 @@
 
 namespace vnu::vgfx {
 
-// A bigger desktop than the classic 320x200 mode-13h. The VBE linear
-// framebuffer (identity-mapped at 0xFD000000) is blitted to each frame.
-constexpr int WIDTH = 1024;
-constexpr int HEIGHT = 768;
+// The modes the desktop can be put into, smallest first. The backbuffer
+// is always allocated for the largest one, so a resolution change is a
+// register write and never a reallocation.
+//
+// Two trade-offs are baked into that "largest one" and are worth naming
+// before anyone raises MAX_MODE further:
+//
+//  - The backbuffer and the wallpaper frame are static 8-bpp arrays
+//    sized for MAX_MODE, resident in .bss for as long as the kernel
+//    runs: 1.25 MiB each at 1280x1024, so 2.5 MiB of pool that a
+//    machine can never get back. At 32bpp the same pair would be 10 MiB
+//    of .bss, which is why this driver stays 8-bpp. MAX_MODE is a real
+//    ceiling on RAM, not a free parameter: every step up costs a step
+//    of permanently reserved memory. When a mode stops being worth that
+//    (or the palette stops being the limiting factor), the fix is a
+//    mode-sized allocation from the PMM, not a bigger constant.
+//
+//  - An app's canvas is its own fixed size (480x340, see
+//    wintask::GFX_W/GFX_H), and the compositor scales it into the
+//    window. So a mode above 640x480 buys desktop room - more icons,
+//    more windows side by side - and not sharper apps: a window dragged
+//    larger than 480x340 is already a nearest-neighbour upscale, at
+//    every mode, 1024x768 included. Making the canvas follow the window
+//    means an Expose-style protocol (realloc the shared surface, rescale
+//    or clear its content, tell the app), which is its own change and
+//    deliberately not part of this one.
+struct Mode {
+    int width;
+    int height;
+};
+
+constexpr int MODE_COUNT = 4;
+constexpr Mode DEFAULT_MODE = {1024, 768};
+constexpr Mode MAX_MODE = {1280, 1024};
+
+// The supported ladder, smallest first; the index is what the desktop
+// cycles through, and what /proc/gfx lists.
+const Mode* modes();
+
+// width() x height() is the mode actually programmed right now.
+int width();
+int height();
+
+// One of modes(), or DEFAULT_MODE before anything changed it.
+bool mode_supported(int w, int h);
+
+// Program a new mode: the VBE registers, the palette, and the virtio-gpu
+// scanout if that driver holds the display. The backbuffer keeps its
+// contents, so the caller decides what to repaint (the desktop redraws
+// its whole frame every iteration anyway). Returns false, changing
+// nothing, for a size that is not in modes(). Legal with no desktop
+// running: the mode is what the next enter_gfx_mode() programs too.
+bool set_resolution(int w, int h);
 
 // VGA default 16-color palette indices (same as text-mode attributes).
 constexpr uint8_t COLOR_BLACK = 0;
@@ -37,9 +86,10 @@ constexpr uint8_t COLOR_LMAGENTA = 13;
 constexpr uint8_t COLOR_YELLOW = 14;
 constexpr uint8_t COLOR_WHITE = 15;
 
-// Switch from whatever text mode GRUB set up into WIDTHxHEIGHTx256.
-// Captures the current font + full register state first so exit_to_text()
-// can restore the exact mode the console was in.
+// Switch from whatever text mode GRUB set up into the current mode
+// (DEFAULT_MODE, or whatever set_resolution() last chose). Captures the
+// current font + full register state first so exit_to_text() can restore
+// the exact mode the console was in.
 // Bytes of glyph data this module keeps in the image (the 8x16 console
 // font captured from the VGA font plus the 8x8 variant derived from it),
 // for the /proc/images accounting.

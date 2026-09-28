@@ -4,6 +4,7 @@
 #include <vnu/pmm.h>
 #include <vnu/images.h>
 #include <vnu/vga_gfx.h>
+#include <vnu/wallpaper.h>
 #include <vnu/virtio_gpu.h>
 #include <vnu/install.h>
 #include <vnu/host.h>
@@ -552,18 +553,31 @@ void regen_synth(Node& n)
         a.str("\n");
         break;
     }
-    case SynthKind::Gfx:
+    case SynthKind::Gfx: {
         /* The display in use: the 8-bit VGA framebuffer unless a
          * virtio-gpu/virtio-vga device took over, plus the mode the
          * driver programs. */
         a.str("driver\t");
         a.str(vnu::virtio_gpu::active() ? "virtio-gpu" : "vga");
         a.str("\nresolution\t");
-        a.num(static_cast<uint32_t>(vnu::vgfx::WIDTH));
+        a.num(static_cast<uint32_t>(vnu::vgfx::width()));
         a.str("x");
-        a.num(static_cast<uint32_t>(vnu::vgfx::HEIGHT));
+        a.num(static_cast<uint32_t>(vnu::vgfx::height()));
         a.str("\nbpp\t8\n");
+        /* The modes this build can switch between, so a script can see
+         * the whole ladder and not just where it stands on it. */
+        a.str("modes\t");
+        const vnu::vgfx::Mode* modes = vnu::vgfx::modes();
+        for (int i = 0; i < vnu::vgfx::MODE_COUNT; ++i) {
+            if (i)
+                a.str(",");
+            a.num(static_cast<uint32_t>(modes[i].width));
+            a.str("x");
+            a.num(static_cast<uint32_t>(modes[i].height));
+        }
+        a.str("\n");
         break;
+    }
     case SynthKind::Boot: {
         /* Whether this machine also has VNU on a disk. The root
          * filesystem itself is always the in-RAM VFS; an install only
@@ -665,6 +679,28 @@ void init()
     if (resolv) {
         node_set_cstr(*resolv, "nameserver 1.1.1.1\n");
         resolv->perm = 0644u;
+    }
+
+    /* --- machine settings ---
+     * /etc/vnuconfig holds what the kernel keeps for itself: the
+     * display mode in gfx.conf, which the desktop reads before it
+     * programs the card and rewrites on every change (vnu::gfxconf),
+     * and, per the roadmap, the vsshd daemon config beside it. Seeded
+     * with the built-in default mode, so a machine that never changed
+     * it still has a readable setting to read. */
+    if (add("/etc/vnuconfig", true)) {
+        char cfg[64];
+        Appender a{cfg, sizeof(cfg), 0};
+        a.str("mode ");
+        a.num(static_cast<uint32_t>(vnu::vgfx::DEFAULT_MODE.width));
+        a.str("x");
+        a.num(static_cast<uint32_t>(vnu::vgfx::DEFAULT_MODE.height));
+        a.str("\n");
+        auto* gc = add("/etc/vnuconfig/gfx.conf", false);
+        if (gc) {
+            node_set_cstr(*gc, cfg);
+            gc->perm = 0644u;
+        }
     }
 
     /* --- multiuser account database ---

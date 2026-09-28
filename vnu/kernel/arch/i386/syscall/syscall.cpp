@@ -14,6 +14,8 @@
 #include <vnu/net.h>
 #include <vnu/tcp.h>
 #include <vnu/audio.h>
+#include <vnu/wallpaper.h>
+#include <vnu/vga_gfx.h>
 
 struct TrapFrame {
     std::uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
@@ -292,7 +294,12 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
                       gui_path[5] == 'g' && gui_path[6] == 'u' && gui_path[7] == 'i' &&
                       gui_path[8] == '\0';
         if (is_gui) {
-            vnu::gui::run();
+            /* argv is in ecx (see the VNU_SYS_wintask branch above):
+             * "gui <app>" opens that app's window on startup. */
+            char* const* gui_argv = reinterpret_cast<char* const*>(tf->ecx);
+            const char* open_app =
+                (gui_argv && gui_argv[0] && gui_argv[1]) ? gui_argv[1] : nullptr;
+            vnu::gui::run(open_app);
             bool back = (vnu::proc::current() && vnu::proc::current()->ppid == 0);
             vnu::proc::sys_exit(0);
             if (back) {
@@ -512,6 +519,28 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
                 *rp = rows;
             if (cp)
                 *cp = cols;
+            return 0;
+        }
+
+    case VNU_SYS_gfx_setmode:
+        /* Put the display into the given mode (ebx = width, ecx =
+         * height). Only the driver's ladder is accepted; the desktop
+         * coordinator does the re-layout, the wallpaper re-stretch and
+         * the /etc/vnuconfig/gfx.conf write around it (see gui.cpp and
+         * ABI.md). Returns 0 or -VNU_EINVAL. */
+        return static_cast<std::uint32_t>(vnu::gui::set_resolution(
+            static_cast<int>(tf->ebx), static_cast<int>(tf->ecx)));
+
+    case VNU_SYS_gfx_getmode:
+        /* The mode in use (ebx = uint32* width, ecx = uint32* height).
+         * Either pointer may be null, like tty_size. */
+        {
+            auto* wp = reinterpret_cast<std::uint32_t*>(tf->ebx);
+            auto* hp = reinterpret_cast<std::uint32_t*>(tf->ecx);
+            if (wp)
+                *wp = static_cast<std::uint32_t>(vnu::vgfx::width());
+            if (hp)
+                *hp = static_cast<std::uint32_t>(vnu::vgfx::height());
             return 0;
         }
 

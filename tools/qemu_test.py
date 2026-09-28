@@ -67,6 +67,7 @@ SPECIAL_KEYS = {
     "<up>": "up", "<down>": "down", "<left>": "left", "<right>": "right",
     "<home>": "home", "<end>": "end", "<pgup>": "pgup", "<pgdn>": "pgdn",
     "<esc>": "esc", "<ret>": "ret", "<spc>": "spc", "<tab>": "tab",
+    "<f12>": "f12",
 }
 
 
@@ -389,6 +390,36 @@ SUITE = [
      [r"^\d+ \d+ 4436 /etc/vnu/wallpaper$"], []),
     ("media-wall-shipped", "wc /etc/vnu/wallpaper.default",
      [r"^\d+ \d+ 4436 /etc/vnu/wallpaper\.default$"], []),
+    # The wallpaper is a file the kernel decodes on request, so the
+    # desktop background can be set and read back from the shell too.
+    ("wallpaper-show", "wallpaper", [r"^none$"], []),
+    ("wallpaper-list", "wallpaper --list",
+     [r"^sunset\.png$", r"^logo\.jpg  \(jpeg: the kernel cannot decode it\)$",
+      r"^/etc/vnu/wallpaper\.default  \(the desktop VNU ships with\)$"], []),
+    ("wallpaper-bad-jpeg", "wallpaper /etc/vnu/pics/logo.jpg",
+     [r"^wallpaper: /etc/vnu/pics/logo\.jpg: not a usable wallpaper"], []),
+    ("wallpaper-missing", "wallpaper /etc/vnu/pics/nope.png",
+     [r"^wallpaper: /etc/vnu/pics/nope\.png: no such file$"], []),
+    # A file that is not an image at all: the kernel must refuse it and
+    # leave the desktop alone (vash has no ';', so two cases).
+    ("wallpaper-notimage-make", "echo hello > /tmp/notapic.png",
+     [], [r"[a-z]"]),
+    ("wallpaper-notimage-read", "cat /tmp/notapic.png", [r"^hello$"], []),
+    ("wallpaper-text-rejected", "wallpaper /tmp/notapic.png",
+     [r"not a usable wallpaper"], []),
+    ("wallpaper-set", "wallpaper /etc/vnu/pics/sunset.png",
+     [r"^sunset\.png$"], []),
+    ("wallpaper-live", "wallpaper", [r"^sunset\.png$"], []),
+    ("wallpaper-file", "wc /etc/vnu/wallpaper",
+     [r"^\d+ \d+ 2733 /etc/vnu/wallpaper$"], []),
+    ("wallpaper-proc", "cat /proc/gfx",
+     [r"^wallpaper\tsunset\.png$"], []),
+    ("wallpaper-default", "wallpaper /etc/vnu/wallpaper.default",
+     [r"^wallpaper\.default$"], []),
+    ("wallpaper-back", "wallpaper", [r"^wallpaper\.default$"], []),
+    ("wallpaper-help", "wallpaper --help",
+     [r"^Usage: wallpaper", r"-l, --list", r"/etc/vnu/wallpaper"], []),
+
     # ...and nothing is left at the root, where the pack used to be.
     ("media-gone-pics", "ls /pics", [r"^ls: cannot open /pics$"], []),
     ("media-gone-sounds", "ls /sounds", [r"^ls: cannot open /sounds$"], []),
@@ -545,6 +576,523 @@ def run_man_pager(guest, result, verbose, timeout=60.0):
     return True
 
 
+def run_prefs_wallpaper(guest, result, verbose, timeout=60.0):
+    """Drive the Wallpaper pane of prefs and check the result from the shell.
+
+    prefs is a gfx-windowed app, so nothing it draws reaches the serial
+    log - but what it does to the machine does: the pane is driven with
+    the arrows and Enter exactly as a user would, and the background it
+    picked is then read back with `wallpaper`. The window is not on
+    screen here (no desktop is running), which is precisely why the
+    assertion is about the effect and not the pixels.
+    """
+    print("==> prefs wallpaper pane (interactive)")
+    problems = []
+    out, _ = guest.sh("wallpaper -l", timeout)
+    entries = [line for line in out.splitlines() if line.strip()]
+    if len(entries) < 2:
+        problems.append("wallpaper --list offered nothing to pick (%r)" % out)
+        result.failed.append(("prefs-wallpaper", out, problems))
+        print("FAIL %-18s %s" % ("prefs-wallpaper", "; ".join(problems)))
+        return False
+
+    # Start from a background the pane is not going to pick, so the
+    # check below cannot pass on whatever was already in place.
+    out, _ = guest.sh("wallpaper /etc/vnu/pics/sunset.png", timeout)
+    check("prefs-wallpaper-setup", out, [r"^sunset\.png$"], [],
+          result, verbose)
+
+    frm = len(guest.tail(0))
+    guest._type("/apps/prefs/bin\n")
+    # A windowed app prints nothing, so there is nothing to wait for;
+    # the pause is for the process to start and draw its first frame.
+    time.sleep(2.0)
+    guest._type("jjjj")                       # About, Memory, Mounts, CPU, Wallpaper
+    guest._type("<down>" * len(entries))      # past the pack, onto the shipped desktop
+    guest._type("\n")                        # apply
+    time.sleep(0.5)
+    # vgfx_poll() needs a byte after a bare Esc to make a key of it, so
+    # the first one is swallowed - the same reason the desktop wraps its
+    # Esc as a mouse button.
+    guest._type("<esc><esc>")
+    guest.wait_prompt(timeout, frm)
+
+    out, _ = guest.sh("wallpaper", timeout)
+    check("prefs-wallpaper", out, [r"^wallpaper\.default$"],
+          [r"^none$"], result, verbose)
+    if problems:
+        result.failed.append(("prefs-wallpaper", "", problems))
+        print("FAIL %-18s %s" % ("prefs-wallpaper", "; ".join(problems)))
+        return False
+    return True
+
+
+def run_gfx_surface(guest, result, verbose, timeout=60.0):
+    """Check that a windowed app's pixels really reach the screen.
+
+    Every other check asserts on the serial log, but a gfx window is
+    exactly the case where that proves nothing: the app draws into a
+    buffer and the kernel hands the very same pages to the compositor,
+    so nothing is ever written to the terminal. So this one looks at the
+    screen instead - QEMU's screendump, compared frame against frame.
+
+    The harness has no mouse (input events never make it through to the
+    guest's PS/2 mouse), so the app is opened the way a user without one
+    would: `gui <app>` starts the desktop with that app already up. The
+    bare desktop is screenshotted first, in a session of its own, to have
+    something to compare the window against.
+    """
+    print("==> gfx window pixels (screendump)")
+    shotdir = tempfile.mkdtemp(prefix="vnu-shot-")
+    problems = []
+    try:
+        def shot(name):
+            path = os.path.join(shotdir, name)
+            return settled_shot(guest, path)
+
+        # 1. The shell's text console, 720x400.
+        before = shot("before.ppm")
+
+        # 2. The bare desktop: backdrop and panel, no window.
+        guest._type("gui\n")
+        time.sleep(3.0)
+        bare = shot("bare.ppm")
+        if not esc_to_shell(guest, timeout):
+            problems.append("the desktop did not give the console back")
+
+        # 3. The same desktop with a window in it.
+        guest._type("gui picview\n")
+        time.sleep(5.0)
+        open_ = shot("open.ppm")
+        if not esc_to_shell(guest, timeout):
+            problems.append("the window did not close, or the desktop did "
+                            "not give the console back")
+        after = shot("after.ppm")
+
+        for name, frame in (("bare", bare), ("open", open_), ("after", after)):
+            if (frame[0], frame[1]) != (bare[0], bare[1]) and name != "after":
+                problems.append("%s is %dx%d, the desktop is %dx%d"
+                                % (name, frame[0], frame[1],
+                                   bare[0], bare[1]))
+        if (before[0], before[1]) != (after[0], after[1]):
+            problems.append("the console is %dx%d after the desktop, was "
+                            "%dx%d before it"
+                            % (after[0], after[1], before[0], before[1]))
+
+        # The check is spatial, not about colours: picview shows the very
+        # picture the desktop draws as its backdrop, so both frames hold
+        # the same palette and only the *places* differ. So look for what
+        # a window looks like on screen - a solid block of changed pixels,
+        # as wide as a 480x340 canvas scaled to a window, and hundreds of
+        # rows deep. The frame and title bar are the compositor's own work
+        # and ~20 rows tall, so a band that deep can only be the app's
+        # canvas: a window that fell back to the text path, or drew into a
+        # private buffer, leaves a blank rectangle instead.
+        rows = changed_rows(open_[2], bare[2], open_[0], open_[1])
+        top, bottom = longest_run(rows, min_changed=300)
+        if bottom - top < 200:
+            problems.append("the window changed %d rows down to 300 pixels "
+                            "each, too few for a 480x340 canvas: the app's "
+                            "pixels never reached the screen"
+                            % (bottom - top))
+        if not top <= open_[1] // 2 <= bottom:
+            problems.append("the changed band is rows %d..%d, not where a "
+                            "centred window goes" % (top, bottom))
+        else:
+            # And it has to be a *picture* in there, not one flat colour:
+            # the middle scanline of the real canvas changes colour ~70
+            # times, a blank window's client area a handful of times.
+            mid = (top + bottom) // 2
+            drawn = transitions(open_[2], open_[0], mid)
+            if drawn < 25:
+                problems.append("the window's middle row holds %d colour "
+                                "changes: a blank canvas, not the app's "
+                                "picture" % drawn)
+        # The console is bracketed around two desktop sessions, and the
+        # harness types a command for each one, so compare it allowing
+        # for the lines that scrolled (scrolled_diff) rather than pixel
+        # for pixel.
+        diff = scrolled_diff(before, after)
+        if diff > 20000:
+            problems.append("the console did not come back the way it was "
+                            "(%d pixels still differ)" % diff)
+    except (TimeoutError, RuntimeError, OSError) as exc:
+        problems.append(str(exc))
+
+    if problems:
+        keep_frames(shotdir, "gfx-surface")
+    shutil.rmtree(shotdir, ignore_errors=True)
+    if problems:
+        result.failed.append(("gfx-surface", "", problems))
+        print("FAIL %-18s %s" % ("gfx-surface", "; ".join(problems)))
+        return False
+    result.passed += 1
+    if verbose:
+        print("ok   %-18s" % "gfx-surface")
+    return True
+
+
+# The taskbar's height in pixels, as gui.cpp draws it. The checks that
+# measure a window start below it: the panel is not flat (a clock, a
+# button per window), so a bare and a windowed desktop always differ in
+# it, whatever the desktop did.
+PANEL_H = 34
+
+# The mode ladder the driver offers, and the one a fresh boot starts in.
+MODE_DEFAULT = (1024, 768)
+MODE_TOP = (1280, 1024)
+MODE_SMALL = (640, 480)
+
+
+def frame_is_desktop(frame):
+    """Whether a frame holds a drawn desktop rather than a blank or
+    garbled screen. Two things say so, and both are cheap: the taskbar is
+    one flat band of its own colour, so the top corners match, and the
+    desktop below it is not a single colour. A flat fill fails the second
+    test, uninitialised video memory the first."""
+    width, height, px = frame
+
+    def at(x, y):
+        base = y * width * 3 + x * 3
+        return px[base:base + 3]
+
+    step_x = max(1, width // 40)
+    step_y = max(1, (height - PANEL_H) // 40)
+    seen = {at(x, y) for y in range(PANEL_H, height, step_y)
+            for x in range(0, width, step_x)}
+    return at(2, 2) == at(width - 3, 2) and len(seen) >= 6
+
+
+def check_window_inside(problems, when, frame, bare):
+    """The window drawn in `frame` is inside it, and not under the panel."""
+    if frame is None or bare is None:
+        return
+    if (frame[0], frame[1]) != (bare[0], bare[1]):
+        return          # a size mismatch is already reported
+    box = changed_bbox(frame, bare, frame[0], PANEL_H)
+    if box is None:
+        problems.append("no window on screen %s" % when)
+        return
+    x0, y0, x1, y1 = box
+    if x0 < 0 or y0 < PANEL_H or x1 >= frame[0] or y1 >= frame[1]:
+        problems.append("the window %s is at %s, outside the %dx%d screen "
+                        "below the %d px taskbar"
+                        % (when, box, frame[0], frame[1], PANEL_H))
+
+
+def run_gfx_resolution(guest, result, verbose, timeout=60.0):
+    """Check that the display really changes mode while the desktop runs.
+
+    Resolution is the one feature whose result is not in the serial log
+    at all: it is the size of the frame QEMU hands out, so this looks at
+    screendumps, the way run_gfx_surface does. F12 steps to the next
+    mode in the ladder (there is no userspace command for it - see
+    ABI.md), which is also the only way a session with no program in it
+    can reach the feature.
+
+    Covered, in the order they would bite a user: the mode really changes
+    on screen; the choice is written to /etc/vnuconfig/gfx.conf; the next
+    `gui` comes up in it; and a window that no longer fits the new screen
+    is still drawn inside it.
+    """
+    print("==> resolution switching (F12, screendump)")
+    shotdir = tempfile.mkdtemp(prefix="vnu-mode-")
+    problems = []
+    try:
+        def shot(name):
+            path = os.path.join(shotdir, name)
+            return settled_shot(guest, path)
+
+        def step_to(mode, name):
+            """F12 until the frame is `mode`, then check what is on it."""
+            for _ in range(8):
+                frame = shot(name)
+                if (frame[0], frame[1]) == mode:
+                    if not frame_is_desktop(frame):
+                        problems.append("at %dx%d the screen is not a drawn "
+                                        "desktop" % mode)
+                    return frame
+                guest._type("<f12>")
+                time.sleep(1.5)
+            problems.append("F12 never reached %dx%d" % mode)
+            return None
+
+        # A fresh image starts in the built-in default, and says so in
+        # the file the desktop reads it from.
+        output, _ = guest.sh("cat /etc/vnuconfig/gfx.conf", timeout)
+        check("mode-config-boot", output, [r"^mode %dx%d$" % MODE_DEFAULT],
+              [], result, verbose)
+
+        guest._type("gui\n")
+        time.sleep(3.0)
+        first = shot("first.ppm")
+        if (first[0], first[1]) != MODE_DEFAULT:
+            problems.append("the desktop came up %dx%d, the configured "
+                            "default is %dx%d"
+                            % (first[0], first[1], MODE_DEFAULT[0],
+                               MODE_DEFAULT[1]))
+
+        # The ladder's top mode, with the mode from the config file read
+        # back on the way in - the persistence half of the feature. This
+        # is a bare desktop, so the frame is kept: the window check at the
+        # end needs a windowless screen of the same size to diff against,
+        # and a smaller mode's screen will not do.
+        bare_top = step_to(MODE_TOP, "top.ppm")
+        if not esc_to_shell(guest, timeout):
+            problems.append("the desktop did not give the console back")
+        output, _ = guest.sh("cat /proc/gfx", timeout)
+        check("mode-proc", output,
+              [r"^resolution\t%dx%d$" % MODE_TOP,
+               r"^modes\t640x480,800x600,1024x768,1280x1024$"], [], result,
+              verbose)
+        output, _ = guest.sh("cat /etc/vnuconfig/gfx.conf", timeout)
+        check("mode-config", output, [r"^mode %dx%d$" % MODE_TOP], [],
+              result, verbose)
+
+        guest._type("gui\n")
+        time.sleep(3.0)
+        again = shot("again.ppm")
+        if (again[0], again[1]) != MODE_TOP:
+            problems.append("the second desktop came up %dx%d, the mode "
+                            "recorded in gfx.conf is %dx%d"
+                            % (again[0], again[1], MODE_TOP[0], MODE_TOP[1]))
+        if not esc_to_shell(guest, timeout):
+            problems.append("the second desktop did not give the console back")
+
+        # A window has to survive the change, not just the screen: the
+        # bare desktop at the smallest mode is the reference, and the
+        # bounding box of what differs from it is the window. It must sit
+        # inside the frame and below the taskbar - a window left at its
+        # old coordinates would be off the edge, or under the panel.
+        # The ladder wraps, so stepping is by size, not by a count.
+        guest._type("gui\n")
+        time.sleep(4.0)
+        step_to(MODE_SMALL, "small-bare.ppm")
+        if not esc_to_shell(guest, timeout):
+            problems.append("the desktop did not give the console back")
+        bare_small = shot("small-bare.ppm")
+
+        guest._type("gui calc\n")
+        time.sleep(5.0)
+        small = step_to(MODE_SMALL, "small-win.ppm")
+        if small and not frame_is_desktop(small):
+            problems.append("at %dx%d with a window open the screen is not "
+                            "a drawn desktop" % (small[0], small[1]))
+        check_window_inside(problems, "at the smallest mode", small,
+                            bare_small)
+        # And back up: the same window on the largest screen, where it
+        # must not stay pinned to a corner it was dragged to.
+        top = step_to(MODE_TOP, "top-win.ppm")
+        check_window_inside(problems, "after a change back to the top mode",
+                            top, bare_top)
+        if not esc_to_shell(guest, timeout):
+            problems.append("the window did not close, or the desktop did "
+                            "not give the console back")
+    except (TimeoutError, RuntimeError, OSError) as exc:
+        problems.append(str(exc))
+
+    if problems:
+        keep_frames(shotdir, "gfx-resolution")
+    shutil.rmtree(shotdir, ignore_errors=True)
+    if problems:
+        result.failed.append(("gfx-resolution", "", problems))
+        print("FAIL %-18s %s" % ("gfx-resolution", "; ".join(problems)))
+        return False
+    result.passed += 1
+    if verbose:
+        print("ok   %-18s" % "gfx-resolution")
+    return True
+
+
+def esc_to_shell(guest, timeout, tries=4):
+    """Leave the desktop and wait for the shell back.
+
+    Esc is the desktop's own "close the front window, and quit when the
+    last one is gone". A vgfx reader wants a byte after a bare Esc to
+    make a key of it, so the first press can be swallowed - hence the
+    retries. Waiting on the prompt from the current offset matters: the
+    log still holds every prompt typed before the desktop ever started.
+    """
+    for _ in range(tries):
+        frm = len(guest.tail(0))
+        guest._type("<esc>")
+        try:
+            guest.wait_prompt(timeout, frm)
+            return True
+        except TimeoutError:
+            continue
+    return False
+
+
+def read_ppm(path):
+    """(width, height, rgb bytes) of a binary PPM, as screendump writes."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:2] != b"P6":
+        raise RuntimeError("%s is not a binary PPM" % path)
+    fields, i = [], 2
+    while len(fields) < 3:
+        while data[i:i + 1].isspace():
+            i += 1
+        if data[i:i + 1] == b"#":
+            i = data.index(b"\n", i) + 1
+            continue
+        j = i
+        while not data[j:j + 1].isspace():
+            j += 1
+        fields.append(int(data[i:j]))
+        i = j
+    width, height, _maxval = fields
+    return width, height, data[i + 1:i + 1 + width * height * 3]
+
+
+def colours(px):
+    """The set of RGB triples in a frame."""
+    return set(zip(px[0::3], px[1::3], px[2::3]))
+
+
+def keep_frames(shotdir, name):
+    """Copy the frames of a failed graphics check where they can be read.
+
+    A screendump is the only evidence those checks have, and it goes away
+    with the scratch directory, so a failure that only shows up in a full
+    run is unrepeatable without it. The copy is named after the check.
+    """
+    keep = "/tmp/vnu-%s-frames" % name
+    shutil.rmtree(keep, ignore_errors=True)
+    shutil.copytree(shotdir, keep)
+    print("    frames kept in %s" % keep)
+    return keep
+
+
+def settled_shot(guest, path, budget=2.0, quiet=200):
+    """Screendump into path, once the display has stopped changing.
+
+    A dump is a snapshot of what QEMU has repainted so far, and VGA text
+    mode redraws its cells over a few refreshes, so a dump taken the
+    instant the desktop gives the console back catches a half-drawn
+    screen and reads as a console that came back wrong. So keep dumping
+    until two frames in a row agree. The budget is small (a blinking
+    cursor is worth a couple of dozen pixels, hence `quiet`) and a mode
+    switch that really does stall the guest stays visible: two seconds
+    is far more than a repaint needs, and the caller still gets whatever
+    was on screen if the budget runs out.
+    """
+    prev = path + ".prev"
+    frame = None
+    deadline = time.time() + budget
+    while True:
+        guest.qmp.hmp("screendump " + prev)
+        time.sleep(0.2)
+        guest.qmp.hmp("screendump " + path)
+        a, frame = read_ppm(prev), read_ppm(path)
+        if (a[0], a[1]) == (frame[0], frame[1]) and \
+                diff_pixels(a[2], frame[2]) <= quiet:
+            return frame
+        if time.time() >= deadline:
+            return frame
+
+
+def diff_pixels(a, b):
+    """How many pixels differ between two frames of the same size."""
+    return sum(1 for k in range(0, min(len(a), len(b)), 3)
+               if a[k:k + 3] != b[k:k + 3])
+
+
+# The text cell height in the one text mode the kernel programs, 720x400
+# as 25 rows of 16. Only the scrolled-console comparison needs it, and
+# only to step a line at a time.
+TEXT_ROW_H = 16
+
+
+def scrolled_diff(before, after, lines=4):
+    """How much a text console changed, allowing for what scrolled.
+
+    The console frames a desktop session is bracketed by are not taken at
+    the same point in the same scrollback: between them the harness types
+    the command that starts the desktop, and a command's echo is a line,
+    so the console has legitimately scrolled by then. A full screen of
+    text shifted one line looks like a wholesale change even though every
+    glyph came back, so compare the frames at a few line offsets and take
+    the smallest difference - which is what says whether the console came
+    back the way it was. Anything actually broken (a garbled font, the
+    desktop still up) differs at every offset.
+    """
+    if (before[0], before[1]) != (after[0], after[1]):
+        return diff_pixels(after[2], before[2])
+    width, height = before[0], before[1]
+    best = None
+    for step in range(0, lines + 1):
+        top = step * TEXT_ROW_H
+        if top >= height:
+            break
+        span = (height - top) * width * 3
+        diff = diff_pixels(before[2][top * width * 3:], after[2][:span])
+        if best is None or diff < best:
+            best = diff
+    return best
+
+
+def changed_rows(a, b, width, height):
+    """Per-row count of pixels that differ between two frames."""
+    counts = []
+    for y in range(height):
+        base = y * width * 3
+        counts.append(sum(1 for x in range(width)
+                          if a[base + x * 3:base + x * 3 + 3]
+                          != b[base + x * 3:base + x * 3 + 3]))
+    return counts
+
+
+def changed_bbox(a, b, width, y_from):
+    """(x0, y0, x1, y1) of the pixels that differ between two frames, from
+    row `y_from` down. A bounding box is what a window is: the frame
+    around a desktop is the whole screen, so a box is how a check can
+    tell "the app drew here" from "something changed"."""
+    xs0 = ys0 = None
+    x1 = y1 = -1
+    for y in range(y_from, a[1]):
+        base = y * width * 3
+        for x in range(width):
+            if a[2][base + x * 3:base + x * 3 + 3] != \
+               b[2][base + x * 3:base + x * 3 + 3]:
+                if xs0 is None:
+                    xs0, ys0 = x, y
+                x1, y1 = x, y
+    if xs0 is None:
+        return None
+    return xs0, ys0, x1, y1
+
+
+def longest_run(counts, min_changed):
+    """First and last row of the longest run of rows with >= min_changed
+    differences. Returns (-1, -1) when no row qualifies."""
+    best_top = best_bottom = -1
+    top = None
+    for y, n in enumerate(list(counts) + [0]):
+        if n >= min_changed:
+            if top is None:
+                top = y
+        elif top is not None:
+            if y - top > best_bottom - best_top:
+                best_top, best_bottom = top, y - 1
+            top = None
+    return best_top, best_bottom
+
+
+def transitions(px, width, y):
+    """How often the colour changes along one scanline - a cheap way to
+    tell a drawn canvas from a rectangle of one flat colour."""
+    base = y * width * 3
+    prev, changes = None, 0
+    for x in range(width):
+        colour = px[base + x * 3:base + x * 3 + 3]
+        if prev is not None and colour != prev:
+            changes += 1
+        prev = colour
+    return changes
+
+
 # The name the installed system is given, and therefore the one its
 # prompt shows on the next boot. A dash and a digit are in it on
 # purpose: both are legal and the harness must survive them.
@@ -679,6 +1227,12 @@ def main():
         for name, command, _, _ in SUITE:
             print("%-18s %s" % (name, command))
         print("%-18s %s" % ("man-pager", "man vcc (keys, then q)"))
+        print("%-18s %s" % ("prefs-wallpaper",
+                            "/apps/prefs/bin (arrows, enter, esc)"))
+        print("%-18s %s" % ("gfx-surface",
+                            "gui picview (screendump, esc)"))
+        print("%-18s %s" % ("gfx-resolution",
+                            "gui + F12 mode steps (screendump)"))
         print("%-18s %s" % ("install-write", "vnu install 0 vnu-test"))
         print("%-18s %s" % ("install-wizard", "vnu install (keys)"))
         return 0
@@ -692,11 +1246,16 @@ def main():
             print("missing host tool: %s" % tool, file=sys.stderr)
             return 1
 
+    # The interactive checks are functions, not SUITE rows, so a filter
+    # that names one of them selects no shell case and still runs.
+    interactive = ("man-pager", "prefs-wallpaper", "gfx-surface",
+                   "gfx-resolution")
     cases = SUITE
     if args.only:
         cases = [c for c in SUITE
                  if any(sel in c[0] for sel in args.only)]
-        if not cases:
+        if not cases and not any(sel in name for name in interactive
+                                 for sel in args.only):
             print("no case matches %s" % args.only, file=sys.stderr)
             return 1
 
@@ -709,6 +1268,18 @@ def main():
                 if not args.only or any(sel in "man-pager"
                                         for sel in args.only):
                     run_man_pager(guest, result, args.verbose, args.timeout)
+                if not args.only or any(sel in "prefs-wallpaper"
+                                        for sel in args.only):
+                    run_prefs_wallpaper(guest, result, args.verbose,
+                                        args.timeout)
+                if not args.only or any(sel in "gfx-surface"
+                                        for sel in args.only):
+                    run_gfx_surface(guest, result, args.verbose,
+                                    args.timeout)
+                if not args.only or any(sel in "gfx-resolution"
+                                        for sel in args.only):
+                    run_gfx_resolution(guest, result, args.verbose,
+                                       args.timeout)
         if args.wizard_only:
             run_install_wizard(args.iso, result, args.verbose,
                                args.timeout, workdir)

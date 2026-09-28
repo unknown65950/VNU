@@ -16,6 +16,7 @@
 #include <vlibc/vgfx_font.h>
 #include <vlibc/unistd.h>
 #include <vlibc/sys/syscall.h>
+#include <vnu/abi.h>
 
 static unsigned char fb[VGFX_W * VGFX_H];
 
@@ -149,6 +150,18 @@ static char drop_buf[DROP_BUF];
 int vnu_dnd_declare(const char* path)
 {
     return (int)syscall(VNU_SYS_dnd_declare, (long)path);
+}
+
+void vgfx_get_resolution(int* w, int* h)
+{
+    /* Pointers are the caller's, and the kernel validates them like any
+     * other; a null one is allowed on both sides. */
+    (void)syscall(VNU_SYS_gfx_getmode, (long)w, (long)h);
+}
+
+int vgfx_set_resolution(int w, int h)
+{
+    return (int)syscall(VNU_SYS_gfx_setmode, (long)w, (long)h);
 }
 
 int vgfx_poll(vgfx_event_t* ev)

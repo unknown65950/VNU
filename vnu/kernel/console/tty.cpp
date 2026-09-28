@@ -327,4 +327,32 @@ void get_size(uint16_t* r, uint16_t* c)
         *c = W;
 }
 
+/* The text plane is not a separate piece of hardware: on a VGA the
+ * characters live in the same VRAM a graphics mode uses as its
+ * framebuffer, and every mode VNU can program here is wider than the
+ * 128 KiB legacy window 0xA0000-0xBFFFF, so the desktop's first present
+ * writes over the console. The screen is therefore kept aside on the
+ * way into graphics mode and put back on the way out, which is the
+ * whole of what it takes for the shell to be where the user left it
+ * when a graphical program ends. */
+uint16_t g_saved_screen[W * H];
+bool g_screen_saved = false;
+
+void save_screen()
+{
+    for (size_t i = 0; i < W * H; ++i)
+        g_saved_screen[i] = vga[i];
+    g_screen_saved = true;
+}
+
+void restore_screen()
+{
+    if (!g_screen_saved)
+        return;
+    for (size_t i = 0; i < W * H; ++i)
+        vga[i] = g_saved_screen[i];
+    cursor_dirty = true;
+    flush_cursor();
+}
+
 } // namespace vnu::tty

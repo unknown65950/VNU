@@ -73,6 +73,11 @@ must never be renumbered.
 | 58 | sleep |
 | 59 | tty_size |
 
+| 60 | wallpaper |
+| 61 | gfx_surface |
+| 62 | gfx_setmode |
+| 63 | gfx_getmode |
+
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
 with `-1` leaves a field unchanged; only root may chown.
@@ -115,6 +120,24 @@ with `-1` leaves a field unchanged; only root may chown.
   is a fixed 80x25 today, so a full-screen program (the `man` pager) asks
   for the numbers through this call instead of hardcoding them: when the
   mode changes, only the kernel changes.
+- `gfx_setmode(ebx=w, ecx=h)` — put the display into `w` x `h`. Only the
+  sizes in the ladder are accepted; the kernel's list is `640x480`,
+  `800x600`, `1024x768` (the default) and `1280x1024`, and `/proc/gfx`
+  reports it as `modes`. Programs the VBE registers, re-arms the virtio-gpu
+  scanout when that driver owns the display, re-stretches the wallpaper,
+  moves the desktop's windows back inside the new screen and records the
+  choice in `/etc/vnuconfig/gfx.conf`, which the next boot reads before
+  programming the card. Nothing is closed and no window loses its
+  contents; a window too big for the new screen shrinks to fit it.
+  Returns 0, or `-VNU_EINVAL` for a size that is not in the ladder. The
+  desktop also binds F12 to step to the next mode, for the same reason
+  `gui` is a command and not a build flag: with no userspace at all,
+  there would otherwise be no way to reach this.
+- `gfx_getmode(ebx=uint32*, ecx=uint32*)` — writes the mode in use to the
+  two caller pointers, each a `uint32_t` pixel count; either may be
+  null, as with `tty_size`. Both drivers answer the same, whether the
+  mode was reached through the syscall, the F12 key or the config file,
+  so a program can ask where it stands without parsing `/proc/gfx`.
 - `ping(ebx, ecx)` — `ebx` is the target IPv4 address as a
   big-endian uint32 (10.0.2.2 = `0x0A000202`), `ecx` the timeout in
   milliseconds (kernel clamps to 10..2000).

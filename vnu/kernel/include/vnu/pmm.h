@@ -6,7 +6,8 @@
 // own memory: the kernel image sits at 1-3 MiB and the (identity-mapped)
 // BSS -- wallpaper buffers, embedded userspace blobs, the pmm bitmap,
 // the identity page tables, the kernel page directory, the TCP socket
-// buffers -- extends to ~0xA00000 (__bss_end). VFS file contents are no
+// buffers -- starts at 0xA00000 and extends to ~0xF94000 (__bss_end)
+// with the desktop's largest-mode buffers in it. VFS file contents are no
 // longer a fixed 128*64 KiB BSS array either: each node's bytes live in
 // this same pool as a growable contiguous run (see vfs.cpp node_reserve,
 // with the /etc/vnu sound clips and picture pack mounted from it).
@@ -17,12 +18,22 @@
 // created process page directory (triple fault on the first context
 // switch). So the pool starts past __bss_end; bump it whenever
 // __bss_end grows.
+//
+// The pool used to be 0x01700000..0x01F00000 - 8 MiB - which cannot
+// hold what a resolution change needs: the top mode's scanout alone is
+// 5 MiB, and a desktop with one window open already spends 3.3 MiB of
+// the pool on its own surfaces, so switching up with a window open
+// failed for want of 332 KiB. Nothing was living in the 7.6 MiB gap
+// between __bss_end and the old base, and QEMU's usable RAM reaches
+// 0x1F7F000, so the pool now spans 17..30.75 MiB: 14.4 MiB, 3688
+// frames, 1.4 MiB of clearance below __bss_end and 60 KiB of it left
+// above the last usable byte of RAM.
 
 namespace vnu::pmm {
 
 constexpr uint32_t FRAME_SIZE = 4096;
-constexpr uint32_t POOL_BASE = 0x01700000; // 23 MiB, past __bss_end
-constexpr uint32_t POOL_END = 0x01F00000;  // 31 MiB (8 MiB pool, 2048 frames)
+constexpr uint32_t POOL_BASE = 0x01100000; // 17 MiB, past __bss_end
+constexpr uint32_t POOL_END = 0x01F70000;  // 30.75 MiB, inside RAM
 
 void init();
 

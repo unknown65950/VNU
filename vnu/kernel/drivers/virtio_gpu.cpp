@@ -76,6 +76,7 @@ constexpr uint32_t FEATURE_VERSION_1 = 1u << 0; /* bit 32 of features */
 /* Virtio-gpu control commands (virtio spec 5.7). */
 constexpr uint32_t GPU_CMD_GET_DISPLAY_INFO = 0x0100;
 constexpr uint32_t GPU_CMD_RESOURCE_CREATE_2D = 0x0101;
+constexpr uint32_t GPU_CMD_RESOURCE_UNREF = 0x0102;
 constexpr uint32_t GPU_CMD_SET_SCANOUT = 0x0103;
 constexpr uint32_t GPU_CMD_RESOURCE_FLUSH = 0x0104;
 constexpr uint32_t GPU_CMD_TRANSFER_TO_HOST_2D = 0x0105;
@@ -88,7 +89,15 @@ constexpr uint32_t GPU_RESP_OK_DISPLAY_INFO = 0x1101;
  * QEMU renders this natively with no format conversion. */
 constexpr uint32_t GPU_FORMAT_B8G8R8X8 = 2;
 
-constexpr uint32_t RESOURCE_ID = 1;
+/* A resource's backing is a *list* of segments, not one run: the spec
+ * lets the guest hand over up to 128 of them, and nothing in it wants
+ * them contiguous. The pool, on the other hand, is filled from the
+ * bottom up and shared with the desktop, the VFS and the sockets, so the
+ * one thing it can rarely offer is a 5 MiB hole for a 1280x1024 scanout.
+ * In chunks this size (256 KiB) a mode change is a matter of the frames
+ * being free at all, not of them happening to sit next to each other. */
+constexpr uint32_t SEGMENT_FRAMES = 64;
+constexpr uint32_t MAX_BACKING = 128; /* the spec's cap on backing entries */
 constexpr uint16_t MAX_QUEUE_SIZE = 256;
 constexpr uint32_t SCRATCH_SIZE = 4096;
 constexpr uint32_t NO_VECTOR = 0xFFFF;
@@ -190,8 +199,8 @@ struct GpuAttachBacking {
     GpuHdr hdr;
     uint32_t resource_id;
     uint32_t nr_entries;
-    BackingEntry entries[1];
-} __attribute__((packed)); /* 48 bytes */
+    BackingEntry entries[MAX_BACKING];
+} __attribute__((packed)); /* 32 bytes + 16 per entry, sent that far */
 
 struct GpuSetScanout {
     GpuHdr hdr;
@@ -199,6 +208,11 @@ struct GpuSetScanout {
     uint32_t scanout_id;
     uint32_t resource_id;
 } __attribute__((packed)); /* 48 bytes */
+
+struct GpuUnref {
+    GpuHdr hdr;
+    uint32_t resource_id;
+} __attribute__((packed)); /* 24 bytes */
 
 struct GpuTransfer2D {
     GpuHdr hdr;
@@ -218,8 +232,27 @@ struct GpuFlush {
 
 uint8_t* g_cmd_buf = nullptr;
 uint8_t* g_resp_buf = nullptr;
-uint8_t* g_scanout = nullptr;
 bool g_active = false;
+
+/* Every scanout takes a resource id of its own. RESOURCE_UNREF is not
+ * the end of a resource on the far side: a console that is still reading
+ * the old scanout keeps it alive for a moment, and a create that reuses
+ * the id in the meantime is refused with ERR_INVALID_RESOURCE_ID (0x1203
+ * in the transitional encoding - ask a host header). Ids are therefore
+ * handed out in sequence and never reused: one mode change per second
+ * wraps the 32-bit counter in about a hundred years, by which time the
+ * id it comes back to is long gone. */
+uint32_t g_next_res_id = 1;
+uint32_t g_scanout_id; /* the one on screen, 0 while there is none */
+
+/* The frames the scanout resource is backed by, in the order the host
+ * was given them: byte n of the image lives at byte n of the list. */
+struct Segment {
+    uint32_t phys;
+    uint32_t frames;
+};
+Segment g_segs[MAX_BACKING];
+uint32_t g_seg_count = 0;
 
 /* --- low-level helpers --- */
 
@@ -459,6 +492,18 @@ bool submit_and_wait(uint32_t cmd_len, uint32_t expect)
     uint32_t cmd_phys = reinterpret_cast<uint32_t>(g_cmd_buf);
     uint32_t resp_phys = reinterpret_cast<uint32_t>(g_resp_buf);
 
+    /* Where the used ring stands *before* this command is even queued.
+     * Reading it after the kick instead loses the race the wrong way
+     * round: the device runs on another host thread and a warm, short
+     * command (create_2d, set_scanout, a transfer) is finished and its
+     * used buffer posted before the guest gets to look, so the sample
+     * would already include this command and the wait below would spin
+     * out its whole budget and call a command that succeeded a failure.
+     * Every command here is submitted and awaited one at a time, so the
+     * ring is quiescent at this point and this is the only reading that
+     * means "not yet". */
+    uint16_t last = g_q.used->idx;
+
     uint16_t head = g_q.next_desc;
     if (head + 2 > g_q.size)
         head = 0;
@@ -487,14 +532,37 @@ bool submit_and_wait(uint32_t cmd_len, uint32_t expect)
     volatile uint8_t* notify_addr = g_notify + g_q.notify_off * g_cap[CAP_NOTIFY_CFG].mult;
     mmio32_w(notify_addr, 0);
 
-    uint16_t last = g_q.used->idx;
+    /* A command the device never completes, or one it refuses with an
+     * error instead of the OK it owes us, ends whatever the caller was
+     * building: the desktop stops updating and nothing on screen says
+     * why. Name both, a few times, rather than once per frame. */
+    static unsigned complaints = 4;
+    const uint32_t sent = reinterpret_cast<const GpuHdr*>(g_cmd_buf)->type;
+
     for (unsigned spin = 0; spin < 20000000u && g_q.used->idx == last; ++spin)
         asm volatile("pause" ::: "memory");
-    if (g_q.used->idx == last)
+    if (g_q.used->idx == last) {
+        if (complaints) {
+            --complaints;
+            outstr("virtio-gpu: command 0x");
+            puthex(static_cast<unsigned long>(sent), 4);
+            outstr(" never completed\n");
+        }
         return false;
+    }
 
     uint32_t result = reinterpret_cast<const GpuHdr*>(g_resp_buf)->type;
     g_q.next_desc = static_cast<uint16_t>((head + 2) % g_q.size);
+    if (result != expect && complaints) {
+        --complaints;
+        outstr("virtio-gpu: command 0x");
+        puthex(static_cast<unsigned long>(sent), 4);
+        outstr(" answered 0x");
+        puthex(static_cast<unsigned long>(result), 4);
+        outstr(", wanted 0x");
+        puthex(static_cast<unsigned long>(expect), 4);
+        out('\n');
+    }
     return result == expect;
 }
 
@@ -513,38 +581,146 @@ bool gpu_get_display_info()
     return submit_and_wait(sizeof(GpuHdr), GPU_RESP_OK_DISPLAY_INFO);
 }
 
-bool gpu_create_2d()
+bool gpu_create_2d(uint32_t id, uint32_t w, uint32_t h)
 {
     cmd_start(GPU_CMD_RESOURCE_CREATE_2D, sizeof(GpuCreate2D));
     auto* c = reinterpret_cast<GpuCreate2D*>(g_cmd_buf);
-    c->resource_id = RESOURCE_ID;
+    c->resource_id = id;
     c->format = GPU_FORMAT_B8G8R8X8;
-    c->width = static_cast<uint32_t>(vnu::vgfx::WIDTH);
-    c->height = static_cast<uint32_t>(vnu::vgfx::HEIGHT);
+    c->width = w;
+    c->height = h;
     return submit_and_wait(sizeof(GpuCreate2D), GPU_RESP_OK_NODATA);
 }
 
-bool gpu_attach_backing()
+bool gpu_attach_backing(uint32_t id)
 {
-    cmd_start(GPU_CMD_RESOURCE_ATTACH_BACKING, sizeof(GpuAttachBacking));
+    /* 24 hdr + resource_id + nr_entries, then 16 per entry. */
+    uint32_t bytes = 32u + 16u * g_seg_count;
+    cmd_start(GPU_CMD_RESOURCE_ATTACH_BACKING, bytes);
     auto* c = reinterpret_cast<GpuAttachBacking*>(g_cmd_buf);
-    c->resource_id = RESOURCE_ID;
-    c->nr_entries = 1;
-    c->entries[0].addr_lo = reinterpret_cast<uint32_t>(g_scanout);
-    c->entries[0].addr_hi = 0;
-    c->entries[0].length = static_cast<uint32_t>(vnu::vgfx::WIDTH * vnu::vgfx::HEIGHT * 4);
-    return submit_and_wait(sizeof(GpuAttachBacking), GPU_RESP_OK_NODATA);
+    c->resource_id = id;
+    c->nr_entries = g_seg_count;
+    for (uint32_t i = 0; i < g_seg_count; ++i) {
+        c->entries[i].addr_lo = g_segs[i].phys;
+        c->entries[i].addr_hi = 0;
+        c->entries[i].length = g_segs[i].frames * 4096u;
+        c->entries[i].padding = 0;
+    }
+    return submit_and_wait(bytes, GPU_RESP_OK_NODATA);
 }
 
-bool gpu_set_scanout()
+bool gpu_set_scanout(uint32_t id, uint32_t w, uint32_t h)
 {
     cmd_start(GPU_CMD_SET_SCANOUT, sizeof(GpuSetScanout));
     auto* c = reinterpret_cast<GpuSetScanout*>(g_cmd_buf);
-    c->r.w = static_cast<uint32_t>(vnu::vgfx::WIDTH);
-    c->r.h = static_cast<uint32_t>(vnu::vgfx::HEIGHT);
+    c->r.w = w;
+    c->r.h = h;
     c->scanout_id = 0;
-    c->resource_id = RESOURCE_ID;
+    c->resource_id = id;
     return submit_and_wait(sizeof(GpuSetScanout), GPU_RESP_OK_NODATA);
+}
+
+/* Let go of a resource, so the host stops pointing at whatever it was
+ * backed by.
+ *
+ * RESOURCE_UNREF is one of the commands the device answers with silence
+ * (virtio-gpu 4.1 gives it no response at all), so waiting for a
+ * response type here would spin until the budget ran out - a hang, not
+ * an error. The used ring it still lands in is what this waits for.
+ */
+void gpu_unref(uint32_t id)
+{
+    /* Sampled before the kick, for the same reason as in
+     * submit_and_wait(). There is no response to read, so the used ring
+     * is all there is: the entry lands once the device is through with
+     * the command, which is also the point at which it has stopped
+     * reading the scratch buffer (the next command overwrites it) and
+     * dropped the resource. set_resolution() frees the frames right
+     * after this returns, so waiting for less would hand the allocator
+     * memory the host may still be reading. */
+    const uint16_t last = g_q.used->idx;
+
+    cmd_start(GPU_CMD_RESOURCE_UNREF, sizeof(GpuUnref));
+    auto* c = reinterpret_cast<GpuUnref*>(g_cmd_buf);
+    c->resource_id = id;
+
+    uint16_t head = g_q.next_desc;
+    if (head + 1 > g_q.size)
+        head = 0;
+    volatile VqDesc* d = &g_q.desc[head];
+    d->addr_lo = reinterpret_cast<uint32_t>(g_cmd_buf);
+    d->addr_hi = 0;
+    d->len = sizeof(GpuUnref);
+    d->flags = 0; /* the whole chain: there is no response descriptor */
+    d->next = 0;
+
+    uint16_t avail_idx = g_q.avail->idx;
+    g_q.avail->ring[avail_idx % g_q.size] = head;
+    wmb();
+    g_q.avail->idx = static_cast<uint16_t>(avail_idx + 1);
+    wmb();
+    mmio32_w(g_notify + g_q.notify_off * g_cap[CAP_NOTIFY_CFG].mult, 0);
+
+    for (unsigned spin = 0; spin < 20000000u && g_q.used->idx == last; ++spin)
+        asm volatile("pause" ::: "memory");
+    g_q.next_desc = static_cast<uint16_t>((head + 1) % g_q.size);
+}
+
+/* Frames a w x h 32-bpp scanout needs. */
+uint32_t scanout_pages(int w, int h)
+{
+    uint32_t bytes = static_cast<uint32_t>(w) * static_cast<uint32_t>(h) * 4u;
+    return (bytes + 4095u) / 4096u;
+}
+
+void scanout_free()
+{
+    for (uint32_t i = 0; i < g_seg_count; ++i)
+        vnu::pmm::free_contig(g_segs[i].phys, g_segs[i].frames);
+    g_seg_count = 0;
+}
+
+/* Take the frames for a w x h scanout, in SEGMENT_FRAMES-sized chunks so
+ * that a fragmented pool can still serve them. All or nothing: a short
+ * list would back a resource the host reads past the end of. */
+bool scanout_alloc(int w, int h)
+{
+    const uint32_t need = scanout_pages(w, h);
+    if (need == 0 || (need + SEGMENT_FRAMES - 1) / SEGMENT_FRAMES > MAX_BACKING)
+        return false;
+
+    g_seg_count = 0;
+    uint32_t got = 0;
+    while (got < need) {
+        const uint32_t n = (need - got < SEGMENT_FRAMES) ? (need - got)
+                                                         : SEGMENT_FRAMES;
+        const uint32_t phys = vnu::pmm::alloc_contig(n);
+        if (!phys) {
+            scanout_free();
+            return false;
+        }
+        g_segs[g_seg_count].phys = phys;
+        g_segs[g_seg_count].frames = n;
+        ++g_seg_count;
+        got += n;
+    }
+    return true;
+}
+
+/* Build a scanout resource of w x h over the frames in g_segs. Every
+ * step can fail, and a half-built resource is not something to hand
+ * back: the caller unrefs it. Returns the step that refused, or null
+ * when the resource is up - the driver logs its verdicts, so a mode
+ * that cannot be shown says so instead of just not appearing. */
+const char* build_scanout(uint32_t id, uint32_t w, uint32_t h)
+{
+    if (!gpu_create_2d(id, w, h))
+        return "create_2d";
+    if (!gpu_attach_backing(id))
+        return "attach_backing";
+    if (!gpu_set_scanout(id, w, h))
+        return "set_scanout";
+    return nullptr;
 }
 
 } // namespace
@@ -622,27 +798,30 @@ bool init()
     if (!g_cmd_buf || !g_resp_buf)
         return fail("scratch");
 
-    /* 1024x768x4 = 3 MiB of contiguous guest memory the host maps as
-     * the scanout resource's backing store. */
-    uint32_t fb_pages = (static_cast<uint32_t>(vgfx::WIDTH * vgfx::HEIGHT * 4) + 4095u) / 4096u;
-    g_scanout = reinterpret_cast<uint8_t*>(pmm::alloc_contig(fb_pages));
-    if (!g_scanout)
+    /* The scanout is sized for the mode in use, not for the largest one
+     * the driver supports: the PMM pool is shared with the VFS nodes
+     * and every window's surfaces, so a fixed
+     * 5 MiB buffer for a mode that may never be selected is memory the
+     * machine can never get back. A mode change is a new resource built
+     * over fresh frames (see set_resolution), which is also why nothing
+     * here has to fit a 1280x1024 desktop by accident. */
+    if (!scanout_alloc(vgfx::width(), vgfx::height()))
         return fail("framebuffer");
 
     if (!gpu_get_display_info())
         return fail("get_display_info");
-    if (!gpu_create_2d())
-        return fail("create_2d");
-    if (!gpu_attach_backing())
-        return fail("attach_backing");
-    if (!gpu_set_scanout())
-        return fail("set_scanout");
+    const uint32_t id = g_next_res_id++;
+    if (const char* step = build_scanout(id,
+                                         static_cast<uint32_t>(vgfx::width()),
+                                         static_cast<uint32_t>(vgfx::height())))
+        return fail(step);
+    g_scanout_id = id;
 
     g_active = true;
     outstr("virtio-gpu: ");
-    putdec(static_cast<unsigned long>(vgfx::WIDTH));
+    putdec(static_cast<unsigned long>(vgfx::width()));
     out('x');
-    putdec(static_cast<unsigned long>(vgfx::HEIGHT));
+    putdec(static_cast<unsigned long>(vgfx::height()));
     outstr(" scanout armed\n");
     return true;
 }
@@ -652,30 +831,112 @@ bool active()
     return g_active;
 }
 
-uint8_t* framebuffer()
+uint32_t scanout_segments()
 {
-    return g_scanout;
+    return g_seg_count;
+}
+
+ScanoutSegment scanout_segment(uint32_t index)
+{
+    if (index >= g_seg_count)
+        return ScanoutSegment{0, 0};
+    return ScanoutSegment{g_segs[index].phys,
+                          g_segs[index].frames * 4096u};
 }
 
 void present()
 {
-    if (!g_active)
-        return;
+    if (!g_active || g_seg_count == 0)
+        return;   /* no scanout resource: nothing to push */
 
     cmd_start(GPU_CMD_TRANSFER_TO_HOST_2D, sizeof(GpuTransfer2D));
     auto* t = reinterpret_cast<GpuTransfer2D*>(g_cmd_buf);
-    t->r.w = static_cast<uint32_t>(vgfx::WIDTH);
-    t->r.h = static_cast<uint32_t>(vgfx::HEIGHT);
-    t->resource_id = RESOURCE_ID;
+    t->r.w = static_cast<uint32_t>(vgfx::width());
+    t->r.h = static_cast<uint32_t>(vgfx::height());
+    t->resource_id = g_scanout_id;
     if (!submit_and_wait(sizeof(GpuTransfer2D), GPU_RESP_OK_NODATA))
         return;
 
     cmd_start(GPU_CMD_RESOURCE_FLUSH, sizeof(GpuFlush));
     auto* f = reinterpret_cast<GpuFlush*>(g_cmd_buf);
-    f->r.w = static_cast<uint32_t>(vgfx::WIDTH);
-    f->r.h = static_cast<uint32_t>(vgfx::HEIGHT);
-    f->resource_id = RESOURCE_ID;
+    f->r.w = static_cast<uint32_t>(vgfx::width());
+    f->r.h = static_cast<uint32_t>(vgfx::height());
+    f->resource_id = g_scanout_id;
     (void)submit_and_wait(sizeof(GpuFlush), GPU_RESP_OK_NODATA);
 }
+
+/* Blank the display: zero every scanout run and push it. The VGA side
+ * has a text mode to fall back to, this one has not - the host keeps
+ * showing whatever was last transferred, so a desktop that quit would
+ * stay on the monitor. Zero is the text console's own background, which
+ * is what the VGA side shows after its mode switch. */
+void blank()
+{
+    if (!g_active || g_seg_count == 0)
+        return;
+    for (uint32_t i = 0; i < g_seg_count; ++i)
+        memset(reinterpret_cast<void*>(g_segs[i].phys), 0,
+               static_cast<size_t>(g_segs[i].frames) * 4096u);
+    present();
+}
+
+/* Move the display to w x h. The scanout resource is exactly the size
+ * of the mode in use (see init()), so a change is a new resource over
+ * new frames, and it takes a resource id of its own: the old one is only
+ * unreffed, and the host keeps it alive for a moment afterwards, so
+ * building the new scanout on the same id is refused.
+ *
+ * The order is what makes the change fit: the resource in use is
+ * unreffed first and only then are its frames returned, because the
+ * host is done with a resource once its RESOURCE_UNREF lands on the used
+ * ring, and until then it may still be reading them. That is also the
+ * only order in which the two buffers never exist at the same time: at
+ * the top mode that is the difference between 5 MiB and 10 MiB of pool,
+ * and the pool is 14.4 MiB. The host keeps showing its own last copy
+ * of the old frame in between, so the cost of the switch is a moment
+ * without a scanout resource, not a corrupted picture.
+ *
+ * Returns false with the display as it was only when there is no device
+ * or the mode is already in use. Once the old frames are gone a mode the
+ * pool cannot serve leaves the screen on the host's last copy instead of
+ * on freed memory: present() skips itself until a later attempt gets the
+ * frames, and the mode still changes then. */
+bool set_resolution(int w, int h)
+{
+    if (!g_active)
+        return false;
+    if (w == vgfx::width() && h == vgfx::height())
+        return true;
+
+    gpu_unref(g_scanout_id);
+    g_scanout_id = 0;
+    scanout_free();
+    if (!scanout_alloc(w, h)) {
+        outstr("virtio-gpu: ");
+        putdec(static_cast<unsigned long>(w));
+        out('x');
+        putdec(static_cast<unsigned long>(h));
+        outstr(" refused: out of frames\n");
+        return false;
+    }
+
+    const uint32_t id = g_next_res_id++;
+    if (const char* step = build_scanout(id, static_cast<uint32_t>(w),
+                                         static_cast<uint32_t>(h))) {
+        outstr("virtio-gpu: ");
+        putdec(static_cast<unsigned long>(w));
+        out('x');
+        putdec(static_cast<unsigned long>(h));
+        outstr(" refused near: ");
+        outstr(step);
+        out('\n');
+        gpu_unref(id);
+        scanout_free();
+        return false;
+    }
+    g_scanout_id = id;
+    return true;
+}
+
 
 } // namespace vnu::virtio_gpu

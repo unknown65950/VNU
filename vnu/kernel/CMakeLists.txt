@@ -121,6 +121,7 @@ add_executable(kernel.elf
     drivers/tcp.cpp
     gui/gui.cpp
     gui/apps.cpp
+    gui/gfxconf.cpp
     gui/wallpaper.cpp
     gui/wintask.cpp
     install/blobs.s

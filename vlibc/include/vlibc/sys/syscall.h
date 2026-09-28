@@ -35,6 +35,10 @@
 #define SYS_uptime VNU_SYS_uptime
 #define SYS_sleep VNU_SYS_sleep
 #define SYS_tty_size VNU_SYS_tty_size
+#define SYS_wallpaper VNU_SYS_wallpaper
+#define SYS_gfx_surface VNU_SYS_gfx_surface
+#define SYS_gfx_setmode VNU_SYS_gfx_setmode
+#define SYS_gfx_getmode VNU_SYS_gfx_getmode
 
 #ifdef __cplusplus
 extern "C" {

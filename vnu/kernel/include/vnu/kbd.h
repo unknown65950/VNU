@@ -2,6 +2,25 @@
 #include <stdint.h>
 
 namespace vnu::kbd {
+
+/* Function-key pseudo-codes, in the same >= 0x80 space as the arrows
+ * and Home/End/Delete (which vnu/kernel/drivers/kbd.cpp keeps to
+ * itself). Same values as VNU_KEY_F* in vlibc/keys.h, so a key a
+ * desktop shortcut consumed here cannot disagree with what a program
+ * reads from getch(). */
+constexpr int K_F1 = 0x88;
+constexpr int K_F2 = 0x89;
+constexpr int K_F3 = 0x8A;
+constexpr int K_F4 = 0x8B;
+constexpr int K_F5 = 0x8C;
+constexpr int K_F6 = 0x8D;
+constexpr int K_F7 = 0x8E;
+constexpr int K_F8 = 0x8F;
+constexpr int K_F9 = 0x90;
+constexpr int K_F10 = 0x91;
+constexpr int K_F11 = 0x92;
+constexpr int K_F12 = 0x93;
+
 char getch_blocking();
 
 /* Non-blocking raw access, used by the GUI event loop so it can poll

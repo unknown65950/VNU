@@ -49,10 +49,24 @@ uint32_t g_px_used = 0;
 /* Whole-desktop frame vga_gfx blits when a wallpaper is loaded. */
 bool g_ready = false;
 
+/* Largest source we'll decode: the shipped 512x384, i.e. exactly half
+ * the desktop at 2x upscale. Also keeps the pixel-bound memory (decoded
+ * RGB buffer + PNG inflate work) inside the bump pool above. */
+constexpr uint32_t MAX_PIX = 512u * 384u;
+
+/* The image in use, quantized to DAC indices at its own size and kept
+ * across calls: a mode change only has to scale it to the new geometry,
+ * and re-decoding the file would freeze the desktop for the seconds an
+ * inflate of a 512x384 PNG costs on this hardware. */
+uint8_t g_small[MAX_PIX];
+int g_small_w = 0;
+int g_small_h = 0;
+
 /* Bare name of the image in use, for /proc/gfx. */
 constexpr int NAME_CAP = 64;
 char g_name[NAME_CAP];
-uint8_t g_wall[vnu::vgfx::WIDTH * vnu::vgfx::HEIGHT];
+/* Sized for the largest supported mode, like the desktop backbuffer. */
+uint8_t g_wall[vnu::vgfx::MAX_MODE.width * vnu::vgfx::MAX_MODE.height];
 
 /* Catppuccin Mocha DAC palette (6-bit per channel), mirrors
  * kernel/drivers/vga_gfx.cpp CATT_PAL. Quantization compares RGB>>2
@@ -102,11 +116,6 @@ void note_name(const char* path)
     g_name[i] = 0;
 }
 
-/* Largest source we'll decode: the shipped 512x384, i.e. exactly half
- * the desktop at 2x upscale. Also keeps the pixel-bound memory (decoded
- * RGB buffer + PNG inflate work) inside the bump pool above. */
-constexpr uint32_t MAX_PIX = 512u * 384u;
-
 } // namespace
 
 extern "C" void* vnu_kalloc(unsigned long n)
@@ -121,43 +130,61 @@ extern "C" void* vnu_kalloc(unsigned long n)
 
 extern "C" void vnu_kfree(void* p)
 {
-    (void)p; /* one-shot decode: the pool is never reclaimed */
+    (void)p; /* the pool is reset once per decode, never reclaimed */
 }
 
 namespace vnu::wallpaper {
 
 namespace {
 
-/* Stretch a decoded RGB image over every desktop pixel (nearest
- * neighbour per axis, like picview's zoom-out) and quantize straight to
- * a DAC index. */
-void stretch(const uint8_t* rgb, int w, int h, uint8_t* out)
+/* Quantize a decoded RGB image to DAC indices, at the image's own size
+ * (see stretch() for why not at the desktop's). */
+void quantize(const uint8_t* rgb, int w, int h, uint8_t* out)
 {
-    const int W = vnu::vgfx::WIDTH;
-    const int H = vnu::vgfx::HEIGHT;
+    const uint32_t n = static_cast<uint32_t>(w) * static_cast<uint32_t>(h);
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint8_t* p = rgb + i * 3u;
+        int r = p[0] >> 2, g = p[1] >> 2, b = p[2] >> 2;
+        int best = 0, bd = 1 << 30;
+        for (int c = 0; c < 16; ++c) {
+            int dr = r - PAL[c][0];
+            int dg = g - PAL[c][1];
+            int db = b - PAL[c][2];
+            int dd = dr * dr + dg * dg + db * db;
+            if (dd < bd) {
+                bd = dd;
+                best = c;
+            }
+        }
+        out[i] = static_cast<uint8_t>(best);
+    }
+}
+
+/* Scale the quantized image over every desktop pixel (nearest neighbour
+ * per axis, like picview's zoom-out).
+ *
+ * The palette search is the expensive half of a frame: 16 candidates per
+ * pixel, a million pixels at the top mode, and it only has to run once
+ * per image. Scaling a mode change re-quantizes are identical either way
+ * - quantize-then-scale picks the same source pixels, and the entry a
+ * source pixel quantizes to does not depend on where it lands - so the
+ * indices are computed at the image's own size and the desktop frame is
+ * a per-pixel copy from then on. */
+void stretch()
+{
+    const int W = vnu::vgfx::width();
+    const int H = vnu::vgfx::height();
+    const int w = g_small_w, h = g_small_h;
     for (int y = 0; y < H; ++y) {
         int sy = (y * h) / H;
         if (sy >= h)
             sy = h - 1;
-        const uint8_t* row = rgb + sy * w * 3;
+        const uint8_t* row = g_small + sy * w;
         for (int x = 0; x < W; ++x) {
             int sx = (x * w) / W;
             if (sx >= w)
                 sx = w - 1;
-            const uint8_t* p = row + sx * 3;
-            int r = p[0] >> 2, g = p[1] >> 2, b = p[2] >> 2;
-            int best = 0, bd = 1 << 30;
-            for (int c = 0; c < 16; ++c) {
-                int dr = r - PAL[c][0];
-                int dg = g - PAL[c][1];
-                int db = b - PAL[c][2];
-                int dd = dr * dr + dg * dg + db * db;
-                if (dd < bd) {
-                    bd = dd;
-                    best = c;
-                }
-            }
-            out[y * W + x] = static_cast<uint8_t>(best);
+            g_wall[y * W + x] = row[sx];
         }
     }
 }
@@ -171,10 +198,12 @@ int decode_into_frame(uint32_t n)
         return -1;
 
     /* The bump pool is never given back, so a second decode would run
-     * into the first one's leftovers. g_wall already holds quantized
-     * palette indices, so nothing in the arena is still live and
-     * starting it over is safe. */
+     * into the first one's leftovers. Nothing in it is live any more
+     * (the quantized image is a plain static array) so starting it over
+     * is safe. */
     g_px_used = 0;
+    g_small_w = 0;
+    g_small_h = 0;
 
     int w = 0, h = 0;
     int fmt = px_probe(g_file, n, &w, &h);
@@ -202,12 +231,32 @@ int decode_into_frame(uint32_t n)
         return -1;
     }
 
-    stretch(rgb, w, h, g_wall);
+    quantize(rgb, w, h, g_small);
     vnu_kfree(rgb);
+    g_small_w = w;
+    g_small_h = h;
+    stretch();
     return 0;
 }
 
 } // namespace
+
+void resize()
+{
+    /* The frame is scaled to the desktop when it is decoded, so a
+     * resolution change leaves it the wrong size: scale the quantized
+     * image we still have. Decoding the file again would work too, but
+     * an inflate of a 512x384 PNG takes seconds here, and the mode
+     * switch would freeze the desktop for all of it. A decode with
+     * nothing to scale (no file, a format it does not like) drops back
+     * to the procedural scene, which fits any mode. */
+    if (!g_ready)
+        return; /* the procedural scene has nothing to rescale */
+    if (g_small_w <= 0 || g_small_h <= 0)
+        g_ready = false;
+    else
+        stretch();
+}
 
 bool load()
 {

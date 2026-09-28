@@ -5,8 +5,8 @@
  *
  * On desktop startup the GUI calls load(), which reads the
  * /etc/vnu/wallpaper VFS node (a BMP/PNG, decoded with the
- * freestanding px.h) and renders it stretched across the whole
- * 1024x768 desktop, quantizing each pixel down to the 16-color
+ * freestanding px.h) and renders it scaled across the whole
+ * desktop, quantizing each pixel down to the 16-color
  * Catppuccin DAC palette the GUI displays. draw_wallpaper() then blits
  * that ready-made frame instead of the procedural scene whenever one
  * was loaded.
@@ -25,6 +25,13 @@ namespace vnu::wallpaper {
  * procedural fallback) in place. */
 bool load();
 
+/* Re-decode the current wallpaper for the mode now programmed, after
+ * vgfx::set_resolution() changed it. A no-op when no picture is
+ * loaded (the procedural scene scales itself); a re-decode that fails
+ * leaves the procedural scene in place, so the desktop never blits a
+ * frame stretched for the old size. */
+void resize();
+
 /* Decode the image at `path` and, only if that works, store it as the
  * wallpaper in use (overwriting /etc/vnu/wallpaper) and put it on
  * screen. Returns 0, or one of -VNU_ENOENT (no such file), -VNU_EINVAL
@@ -35,12 +42,17 @@ bool load();
  * leaves both the current frame and the current file untouched.
  *
  * The decode runs to completion inside the call, so the desktop stands
- * still for as long as it takes (tens of milliseconds for a 512x384
- * PNG); the redraw that follows picks the new frame up immediately. */
+ * still for as long as it takes (about a second for a 512x384 PNG, most
+ * of it the inflate); the redraw that follows picks the new frame up
+ * immediately. resize() is far cheaper: it scales the image that has
+ * already been decoded.
+ *
+ * Like the wallpaper, this lives in the RAM filesystem, so a choice
+ * made through it is forgotten at reboot. */
 int apply(const char* path);
 
-/* Ready-made 1024x768 palette-index frame of the wallpaper. Valid only
- * when ready(). */
+/* Ready-made palette-index frame of the wallpaper, scaled to the mode
+ * now programmed. Valid only when ready(). */
 const uint8_t* frame();
 
 bool ready();
