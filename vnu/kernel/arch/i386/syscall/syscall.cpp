@@ -503,6 +503,13 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
             return 0;
         }
 
+    case VNU_SYS_wallpaper:
+        /* Decode the image at `ebx` and make it the desktop background
+         * (ebx = path; see gui/wallpaper.cpp). Returns 0, or
+         * -VNU_ENOENT / -VNU_EINVAL / -VNU_EIO. */
+        return static_cast<std::uint32_t>(vnu::wallpaper::apply(
+            reinterpret_cast<const char*>(tf->ebx)));
+
     case VNU_SYS_gfx_setmode:
         /* Put the display into the given mode (ebx = width, ecx =
          * height). Only the driver's ladder is accepted; the desktop

@@ -20,6 +20,7 @@
 #include "embedded_rm.h"
 #include "embedded_touch.h"
 #include "embedded_uname.h"
+#include "embedded_wallpaper.h"
 #include "embedded_clear.h"
 #include "embedded_wc.h"
 #include "embedded_head.h"
@@ -92,6 +93,7 @@ const EmbeddedProg embedded[] = {
     {"/bin/rm", embedded_rm_elf, embedded_rm_elf_size},
     {"/bin/touch", embedded_touch_elf, embedded_touch_elf_size},
     {"/bin/uname", embedded_uname_elf, embedded_uname_elf_size},
+    {"/bin/wallpaper", embedded_wallpaper_elf, embedded_wallpaper_elf_size},
     {"/bin/clear", embedded_clear_elf, embedded_clear_elf_size},
     {"/bin/vedit", embedded_vedit_elf, embedded_vedit_elf_size},
     {"/bin/ttytest", embedded_ttytest_elf, embedded_ttytest_elf_size},

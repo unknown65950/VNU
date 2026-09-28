@@ -44,7 +44,8 @@ echo "==> userspace"
 "$VCC" "$ROOT/vnu/userspace/gui/play.c" "$ROOT/vnu/userspace/libwav/wav.c" -o "$ROOT/sysroot/bin/play"
 # coreutils: one separate binary per command (no multi-call applet).
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
-         wc head tail grep sort cp mv basename dirname seq df ping; do
+         wc head tail grep sort cp mv basename dirname seq df ping \
+         wallpaper; do
   "$VCC" "$ROOT/vnu/userspace/vibecoreutils/$c.c" -o "$ROOT/sysroot/bin/$c"
 done
 # the compiler itself (runs inside the guest and links against /lib).
@@ -74,7 +75,9 @@ embed "$ROOT/vnu/userspace/gui/pics/logo.jpg" pic_logo
 embed "$ROOT/vnu/userspace/gui/pics/gray_alpha.png" pic_gray_alpha
 embed "$ROOT/vnu/userspace/gui/pics/shapes_pal.png" pic_shapes_pal
 embed "$ROOT/vnu/userspace/gui/pics/shapes_rgba.png" pic_shapes_rgba
-embed "$ROOT/vnu/userspace/gui/pics/wallpaper.png" wallpaper
+# The shipped desktop image, embedded as wallpaper_png so the plain
+# name stays free for the `wallpaper` command's own binary above.
+embed "$ROOT/vnu/userspace/gui/pics/wallpaper.png" wallpaper_png
 embed "$ROOT/sysroot/bin/hello" hello
 embed "$ROOT/sysroot/bin/vprobe" vprobe
 embed "$ROOT/sysroot/bin/tlsdemo" tlsdemo
@@ -88,7 +91,8 @@ embed "$ROOT/sysroot/bin/vnu" vnu
 embed "$ROOT/sysroot/lib/crt0.o" lib_crt0
 embed "$ROOT/sysroot/lib/libvlibc.a" lib_vlibc
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
-         wc head tail grep sort cp mv basename dirname seq df ping; do
+         wc head tail grep sort cp mv basename dirname seq df ping \
+         wallpaper; do
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
 for c in id whoami groups useradd passwd su; do

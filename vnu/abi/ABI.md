@@ -119,6 +119,23 @@ with `-1` leaves a field unchanged; only root may chown.
   is a fixed 80x25 today, so a full-screen program (the `man` pager) asks
   for the numbers through this call instead of hardcoding them: when the
   mode changes, only the kernel changes.
+- `wallpaper(ebx)` — `ebx` is a pointer to the path of an image to put
+  on the desktop. The kernel reads it, decodes it with px.h (BMP or PNG,
+  at most 512x384 pixels and 64 KiB — JPEG is out of reach, its IDCT is
+  the one piece of float code a `-mno-80387` kernel cannot link),
+  scales it over the whole desktop - whatever mode is in use, and again
+  after every resolution change - and quantizes it to the 16 palette
+  indices the DAC holds. Only a picture that survives all of that is
+  adopted: it then becomes `/etc/vnu/wallpaper` (the file the
+  desktop reads at startup) and the frame the next redraw blits, and
+  `/proc/gfx` reports its bare name. A candidate that fails leaves both
+  the file and the screen as they were. Returns 0, or `-VNU_ENOENT`,
+  `-VNU_EINVAL` (unusable image) or `-VNU_EIO` (decoded, but the file
+  could not be rewritten). The decode runs to completion inside the
+  call, so the desktop stands still for the length of it: about a second
+  for a 512x384 PNG, most of it the inflate. A resolution change is far
+  cheaper - the decoded image is kept, so only the scaling over the new
+  screen runs again. Root only.
 - `gfx_surface()` — returns where a windowed task draws: the address of
   its 480x340 pixel canvas, one byte per pixel, palette indices 0..15.
   The pages are *shared*. They are mapped into the calling task at

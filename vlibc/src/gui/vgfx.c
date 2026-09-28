@@ -176,6 +176,18 @@ int vnu_dnd_declare(const char* path)
     return (int)syscall(VNU_SYS_dnd_declare, (long)path);
 }
 
+void vgfx_get_resolution(int* w, int* h)
+{
+    /* Pointers are the caller's, and the kernel validates them like any
+     * other; a null one is allowed on both sides. */
+    (void)syscall(VNU_SYS_gfx_getmode, (long)w, (long)h);
+}
+
+int vgfx_set_resolution(int w, int h)
+{
+    return (int)syscall(VNU_SYS_gfx_setmode, (long)w, (long)h);
+}
+
 int vgfx_poll(vgfx_event_t* ev)
 {
     enum { S_IDLE, S_ESC, S_BRACKET, S_M, S_BTN, S_XLO, S_XHI,

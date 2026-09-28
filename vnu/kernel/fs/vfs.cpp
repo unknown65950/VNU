@@ -576,6 +576,12 @@ void regen_synth(Node& n)
             a.num(static_cast<uint32_t>(modes[i].height));
         }
         a.str("\n");
+        /* The image the desktop draws behind the windows, if one was
+         * decoded: its bare name, or "none" for the procedural sky. */
+        a.str("wallpaper\t");
+        const char* wp = vnu::wallpaper::current_name();
+        a.str((wp && wp[0]) ? wp : "none");
+        a.str("\n");
         break;
     }
     case SynthKind::Boot: {
@@ -737,6 +743,7 @@ void init()
     add("/bin/rm", false);
     add("/bin/touch", false);
     add("/bin/uname", false);
+    add("/bin/wallpaper", false);
     add("/bin/clear", false);
     add("/bin/vedit", false);
     add("/bin/ttytest", false);

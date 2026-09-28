@@ -8,31 +8,47 @@
  * colour.
  *
  * Panes:
- *   About  — OS identification (utsname) + /proc/version
- *   Memory — live totals from /proc/meminfo and /proc/uptime
- *   Mounts — mounted filesystems from /proc/mounts
- *   CPU    — /proc/cpuinfo snippet
+ *   About     — OS identification (utsname) + /proc/version
+ *   Memory    — live totals from /proc/meminfo and /proc/uptime
+ *   Mounts    — mounted filesystems from /proc/mounts
+ *   CPU       — /proc/cpuinfo snippet
+ *   Wallpaper — the pictures in /etc/vnu/pics plus the shipped desktop;
+ *               Enter hands the chosen one to the kernel, which decodes
+ *               it and the desktop redraws at once
  *
- * Keys: j/k switch pane, Esc closes. Mouse: click a pane to switch.
+ * Keys: j/k switch pane, Esc closes, and in the Wallpaper pane the
+ * arrows move the cursor while Enter applies. Mouse: click a pane to
+ * switch, click a picture to put the cursor on it.
  */
 #include <vlibc/vgfx.h>
+#include <vlibc/keys.h>
 #include <vlibc/unistd.h>
 #include <vlibc/string.h>
+#include <vlibc/dirent.h>
+#include <vlibc/sys/syscall.h>
 #include <vlibc/sys/utsname.h>
+#include <vnu/abi.h>
 
 #define SEL_W 92
 #define CONTENT_X (SEL_W + 8)
-#define PANE_ROWS 4
+#define PANE_ROWS 5
 #define PANE_PITCH 30
 #define PANE_H 26
 #define TILE 10
 #define STATUS_Y (VGFX_H - 17)
+#define LIST_Y 30
+#define ROW_H 18
+#define LIST_MAX 12
+#define PICS_DIR "/etc/vnu/pics"
+#define SHIPPED "/etc/vnu/wallpaper.default"
+#define NAME_CAP 32
+#define PATH_CAP 96
 
 static const char* pane_names[PANE_ROWS] = {
-    "About", "Memory", "Mounts", "CPU",
+    "About", "Memory", "Mounts", "CPU", "Wallpaper",
 };
 static const int pane_accent[PANE_ROWS] = {
-    VGFX_LCYAN, VGFX_GREEN, VGFX_YELLOW, VGFX_MAGENTA,
+    VGFX_LCYAN, VGFX_GREEN, VGFX_YELLOW, VGFX_MAGENTA, VGFX_LGREEN,
 };
 static int cur_pane = 0;
 static int hover_pane = -1;
@@ -85,6 +101,96 @@ static void clip(char* dst, int cap, const char* src)
         ++i;
     }
     dst[i] = 0;
+}
+
+/* Wallpaper pane state: the candidates, the cursor, and the last
+ * verdict so the user can see why a pick was refused. */
+static char wp_names[LIST_MAX][NAME_CAP];
+static int wp_n = 0;
+static int wp_sel = 0;
+static const char* wp_status = "Enter applies the picture";
+static int wp_status_col = VGFX_LBLUE;
+
+/* /etc/vnu/pics, then the shipped desktop. A JPEG is listed too — the
+ * kernel will refuse it, and the status line then says so. */
+static void scan_walls(void)
+{
+    wp_n = 0;
+    DIR* d = opendir(PICS_DIR);
+    if (d) {
+        struct dirent* e;
+        while ((e = readdir(d)) != 0 && wp_n < LIST_MAX) {
+            if (e->d_type != 8) /* regular file */
+                continue;
+            clip(wp_names[wp_n], NAME_CAP, e->d_name);
+            if (*wp_names[wp_n])
+                ++wp_n;
+        }
+        closedir(d);
+    }
+    if (wp_n < LIST_MAX)
+        clip(wp_names[wp_n++], NAME_CAP, "wallpaper.default");
+}
+
+static void scan_walls_refresh(void)
+{
+    char keep[NAME_CAP];
+    clip(keep, sizeof(keep), wp_names[wp_sel]);
+    scan_walls();
+    for (int i = 0; i < wp_n; ++i) {
+        if (!strcmp(wp_names[i], keep)) {
+            wp_sel = i;
+            return;
+        }
+    }
+    if (wp_sel >= wp_n)
+        wp_sel = 0;
+}
+
+static void wp_path(char* dst, int cap)
+{
+    /* The shipped desktop keeps its own name in the list, so it needs
+     * the full path rather than a join with the pack directory. */
+    if (!strcmp(wp_names[wp_sel], "wallpaper.default")) {
+        clip(dst, cap, SHIPPED);
+        return;
+    }
+    int i = 0;
+    while (PICS_DIR[i] && i < cap - 2) {
+        dst[i] = PICS_DIR[i];
+        ++i;
+    }
+    dst[i++] = '/';
+    int j = 0;
+    while (wp_names[wp_sel][j] && i < cap - 1) {
+        dst[i] = wp_names[wp_sel][j];
+        ++i;
+        ++j;
+    }
+    dst[i] = 0;
+}
+
+/* The kernel is the judge: it decodes the candidate, and only swaps it
+ * in when the picture survives. */
+static void wp_apply(void)
+{
+    char path[PATH_CAP];
+    wp_path(path, sizeof(path));
+    long rc = syscall(SYS_wallpaper, (unsigned long)path);
+    if (rc == 0) {
+        wp_status = "applied — the desktop redrew";
+        wp_status_col = VGFX_LGREEN;
+    } else if (rc == -VNU_EINVAL) {
+        wp_status = "not a usable wallpaper (bmp or png, at most 512x384 "
+                    "and 64 KiB)";
+        wp_status_col = VGFX_LRED;
+    } else if (rc == -VNU_ENOENT) {
+        wp_status = "the file is gone";
+        wp_status_col = VGFX_LRED;
+    } else {
+        wp_status = "the kernel refused it";
+        wp_status_col = VGFX_LRED;
+    }
 }
 
 /* label/value table row: label in white, value in light blue, clipped
@@ -254,6 +360,34 @@ static int draw_cpu(void)
     return 1;
 }
 
+static int draw_wallpaper(void)
+{
+    /* The one pane that is not a /proc table: a list with a cursor. */
+    vgfx_str(CONTENT_X, LIST_Y, "desktop background", VGFX_LGREEN);
+    if (wp_n == 0) {
+        vgfx_str(CONTENT_X, LIST_Y + ROW_H + 4, "no pictures in "
+                 PICS_DIR, VGFX_LRED);
+        return 1;
+    }
+    for (int i = 0; i < wp_n && i < LIST_MAX; ++i) {
+        int y = LIST_Y + 26 + i * ROW_H;
+        if (i == wp_sel) {
+            vgfx_fill_rect(CONTENT_X - 4, y - 2, VGFX_W - CONTENT_X - 4,
+                           ROW_H - 2, VGFX_LBLUE);
+            vgfx_str(CONTENT_X, y, wp_names[i], VGFX_BLACK);
+        } else {
+            vgfx_str(CONTENT_X, y, wp_names[i], VGFX_WHITE);
+        }
+    }
+    /* One selected, up to twelve shown: say so rather than pretend. */
+    if (wp_n > LIST_MAX) {
+        vgfx_str(CONTENT_X, LIST_Y + 26 + LIST_MAX * ROW_H,
+                 "… more in the pack", VGFX_LGRAY);
+    }
+    frow(STATUS_Y - ROW_H - 4, "", wp_status);
+    return 1;
+}
+
 /* ---- layout ---- */
 
 static void draw(void)
@@ -293,9 +427,13 @@ static void draw(void)
         heading(pane_names[2], pane_accent[2]);
         ok = draw_mounts();
         break;
-    default:
+    case 3:
         heading(pane_names[3], pane_accent[3]);
         ok = draw_cpu();
+        break;
+    default:
+        heading(pane_names[4], pane_accent[4]);
+        ok = draw_wallpaper();
         break;
     }
     if (!ok)
@@ -305,7 +443,8 @@ static void draw(void)
     vgfx_fill_rect(0, STATUS_Y, VGFX_W, VGFX_H - STATUS_Y, VGFX_DGRAY);
     vgfx_hline(0, STATUS_Y, VGFX_W, VGFX_BLACK);
     vgfx_str(4, STATUS_Y + 1, "preferences", VGFX_LBLUE);
-    vgfx_str(VGFX_W - 4 - 10 * 8, STATUS_Y + 1, "j/k switch", VGFX_WHITE);
+    vgfx_str(VGFX_W - 4 - 10 * 8, STATUS_Y + 1,
+             cur_pane == 4 ? "arrows/enter" : "j/k switch", VGFX_WHITE);
 }
 
 static int sel_hit(int px, int py)
@@ -318,8 +457,22 @@ static int sel_hit(int px, int py)
     return py - 4 < i * PANE_PITCH + PANE_H ? i : -1;
 }
 
+/* Which picture row the mouse is over, or -1. */
+static int list_hit(int px, int py)
+{
+    if (px < CONTENT_X - 4)
+        return -1;
+    int i = (py - (LIST_Y + 26)) / ROW_H;
+    if (i < 0 || i >= wp_n)
+        return -1;
+    if (py - (LIST_Y + 26) >= wp_n * ROW_H)
+        return -1;
+    return i;
+}
+
 int main(void)
 {
+    scan_walls();
     draw();
     vgfx_flush();
 
@@ -327,18 +480,32 @@ int main(void)
         vgfx_event_t ev;
         vgfx_poll(&ev);
         if (ev.type == VGFX_EV_KEY) {
-            if (ev.key == 0x1B)
+            if (ev.key == VNU_KEY_ESC)
                 exit(0);
             else if (ev.key == 'j' || ev.key == 'J')
                 cur_pane = (cur_pane + 1) % PANE_ROWS;
             else if (ev.key == 'k' || ev.key == 'K')
                 cur_pane = (cur_pane - 1 + PANE_ROWS) % PANE_ROWS;
+            else if (cur_pane == 4 && ev.key == VNU_KEY_UP && wp_sel > 0)
+                --wp_sel;
+            else if (cur_pane == 4 && ev.key == VNU_KEY_DOWN &&
+                     wp_sel < wp_n - 1)
+                ++wp_sel;
+            else if (cur_pane == 4 && (ev.key == '\n' || ev.key == '\r')) {
+                wp_apply();
+                scan_walls_refresh();
+            }
             draw();
             vgfx_flush();
         } else if (ev.type == VGFX_EV_PRESS) {
             hover_pane = sel_hit(ev.x, ev.y);
-            if (hover_pane >= 0)
+            if (hover_pane >= 0) {
                 cur_pane = hover_pane;
+            } else if (cur_pane == 4) {
+                int row = list_hit(ev.x, ev.y);
+                if (row >= 0)
+                    wp_sel = row;
+            }
             draw();
             vgfx_flush();
         } else if (ev.type == VGFX_EV_RELEASE) {

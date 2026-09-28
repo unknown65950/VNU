@@ -109,6 +109,20 @@ int  vgfx_poll(vgfx_event_t* ev);
  * call from any task; console tasks are a no-op. */
 int  vnu_dnd_declare(const char* path);
 
+/* The display mode, in pixels. Both drivers answer the same, whether the
+ * mode was reached through vgfx_set_resolution(), the desktop's F12 key
+ * or /etc/vnuconfig/gfx.conf on the next boot - so a program can ask
+ * where it stands instead of assuming the compile-time default. */
+void vgfx_get_resolution(int* w, int* h);
+
+/* Put the display into w x h. Only the sizes this build supports are
+ * accepted (the driver's ladder: 640x480, 800x600, 1024x768, 1280x1024);
+ * anything else returns 0. Windows are moved back inside the new screen
+ * rather than closed, the wallpaper is re-stretched for it, and the
+ * choice is recorded in /etc/vnuconfig/gfx.conf. Either pointer of
+ * vgfx_get_resolution() may be null. */
+int  vgfx_set_resolution(int w, int h);
+
 #ifdef __cplusplus
 }
 #endif

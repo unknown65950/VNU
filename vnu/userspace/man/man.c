@@ -896,14 +896,95 @@ DESCRIPTION\n\
     A preferences window split into a pane selector (left)\n\
     and a content area (right):\n\
 \n\
-      About   OS identification (utsname, /proc/version)\n\
-      Memory  live totals from /proc/meminfo and /proc/uptime\n\
-      Mounts  mounted filesystems from /proc/mounts\n\
-      CPU     /proc/cpuinfo snippet\n\
+      About     OS identification (utsname, /proc/version)\n\
+      Memory    live totals from /proc/meminfo and /proc/uptime\n\
+      Mounts    mounted filesystems from /proc/mounts\n\
+      CPU       /proc/cpuinfo snippet\n\
+      Wallpaper the pictures in /etc/vnu/pics and the shipped one\n\
 \n\
 KEYS\n\
     j/k switch pane, Esc closes. Click a pane to select it.\n\
+\n\
+    In the Wallpaper pane the Up/Down arrows move the cursor over the\n\
+    pictures (clicking one also) and Enter applies the selected one:\n\
+    the kernel decodes it and the desktop redraws at once. A picture\n\
+    it refuses leaves the desktop as it was and says why on the status\n\
+    line. See man wallpaper for what may be used, and note that the\n\
+    choice is forgotten at reboot.\n\
+\n\
+    F12 belongs to the desktop rather than to this window, so it works\n\
+    with every pane and with no window at all: it steps the display\n\
+    through 640x480, 800x600, 1024x768 and 1280x1024 while the desktop\n\
+    keeps running, moving windows back inside the new screen. The mode\n\
+    is recorded in /etc/vnuconfig/gfx.conf, so the next gui and the\n\
+    next boot come up in it, and /proc/gfx reports the one in use.\n\
+    Like everything else in the RAM filesystem, that file is gone at\n\
+    reboot, so a booted ISO starts over from the built-in 1024x768.\n\
     A GUI app.\n"
+
+#define WALLPAPER_PAGE "NAME\n\
+    wallpaper - show or set the desktop background\n\
+\n\
+SYNOPSIS\n\
+    wallpaper [option]... [file]\n\
+ \n\
+DESCRIPTION\n\
+    The desktop background is a plain file, /etc/vnu/wallpaper, that\n\
+    the kernel decodes and stretches behind the windows at startup.\n\
+    This command reports which picture is in use, or replaces it.\n\
+\n\
+    With no argument, print the bare name of the background the\n\
+    desktop is drawing, or `none` while it is still the procedural\n\
+    sky. With a file argument, hand the path to the kernel\n\
+    (VNU_SYS_wallpaper): the kernel reads the file, decodes it with\n\
+    the same px.h decoder picview uses, quantises it to the 16\n\
+    palette indices the DAC holds, makes it the background and\n\
+    rewrites /etc/vnu/wallpaper with it, so the choice survives a\n\
+    restart of the GUI. A candidate that fails to decode is refused\n\
+    and changes nothing -- neither the file nor the screen.\n\
+\n\
+    BMP and PNG pictures of at most 512x384 pixels and 64 KiB are\n\
+    accepted. JPEG is not: its IDCT is the one piece of float code\n\
+    px.h has, and the kernel is built without a FPU. Such a file is\n\
+    listed by --list and refused when chosen.\n\
+\n\
+    The picture lives in the RAM filesystem and is therefore\n\
+    forgotten at reboot, where the kernel seeds the shipped desktop\n\
+    back into place. That seed is /etc/vnu/wallpaper.default, which\n\
+    this command never overwrites -- it is always there to fall back\n\
+    on.\n\
+\n\
+    The same pictures can be picked from the desktop: open the\n\
+    preferences window (prefs) and use its Wallpaper pane.\n\
+\n\
+OPTIONS\n\
+    -l, --list     list the pictures that can be used, one per line,\n\
+                   marking the JPEGs the kernel cannot decode, then\n\
+                   the shipped desktop\n\
+        --help     display this help and exit\n\
+        --version  output version information and exit\n\
+\n\
+EXIT STATUS\n\
+    0 on success, 1 on a missing file, an unusable picture, an unknown\n\
+    option or an unreadable /proc/gfx.\n\
+\n\
+EXAMPLES\n\
+    wallpaper -l\n\
+        list the candidates\n\
+    wallpaper /etc/vnu/pics/sunset.png\n\
+        put the sunset on the desktop\n\
+    wallpaper /etc/vnu/wallpaper.default\n\
+        go back to the desktop VNU ships with\n\
+\n\
+FILES\n\
+    /etc/vnu/wallpaper           the background in use\n\
+    /etc/vnu/wallpaper.default   the shipped background\n\
+    /etc/vnu/pics                the demo picture pack\n\
+    /proc/gfx                    reports the background in use\n\
+\n\
+SYSCALLS\n\
+    wallpaper   decode and adopt a background picture\n\
+"
 
 #define PICVIEW_PAGE "NAME\n\
     picview - graphical image viewer\n\
@@ -1249,6 +1330,8 @@ static const struct Page pages[] = {
      PREFS_PAGE},
     {"picview",  "graphical image viewer",
      PICVIEW_PAGE},
+    {"wallpaper", "show or set the desktop background",
+     WALLPAPER_PAGE},
     {"clock",    "analog clock, stopwatch and timer",
      CLOCK_PAGE},
     {"play",     "WAV sound player for the desktop",
