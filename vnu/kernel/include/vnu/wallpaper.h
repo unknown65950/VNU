@@ -14,7 +14,13 @@
  * The wallpaper in use is a plain file, so it can be replaced from
  * userspace — that is what `wallpaper` and the prefs picker do — and
  * apply() is the syscall behind both: decode the candidate first, and
- * only then make it the file on disk and the frame on screen. */
+ * only then make it the file on disk and the frame on screen.
+ *
+ * Its buffers - the desktop frame, the quantized source and px.h's
+ * decode scratch - are taken from the PMM pool and sized for the mode
+ * on screen, not for the top of the ladder, and unload() gives them
+ * back when the desktop quits. current_name() survives that, so
+ * /proc/gfx can still report which file is the wallpaper. */
 
 namespace vnu::wallpaper {
 
@@ -24,6 +30,11 @@ namespace vnu::wallpaper {
  * failed or missing file just leaves the previous frame (or the
  * procedural fallback) in place. */
 bool load();
+
+/* Hand the wallpaper's pixels back to the pool, at the end of a
+ * desktop session. The next load() re-decodes the file; the name
+ * current_name() reports is not affected. */
+void unload();
 
 /* Re-decode the current wallpaper for the mode now programmed, after
  * vgfx::set_resolution() changed it. A no-op when no picture is
@@ -55,6 +66,10 @@ int apply(const char* path);
  * now programmed. Valid only when ready(). */
 const uint8_t* frame();
 
+/* True when there is a frame *for the mode now programmed*: the blit
+ * copies a whole mode of pixels, so a frame left over from another
+ * geometry counts as absent and the desktop draws its procedural scene
+ * instead. */
 bool ready();
 
 /* Bare name of the image in use ("wallpaper", "sunset.png", ...), or an

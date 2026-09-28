@@ -17,11 +17,12 @@
 #include <stddef.h>
 #if defined(VNU_IN_KERNEL)
 /* The kernel is freestanding (no -ffreestanding <stdlib.h>) and has no
- * heap, yet the PNG/JPEG paths malloc()/free(). Those calls are routed
- * to the bump allocator in gui/wallpaper.cpp (vnu_kalloc/vnu_kfree):
- * wallpaper decode runs once at desktop startup and never needs the
- * memory back (free() is a no-op), and BMP decode needs no allocation
- * at all. */
+ * heap of its own, yet the PNG/JPEG paths malloc()/free(). Those calls
+ * are routed to the bump allocator in gui/wallpaper.cpp
+ * (vnu_kalloc/vnu_kfree), which is the decoder's scratch and nothing
+ * else: one pool run is taken per decode, free() within a decode is a
+ * no-op, and outside a decode an allocation fails rather than handing
+ * out memory nobody owns. BMP decode needs no allocation at all. */
 extern "C" void* vnu_kalloc(unsigned long n);
 extern "C" void vnu_kfree(void* p);
 #define malloc vnu_kalloc

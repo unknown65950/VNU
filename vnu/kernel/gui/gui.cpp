@@ -5,6 +5,7 @@
 #include <vnu/apps.h>
 #include <vnu/wintask.h>
 #include <vnu/vfs.h>
+#include <vnu/tty.h>
 #include <vnu/wallpaper.h>
 #include <vnu/gfxconf.h>
 #include <vnu/abi.h>
@@ -792,7 +793,14 @@ void run(const char* open_app)
      * mode: vgfx::set_resolution() only records it here, and
      * enter_gfx_mode() below programs the card for it. */
     (void)vnu::gfxconf::load();
-    vnu::vgfx::enter_gfx_mode();
+    if (!vnu::vgfx::enter_gfx_mode()) {
+        /* The framebuffer comes out of the pool, and a pool with nothing
+         * left is the one thing that can stop a desktop. Nothing was
+         * programmed, so the console is still the console: say so on it
+         * and hand the shell straight back. */
+        vnu::tty::write_cstr("vnu: not enough memory for the desktop\r\n");
+        return;
+    }
     vnu::vgfx::draw_wallpaper();
     vnu::kbd::drain_excess();
     vnu::mouse::init();
@@ -1390,6 +1398,10 @@ void run(const char* open_app)
 exit_gui:
     for (int i = 0; i < order_len; ++i)
         vnu::wintask::close_task(order[i]);
+    /* Nothing is left on screen to draw the wallpaper into, and the
+     * pool is worth more to the console than to a picture nobody is
+     * looking at. */
+    vnu::wallpaper::unload();
     vnu::vgfx::exit_to_text();
 }
 

@@ -3,6 +3,7 @@
 #include <vnu/images.h>
 #include <vnu/abi.h>
 #include <vnu/paging.h>
+#include <vnu/pmm.h>
 #include <vnu/vfs.h>
 #include <vnu/posix.h>
 #include "embedded_vash.h"
@@ -56,10 +57,12 @@ extern "C" void vnu_proc_preempt(uint32_t sched_esp);
 extern "C" void vnu_proc_resume_preempted(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_timer_init();
 
-extern "C" void* vnu_kalloc(unsigned long n);
-extern "C" void vnu_kfree(void* p);
-
-/* Largest image the execve-from-VFS path will load (the app region cap). */
+/* Largest image the execve-from-VFS path will load (the app region cap).
+ * The staging buffer is taken from the PMM for the file's own size and
+ * given back as soon as the image is loaded: it used to be a 1 MiB
+ * vnu_kalloc(), which is the bump arena the image decoders in
+ * gui/wallpaper.cpp share through px.h - two execs of a VFS binary
+ * filled it, and every later one failed for want of memory. */
 constexpr uint32_t EXEC_FILE_CAP = 0x100000u;
 
 namespace {
@@ -555,31 +558,44 @@ int sys_execve(Registers* trap, const char* path, char* const* argv)
      * app region first if the new image is bigger than the old one),
      * then load it in place just like the embedded path. */
     uint8_t* image = nullptr;
+    uint32_t image_frames = 0;
     uint32_t size = 0;
     if (!prog) {
         int fd = vnu::vfs::open(path, static_cast<int>(vnu::posix::O_RDONLY));
         if (fd < 0)
             return -VNU_ENOENT;
-        image = static_cast<uint8_t*>(vnu_kalloc(EXEC_FILE_CAP));
-        if (!image) {
+        /* The file's own size, so a 6 KiB program stages in two frames
+         * instead of the 256 the cap would ask for. */
+        vnu::posix::Stat st;
+        int sr = vnu::vfs::fstat(fd, &st);
+        if (sr != 0 || st.size < sizeof(vnu::elf::Ehdr) ||
+            st.size > EXEC_FILE_CAP) {
+            vnu::vfs::close(fd);
+            return -VNU_ENOEXEC;
+        }
+        size = st.size;
+        image_frames = (size + vnu::pmm::FRAME_SIZE - 1u) / vnu::pmm::FRAME_SIZE;
+        const uint32_t phys = vnu::pmm::alloc_contig(image_frames);
+        if (!phys) {
             vnu::vfs::close(fd);
             return -VNU_ENOMEM;
         }
+        /* Identity-mapped by paging::init(), so the run is usable as a
+         * pointer here and stays mapped in the new process. */
+        image = reinterpret_cast<uint8_t*>(phys);
         uint32_t n = 0;
-        for (;;) {
-            int r = vnu::vfs::read(fd, image + n, EXEC_FILE_CAP - n);
+        while (n < size) {
+            int r = vnu::vfs::read(fd, image + n, size - n);
             if (r <= 0)
                 break;
             n += static_cast<uint32_t>(r);
-            if (n >= EXEC_FILE_CAP)
-                break;
         }
         vnu::vfs::close(fd);
-        if (n < sizeof(vnu::elf::Ehdr)) {
-            vnu_kfree(image);
+        if (n != size) {
+            vnu::pmm::free_contig(phys, image_frames);
             return -VNU_ENOEXEC;
         }
-        size = n;
+
         Process& cp = table[current_idx];
         uint32_t need = elf_need_pages(image, size);
         if (cp.pgdir_phys && need > cp.app_pages) {
@@ -587,7 +603,7 @@ int sys_execve(Registers* trap, const char* path, char* const* argv)
                     cp.pgdir_phys,
                     0x400000u + cp.app_pages * vnu::paging::PAGE_SIZE,
                     need - cp.app_pages)) {
-                vnu_kfree(image);
+                vnu::pmm::free_contig(phys, image_frames);
                 return -VNU_ENOMEM;
             }
             cp.app_pages = need;
@@ -595,10 +611,17 @@ int sys_execve(Registers* trap, const char* path, char* const* argv)
     }
 
     uint32_t entry;
-    if (prog)
+    if (prog) {
         entry = vnu::elf::load(prog->data, prog->size);
-    else
+    } else {
         entry = vnu::elf::load(image, size);
+        /* The segments are mapped now; the staging run is dead weight
+         * from here on, and the pool is the one place a big binary's
+         * read buffer can come from without being lost for good. */
+        vnu::pmm::free_contig(reinterpret_cast<uint32_t>(image),
+                              image_frames);
+        image = nullptr;
+    }
     if (!entry)
         return -VNU_ENOEXEC;
 

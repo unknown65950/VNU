@@ -14,22 +14,19 @@
 
 namespace vnu::vgfx {
 
-// The modes the desktop can be put into, smallest first. The backbuffer
-// is always allocated for the largest one, so a resolution change is a
-// register write and never a reallocation.
+// The modes the desktop can be put into, smallest first. MAX_MODE is
+// the top of the ladder and nothing else: the framebuffer is allocated
+// from the PMM for the mode actually programmed, so raising this buys
+// desktop room and costs RAM only while that mode is on screen. The
+// ladder used to be sized the other way round (a .bss backbuffer and
+// wallpaper frame at MAX_MODE, so that a mode change was a register
+// write and never a reallocation), which made the constant a
+// permanent tax on every machine: 1.25 MiB each, 2.5 MiB of memory a
+// 640x480 desktop could never get back, and 10 MiB of it at 32bpp -
+// which is why this driver stayed 8-bpp for as long as it did.
 //
-// Two trade-offs are baked into that "largest one" and are worth naming
+// One trade-off is still baked into the ladder, and is worth naming
 // before anyone raises MAX_MODE further:
-//
-//  - The backbuffer and the wallpaper frame are static 8-bpp arrays
-//    sized for MAX_MODE, resident in .bss for as long as the kernel
-//    runs: 1.25 MiB each at 1280x1024, so 2.5 MiB of pool that a
-//    machine can never get back. At 32bpp the same pair would be 10 MiB
-//    of .bss, which is why this driver stays 8-bpp. MAX_MODE is a real
-//    ceiling on RAM, not a free parameter: every step up costs a step
-//    of permanently reserved memory. When a mode stops being worth that
-//    (or the palette stops being the limiting factor), the fix is a
-//    mode-sized allocation from the PMM, not a bigger constant.
 //
 //  - An app's canvas is its own fixed size (480x340, see
 //    wintask::GFX_W/GFX_H), and the compositor scales it into the
@@ -86,16 +83,20 @@ constexpr uint8_t COLOR_LMAGENTA = 13;
 constexpr uint8_t COLOR_YELLOW = 14;
 constexpr uint8_t COLOR_WHITE = 15;
 
-// Switch from whatever text mode GRUB set up into the current mode
-// (DEFAULT_MODE, or whatever set_resolution() last chose). Captures the
-// current font + full register state first so exit_to_text() can restore
-// the exact mode the console was in.
 // Bytes of glyph data this module keeps in the image (the 8x16 console
 // font captured from the VGA font plus the 8x8 variant derived from it),
 // for the /proc/images accounting.
 uint32_t font_bytes();
 
-void enter_gfx_mode();
+// Switch from whatever text mode GRUB set up into the current mode
+// (DEFAULT_MODE, or whatever set_resolution() last chose). Captures the
+// current font + full register state first so exit_to_text() can restore
+// the exact mode the console was in.
+//
+// Returns false without touching the display when the mode's
+// framebuffer cannot be allocated, which is the only thing that can
+// stop the desktop from starting now: a pool with nothing left.
+bool enter_gfx_mode();
 
 // Restore the text mode saved by enter_gfx_mode().
 void exit_to_text();

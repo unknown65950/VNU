@@ -15,12 +15,24 @@
  * satisfy the resulting __addsf3-style calls, so the JPEG decoder is
  * never linked in.
  *
- * The kernel has no heap, but px.h's BMP/PNG paths malloc()/free().
- * Its <stdlib.h> facilities are #define'd (via VNU_IN_KERNEL) to the
- * bump allocator below: decode happens exactly once at desktop startup
- * and the memory is never needed back, so free() is a no-op and the
- * 2 MiB pool comfortably holds the worst case (decoded 590 KiB RGB
- * buffer + ~590 KiB inflate work + <64 KiB of compressed IDAT).
+ * All three of this module's buffers - the desktop frame, the quantized
+ * source and px.h's decode scratch - are taken from the PMM pool for
+ * as long as they are in use, and sized for the mode on screen rather
+ * than for the top of the ladder. What they used to be (.bss arrays at
+ * MAX_MODE, plus a 2 MiB bump arena resident for the kernel's whole
+ * life) is 4.7 MiB of memory a 640x480 desktop could never get back;
+ * the pool hands it out to whatever needs it, and back again when the
+ * desktop quits.
+ *
+ * The kernel has no heap of its own, but px.h's BMP/PNG paths
+ * malloc()/free(). Its <stdlib.h> facilities are #define'd (via
+ * VNU_IN_KERNEL) to the bump allocator below, which carves runs out of
+ * one pool allocation: 16-byte aligned bumps keep every decoder happy
+ * (int16 planes, byte IDAT...) regardless of the buffer's base
+ * alignment, and the 2 MiB it takes comfortably holds the worst case
+ * (decoded 590 KiB RGB buffer + ~590 KiB inflate work + <64 KiB of
+ * compressed IDAT). The arena lives exactly as long as the decode that
+ * uses it, so free() within a decode is still a no-op.
  *
  * The wallpaper is a setting rather than a picture to browse, so it
  * sits in /etc/vnu beside the demo pack instead of inside it, and
@@ -31,6 +43,7 @@
 #include <vnu/media.h>
 #include <vnu/abi.h>
 #include <vnu/px.h>
+#include <vnu/pmm.h>
 #include <vnu/vfs.h>
 #include <vnu/posix.h>
 #include <vnu/vga_gfx.h>
@@ -39,11 +52,11 @@
 
 namespace {
 
-/* Compact-bump arena backing px.h's malloc. 16-byte aligned bumps keep
- * every decoder happy (int16 planes, byte IDAT...) regardless of the
- * buffer's base alignment. Any need over the pool aborts the decode. */
+/* px.h's scratch, one allocation per decode. Null outside a decode, so
+ * a stray malloc() (there should be none) fails loudly instead of
+ * scribbling on a buffer nobody is using. */
 constexpr uint32_t PX_POOL_CAP = 2u * 1024u * 1024u;
-alignas(16) uint8_t g_px_pool[PX_POOL_CAP];
+uint8_t* g_px_pool = nullptr;
 uint32_t g_px_used = 0;
 
 /* Whole-desktop frame vga_gfx blits when a wallpaper is loaded. */
@@ -51,22 +64,59 @@ bool g_ready = false;
 
 /* Largest source we'll decode: the shipped 512x384, i.e. exactly half
  * the desktop at 2x upscale. Also keeps the pixel-bound memory (decoded
- * RGB buffer + PNG inflate work) inside the bump pool above. */
+ * RGB buffer + PNG inflate work) inside the decode arena above. */
 constexpr uint32_t MAX_PIX = 512u * 384u;
 
 /* The image in use, quantized to DAC indices at its own size and kept
  * across calls: a mode change only has to scale it to the new geometry,
  * and re-decoding the file would freeze the desktop for the seconds an
  * inflate of a 512x384 PNG costs on this hardware. */
-uint8_t g_small[MAX_PIX];
+uint8_t* g_small = nullptr;
 int g_small_w = 0;
 int g_small_h = 0;
 
-/* Bare name of the image in use, for /proc/gfx. */
+/* Bare name of the image in use, for /proc/gfx. It is a static array on
+ * purpose: releasing the pixels does not forget the choice. */
 constexpr int NAME_CAP = 64;
 char g_name[NAME_CAP];
-/* Sized for the largest supported mode, like the desktop backbuffer. */
-uint8_t g_wall[vnu::vgfx::MAX_MODE.width * vnu::vgfx::MAX_MODE.height];
+
+/* The frame, exactly one mode big - the same discipline as the desktop
+ * backbuffer it is blitted into (see vga_gfx.h). */
+uint8_t* g_wall = nullptr;
+uint32_t g_wall_px = 0;
+
+/* Whole frames a run of `px` bytes takes in the pool. */
+uint32_t frames_for(uint32_t px)
+{
+    return (px + vnu::pmm::FRAME_SIZE - 1u) / vnu::pmm::FRAME_SIZE;
+}
+
+uint8_t* take(uint32_t px)
+{
+    const uint32_t phys = vnu::pmm::alloc_contig(frames_for(px));
+    /* Identity-mapped by paging::init(): physical is virtual here. */
+    return phys ? reinterpret_cast<uint8_t*>(phys) : nullptr;
+}
+
+void give(uint8_t* p, uint32_t px)
+{
+    if (p)
+        vnu::pmm::free_contig(reinterpret_cast<uint32_t>(p), frames_for(px));
+}
+
+/* Hand every pixel back to the pool. A failed or replaced decode starts
+ * from here, so no run outlives the picture that wanted it. */
+void release_pixels()
+{
+    give(g_wall, g_wall_px);
+    g_wall = nullptr;
+    g_wall_px = 0;
+    give(g_small, MAX_PIX);
+    g_small = nullptr;
+    g_small_w = 0;
+    g_small_h = 0;
+    g_ready = false;
+}
 
 /* Catppuccin Mocha DAC palette (6-bit per channel), mirrors
  * kernel/drivers/vga_gfx.cpp CATT_PAL. Quantization compares RGB>>2
@@ -121,7 +171,8 @@ void note_name(const char* path)
 extern "C" void* vnu_kalloc(unsigned long n)
 {
     const uint32_t need = static_cast<uint32_t>((n + 15u) & ~15u);
-    if (need < static_cast<uint32_t>(n) || g_px_used + need > PX_POOL_CAP)
+    if (!g_px_pool || need < static_cast<uint32_t>(n) ||
+        g_px_used + need > PX_POOL_CAP)
         return nullptr;
     void* p = g_px_pool + g_px_used;
     g_px_used += need;
@@ -189,21 +240,14 @@ void stretch()
     }
 }
 
-/* Decode whatever is in g_file into g_wall. Returns 0 on success; a
- * failure leaves g_wall exactly as it was, because the quantization
- * only runs once a decoder has returned a clean picture. */
-int decode_into_frame(uint32_t n)
+/* Probe, decode and quantize g_file into g_small, leaving the frame
+ * alone. Returns 0 on success. The scratch arena is taken and released
+ * around the decode, and the quantized image - the one thing that has
+ * to outlive it - is already allocated by the caller. */
+int decode_quantized(uint32_t n)
 {
     if (n < 4)
         return -1;
-
-    /* The bump pool is never given back, so a second decode would run
-     * into the first one's leftovers. Nothing in it is live any more
-     * (the quantized image is a plain static array) so starting it over
-     * is safe. */
-    g_px_used = 0;
-    g_small_w = 0;
-    g_small_h = 0;
 
     int w = 0, h = 0;
     int fmt = px_probe(g_file, n, &w, &h);
@@ -212,34 +256,56 @@ int decode_into_frame(uint32_t n)
     if (static_cast<uint32_t>(w) * static_cast<uint32_t>(h) > MAX_PIX)
         return -1;
 
+    /* One arena for the decode: the RGB buffer and the inflate work it
+     * needs, handed out in 16-byte bites. */
+    g_px_pool = take(PX_POOL_CAP);
+    if (!g_px_pool)
+        return -1;
+    g_px_used = 0;
+
     uint8_t* rgb = static_cast<uint8_t*>(vnu_kalloc(
         (static_cast<uint32_t>(w) * static_cast<uint32_t>(h)) * 3u));
-    if (!rgb)
-        return -1;
     /* Dispatch the integer decoders directly instead of px_decode:
      * px_jpg_decode (with its float IDCT) must stay unreferenced so the
      * linker never pulls in soft-float calls this kernel cannot satisfy. */
     int rc;
-    if (fmt == PX_BMP)
-        rc = px_bmp_decode(g_file, n, &w, &h, rgb);
-    else if (fmt == PX_PNG)
-        rc = px_png_decode(g_file, n, &w, &h, rgb);
-    else
+    if (!rgb) {
         rc = -1;
-    if (rc != 0) {
-        vnu_kfree(rgb);
-        return -1;
+    } else if (fmt == PX_BMP) {
+        rc = px_bmp_decode(g_file, n, &w, &h, rgb);
+    } else if (fmt == PX_PNG) {
+        rc = px_png_decode(g_file, n, &w, &h, rgb);
+    } else {
+        rc = -1;
     }
-
-    quantize(rgb, w, h, g_small);
+    if (rc == 0) {
+        quantize(rgb, w, h, g_small);
+        g_small_w = w;
+        g_small_h = h;
+    }
     vnu_kfree(rgb);
-    g_small_w = w;
-    g_small_h = h;
-    stretch();
-    return 0;
+    give(g_px_pool, PX_POOL_CAP);
+    g_px_pool = nullptr;
+    return rc;
 }
 
 } // namespace
+
+/* A frame for the mode now programmed, the old one released. The mode
+ * only ever grows through resize(), but taking a fresh run when it does
+ * is simpler than tracking a capacity, and a frame that cannot be had
+ * is not a reason to keep the wrong-sized one. */
+bool take_frame(int w, int h)
+{
+    const uint32_t px = static_cast<uint32_t>(w) * static_cast<uint32_t>(h);
+    uint8_t* next = take(px);
+    if (!next)
+        return false;
+    give(g_wall, g_wall_px);
+    g_wall = next;
+    g_wall_px = px;
+    return true;
+}
 
 void resize()
 {
@@ -252,18 +318,50 @@ void resize()
      * to the procedural scene, which fits any mode. */
     if (!g_ready)
         return; /* the procedural scene has nothing to rescale */
-    if (g_small_w <= 0 || g_small_h <= 0)
+    if (g_small_w <= 0 || g_small_h <= 0) {
         g_ready = false;
-    else
-        stretch();
+        return;
+    }
+    if (!take_frame(vnu::vgfx::width(), vnu::vgfx::height())) {
+        /* Out of pool for the bigger mode: the procedural scene is
+         * always available and always fits. */
+        g_ready = false;
+        return;
+    }
+    stretch();
+}
+
+void unload()
+{
+    /* The desktop is over, so the pixels it was drawing are worth their
+     * frames back. The name stays: /etc/vnu/wallpaper is still the
+     * setting, and the next session re-decodes it. */
+    release_pixels();
 }
 
 bool load()
 {
+    /* A fresh start every time: the pool gets the last session's runs
+     * back before the new ones are asked for, so a machine that has run
+     * a few desktops in a row is in exactly the state of a fresh boot
+     * plus one desktop. */
+    release_pixels();
     uint32_t n = slurp(VNU_WALLPAPER);
-    if (decode_into_frame(n) != 0)
+    if (n < 4)
         return false;
+    g_small = take(MAX_PIX);
+    if (!g_small)
+        return false;
+    if (!take_frame(vnu::vgfx::width(), vnu::vgfx::height())) {
+        release_pixels();
+        return false;
+    }
+    if (decode_quantized(n) != 0) {
+        release_pixels();
+        return false;
+    }
     g_ready = true;
+    stretch();
     note_name(VNU_WALLPAPER);
     return true;
 }
@@ -273,8 +371,46 @@ int apply(const char* path)
     uint32_t n = slurp(path);
     if (n == 0)
         return -VNU_ENOENT;
-    if (decode_into_frame(n) != 0)
+    /* The candidate is decoded before the frame in use is touched, so
+     * a picture that turns out to be JPEG, oversized or out of pool
+     * leaves the desktop exactly as it was - the reason apply() is not
+     * a no-op on failure is the file, not the pixels. */
+    if (n < 4)
         return -VNU_EINVAL;
+    uint8_t* small = take(MAX_PIX);
+    if (!small)
+        return -VNU_EINVAL;
+    uint32_t frame_px = static_cast<uint32_t>(vnu::vgfx::width()) *
+                        static_cast<uint32_t>(vnu::vgfx::height());
+    uint8_t* wall = take(frame_px);
+    if (!wall) {
+        give(small, MAX_PIX);
+        return -VNU_EINVAL;
+    }
+    uint8_t* old_small = g_small;
+    uint32_t old_small_w = g_small_w, old_small_h = g_small_h;
+    uint8_t* old_wall = g_wall;
+    uint32_t old_wall_px = g_wall_px;
+    bool old_ready = g_ready;
+    g_small = small;
+    g_wall = wall;
+    g_wall_px = frame_px;
+    g_small_w = 0;
+    g_small_h = 0;
+    int rc = decode_quantized(n);
+    if (rc != 0) {
+        give(wall, frame_px);
+        give(small, MAX_PIX);
+        g_small = old_small;
+        g_small_w = old_small_w;
+        g_small_h = old_small_h;
+        g_wall = old_wall;
+        g_wall_px = old_wall_px;
+        g_ready = old_ready;
+        return -VNU_EINVAL;
+    }
+    give(old_wall, old_wall_px);
+    give(old_small, MAX_PIX);
 
     /* The picture is good, so it becomes the wallpaper file too. The
      * frame is already on screen by now: overwriting a VFS node of this
@@ -297,6 +433,7 @@ int apply(const char* path)
         return -VNU_EIO;
 
     g_ready = true;
+    stretch();
     note_name(path);
     return 0;
 }
@@ -306,9 +443,18 @@ const uint8_t* frame()
     return g_wall;
 }
 
+/* True only when there is a frame, and it is a frame for the mode on
+ * screen: the blit copies a whole mode's worth of pixels, so a frame
+ * left over from another geometry must read as absent (and the
+ * procedural scene, which is drawn straight into the backbuffer, takes
+ * its place). */
 bool ready()
 {
-    return g_ready;
+    if (!g_ready || !g_wall)
+        return false;
+    const uint32_t px = static_cast<uint32_t>(vnu::vgfx::width()) *
+                        static_cast<uint32_t>(vnu::vgfx::height());
+    return px == g_wall_px;
 }
 
 const char* current_name()

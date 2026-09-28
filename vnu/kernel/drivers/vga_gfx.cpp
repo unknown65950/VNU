@@ -1,4 +1,5 @@
 #include <vnu/vga_gfx.h>
+#include <vnu/pmm.h>
 #include <vnu/tty.h>
 #include <vnu/virtio_gpu.h>
 #include <vnu/wallpaper.h>
@@ -314,12 +315,45 @@ int g_width = vnu::vgfx::DEFAULT_MODE.width;
 int g_height = vnu::vgfx::DEFAULT_MODE.height;
 bool g_in_gfx_mode = false;
 
-/* Sized for the largest mode, not the current one: a resolution change
- * is then a register write and the backbuffer keeps its contents, so
- * nothing has to be reallocated (or repainted from scratch) mid-frame.
- * The cost is the .bss the unused head of it sits in - see the note on
- * MAX_MODE in the header for why that is a deliberate trade. */
-uint8_t g_backbuf[vnu::vgfx::MAX_MODE.width * vnu::vgfx::MAX_MODE.height];
+/* The desktop's framebuffer: one mode's worth of palette indices, from
+ * the PMM pool rather than .bss, so a 640x480 desktop holds 300 KiB
+ * instead of the 1.25 MiB of the top mode and a machine that never
+ * reaches the top mode never reserves it. It is identity-mapped, so
+ * the pointer is as good a virtual address as it is a physical one.
+ *
+ * A mode change swaps the pointer; the old run is released only once
+ * the new one is in hand, so a display that cannot be shown is a
+ * refusal (set_resolution() returns false) and never a half-state. */
+uint8_t* g_backbuf = nullptr;
+
+/* Whole frames a w x h mode's framebuffer takes. */
+uint32_t backbuf_frames(int w, int h)
+{
+    const uint32_t px = static_cast<uint32_t>(w) * static_cast<uint32_t>(h);
+    return (px + vnu::pmm::FRAME_SIZE - 1u) / vnu::pmm::FRAME_SIZE;
+}
+
+/* Take a zeroed framebuffer run for w x h, or 0 if the pool is out. */
+uint8_t* alloc_backbuf(int w, int h)
+{
+    const uint32_t phys = vnu::pmm::alloc_contig(backbuf_frames(w, h));
+    if (!phys)
+        return nullptr;
+    /* Identity-mapped by paging::init(), so the physical address is a
+     * usable pointer in the kernel and in every task. */
+    return reinterpret_cast<uint8_t*>(phys);
+}
+
+/* Give the framebuffer run back to the pool. The size is read off the
+ * mode it was taken for, which g_width/g_height still are. */
+void release_backbuf()
+{
+    if (!g_backbuf)
+        return;
+    vnu::pmm::free_contig(reinterpret_cast<uint32_t>(g_backbuf),
+                          backbuf_frames(g_width, g_height));
+    g_backbuf = nullptr;
+}
 
 /* Quarter-sine profile (0..255) used to carve the wallpaper's hill
  * silhouettes; indexed by column so the ranges stay procedural. */
@@ -389,7 +423,7 @@ bool mode_supported(int w, int h)
     return false;
 }
 
-void enter_gfx_mode()
+bool enter_gfx_mode()
 {
     /* Before the mode is programmed: from here on the framebuffer covers
      * the console's own characters. */
@@ -401,6 +435,19 @@ void enter_gfx_mode()
         g_have_saved = true;
     }
 
+    /* The framebuffer is taken before the card is programmed and reused
+     * if set_resolution() already took one for this mode (the seeded
+     * /etc/vnuconfig/gfx.conf asks for it from text mode, where the
+     * pool is much emptier). A pool with nothing left is the one reason
+     * the desktop cannot start, and it is better answered by leaving
+     * the console exactly as it was than by entering a mode with
+     * nowhere to draw. */
+    if (!g_backbuf) {
+        g_backbuf = alloc_backbuf(g_width, g_height);
+        if (!g_backbuf)
+            return false;
+    }
+
     program_mode(g_width, g_height);
     g_in_gfx_mode = true;
 
@@ -409,6 +456,7 @@ void enter_gfx_mode()
     if (!g_have_saved_pal)
         save_palette();
     load_palette(CATT_PAL);
+    return true;
 }
 
 bool set_resolution(int w, int h)
@@ -418,12 +466,22 @@ bool set_resolution(int w, int h)
     if (w == g_width && h == g_height)
         return true;
 
-    /* The virtio-gpu path owns a scanout resource of its own and is the
-     * one part of this that can run out of memory, so it is asked first:
-     * a mode that cannot be shown must not be programmed into the VGA
-     * side, or the two drivers would disagree about the screen. */
-    if (virtio_gpu::active() && !virtio_gpu::set_resolution(w, h))
+    /* A mode change is a reallocation now, and it is the one part that
+     * can run out of memory, so the new framebuffer is taken first: a
+     * mode that cannot be shown leaves the display, the virtio scanout
+     * and the old framebuffer exactly as they were. */
+    uint8_t* next = alloc_backbuf(w, h);
+    if (!next)
         return false;
+
+    /* The virtio-gpu path owns a scanout resource of its own, which is
+     * asked second for the same reason: the two drivers must never
+     * disagree about the screen. */
+    if (virtio_gpu::active() && !virtio_gpu::set_resolution(w, h)) {
+        vnu::pmm::free_contig(reinterpret_cast<uint32_t>(next),
+                              backbuf_frames(w, h));
+        return false;
+    }
 
     if (g_in_gfx_mode) {
         program_mode(w, h);
@@ -431,6 +489,8 @@ bool set_resolution(int w, int h)
          * palette has to go in again. */
         load_palette(CATT_PAL);
     }
+    release_backbuf(); /* still sized for the mode being left */
+    g_backbuf = next;
     g_width = w;
     g_height = h;
     return true;
@@ -438,6 +498,11 @@ bool set_resolution(int w, int h)
 
 void exit_to_text()
 {
+    /* The framebuffer goes back to the pool before the text mode is
+     * restored, so a machine that boots to the console holds none of
+     * it: the next desktop session takes a fresh run for whatever mode
+     * is configured by then. */
+    release_backbuf();
     if (!g_have_saved)
         return;
     g_in_gfx_mode = false;
