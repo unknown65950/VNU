@@ -84,6 +84,26 @@ and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
 with `-1` leaves a field unchanged; only root may chown.
 
 ### Notes on argument shapes
+- `fork()` — returns the child's pid in the parent, 0 in the child. The
+  child is a second scheduler-managed process with its own address
+  space, built like a spawned process's (app region, stack, heap) and
+  then *filled in* from the parent's frames: a fork is a copy, not a
+  shared mapping, so a write in one process is invisible in the other.
+  The child's stack lives at the same virtual address as the parent's
+  (the frames are private, and only one process runs at a time). The
+  child resumes at the instruction after `int $0x80` with the parent's
+  registers — the syscall's own interrupt frame, already on the
+  process's stack and therefore already copied — and its return value
+  forced to 0; the parent's frame is untouched and returns the pid.
+  uid/gid, name, brk and the app-page count are inherited; the parent
+  reaps the child with `waitpid`. Not copy-on-write: every private page
+  is duplicated. Errors: `-VNU_ENOMEM` (no free process slot or page
+  frames), `-VNU_EAGAIN` (the legacy one-way / windowed path, which has
+  no scheduler to run a second process in).
+- `kill(ebx, ecx)` — `sig` 0 is the POSIX liveness probe: the process
+  is looked up and **not** signalled (0 if it exists, `-VNU_ESRCH` if
+  not). Any other `sig` terminates the process and wakes a `waitpid`
+  blocked on it. Signals other than termination are not delivered yet.
 - `execve(ebx, ecx)` — replaces the current process image with the ELF
   found at path `ebx` (argv `ecx`). Resolution order: the embedded
   `/bin` table first, then a real VFS file — a guest-compiled binary in

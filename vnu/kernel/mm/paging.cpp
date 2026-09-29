@@ -2,6 +2,7 @@
 #include <vnu/pmm.h>
 
 extern "C" void* memset(void* dst, int val, unsigned long count);
+extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
 
 namespace {
 
@@ -246,6 +247,23 @@ static bool owns_frame(const AddrSpaceMeta* meta, uint32_t frame)
         if ((meta->data_frames[i] & ~0xFFFu) == (frame & ~0xFFFu))
             return true;
     return false;
+}
+
+bool copy_pages(uint32_t dst_pgdir, uint32_t src_pgdir, uint32_t vaddr_start, uint32_t num_pages)
+{
+    /* Frame by frame rather than through the current CR3: the two
+     * address spaces are not the one we are running in (and for a fork
+     * neither of them is), and a frame's physical address is a valid
+     * pointer here because the whole pool is identity-mapped. */
+    for (uint32_t p = 0; p < num_pages; ++p) {
+        uint32_t vaddr = vaddr_start + p * PAGE_SIZE;
+        uint32_t src = phys_frame_at(src_pgdir, vaddr);
+        uint32_t dst = phys_frame_at(dst_pgdir, vaddr);
+        if (!src || !dst)
+            return false;
+        memcpy(reinterpret_cast<void*>(dst), reinterpret_cast<const void*>(src), PAGE_SIZE);
+    }
+    return true;
 }
 
 bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages)

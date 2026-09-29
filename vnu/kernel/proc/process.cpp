@@ -47,6 +47,7 @@
 #include "embedded_tlsdemo.h"
 #include "embedded_echoserver.h"
 #include "embedded_tlsserver.h"
+#include "embedded_forkdemo.h"
 #include "embedded_vcc.h"
 #include "embedded_vnu.h"
 
@@ -124,6 +125,7 @@ const EmbeddedProg embedded[] = {
     {"/bin/tlsdemo", embedded_tlsdemo_elf, embedded_tlsdemo_elf_size},
     {"/bin/echoserver", embedded_echoserver_elf, embedded_echoserver_elf_size},
     {"/bin/tlsserver", embedded_tlsserver_elf, embedded_tlsserver_elf_size},
+    {"/bin/forkdemo", embedded_forkdemo_elf, embedded_forkdemo_elf_size},
     {"/bin/vcc", embedded_vcc_elf, embedded_vcc_elf_size},
     {"/bin/vnu", embedded_vnu_elf, embedded_vnu_elf_size},
     /* short names for convenience */
@@ -492,12 +494,81 @@ int sys_setgid(uint32_t gid)
     return 0;
 }
 
+/* fork(2): a second process with a copy of this one's memory, its own
+ * identity, and the same place in the instruction stream.
+ *
+ * What it used to be is worth keeping in mind. The child got a process
+ * slot, a pid and a copy of the registers, and nothing else: no address
+ * space of its own (so both "processes" wrote the same memory), and no
+ * coroutine to run it in, so the only way it ever ran was sys_exit()
+ * handing the *parent* its saved registers back - a fork that could
+ * not overlap the caller, and whose child existed only to be waited
+ * for. It is now a real one:
+ *
+ *   - its own address space, built exactly like a spawned process's
+ *     (app region, a stack, the heap) and then *filled in* from the
+ *     parent's frames: fork is a copy, not a shared mapping, so a
+ *     write in one process is invisible in the other;
+ *   - its own stack region at the *same* virtual address as the
+ *     parent's - the child resumes with the parent's esp, so its copy
+ *     of the stack has to be where the copy of esp points. The frames
+ *     are private, and only one process runs at a time, so the shared
+ *     address costs nothing (it does mean the stack's address no
+ *     longer names the slot, which nothing depends on);
+ *   - a first slice that needs no trampoline: the frame the CPU is
+ *     leaving right now - the syscall's own pushad + interrupt frame,
+ *     on the process's stack, and therefore already inside the memory
+ *     being copied - *is* the child's saved state. Switching into the
+ *     child with preempted=true pops it and irets straight back into
+ *     user mode at the instruction after int $0x80, which is the same
+ *     path a preempted process takes. Only the child's copy of the
+ *     return value is changed, to the 0 fork() promises.
+ */
 int sys_fork(Registers* trap)
 {
-    int slot = alloc_slot();
-    if (slot < 0)
-        return -VNU_ENOMEM;
     Process& parent = table[current_idx];
+    /* The legacy one-way path (a windowed task, or a program run
+     * straight from a file with no scheduler behind it) has no second
+     * place to run a process, and no address space of its own to copy.
+     * -EAGAIN rather than a process that can never be scheduled. */
+    if (!parent.coro || !parent.pgdir_phys || !trap->frame)
+        return -VNU_EAGAIN;
+    int slot = alloc_slot();
+    if (slot <= 0) /* slot 0 is the scheduler/console process */
+        return -VNU_ENOMEM;
+
+    const uint32_t stack_base = parent.user_stack_top - USER_STACK_SIZE;
+    const uint32_t stack_pages = USER_STACK_SIZE / vnu::paging::PAGE_SIZE;
+    const uint32_t heap_pages = (BRK_MAX - BRK_MIN) / vnu::paging::PAGE_SIZE;
+    /* vlibc's malloc() claims the whole 1 MiB in one brk() on its
+     * first call, so a break past BRK_MIN means the whole heap region
+     * is the parent's to hand over. A process that never allocated
+     * forks for its app pages and its stack alone (64 KiB), not 1.1 MiB. */
+    const uint32_t heap_in_use = (parent.brk > BRK_MIN) ? heap_pages : 0;
+    vnu::paging::MapRange ranges[3] = {
+        {0x00400000, parent.app_pages},
+        {stack_base, stack_pages},
+        {BRK_MIN, heap_in_use},
+    };
+    uint32_t pgdir = vnu::paging::create_address_space(ranges, heap_in_use ? 3 : 2);
+    if (!pgdir)
+        return -VNU_ENOMEM;
+
+    const uint32_t src = parent.pgdir_phys;
+    bool ok = vnu::paging::copy_pages(pgdir, src, 0x00400000, parent.app_pages) &&
+              vnu::paging::copy_pages(pgdir, src, stack_base, stack_pages) &&
+              (heap_in_use == 0 ||
+               vnu::paging::copy_pages(pgdir, src, BRK_MIN, heap_in_use));
+    if (!ok) {
+        vnu::paging::destroy_address_space(pgdir);
+        return -VNU_ENOMEM;
+    }
+    /* The child's own copy of the frame, with fork()'s return value:
+     * eax sits 28 bytes into a pushad frame (edi esi ebp esp(ignored)
+     * ebx edx ecx eax). The parent's frame is untouched - it is about
+     * to be popped with the pid in eax. */
+    phys_store32(pgdir, trap->frame + 28, 0);
+
     Process& child = table[slot];
     child = {};
     child.pid = next_pid++;
@@ -505,11 +576,19 @@ int sys_fork(Registers* trap)
     child.state = State::Runnable;
     child.uid = parent.uid;
     child.gid = parent.gid;
-    child.user_stack_top =
-        USER_STACK_BASE + static_cast<uint32_t>((slot + 1) * USER_STACK_SIZE);
-    child.regs = *trap;
+    child.pgdir_phys = pgdir;
+    child.user_stack_top = parent.user_stack_top;
+    child.brk = parent.brk;
+    child.app_pages = parent.app_pages;
+    child.coro = true;
+    child.started = true;
+    child.preempted = true;   /* the frame above is a full one: popad+iret */
+    child.coro_esp = trap->frame;
+    child.regs = *trap;       /* for /proc's sake; the resume path above */
     child.regs.eax = 0;
+    child.regs.esp = trap->frame + 44; /* where the iret leaves it */
     child.regs.eflags = trap->eflags ? trap->eflags : 0x202;
+    copy_str(child.name, parent.name, sizeof(child.name));
     return child.pid;
 }
 
@@ -758,16 +837,31 @@ int sys_waitpid(int pid, int* status, int options)
     }
 }
 
-int sys_kill(int pid, int)
+int sys_kill(int pid, int sig)
 {
+    /* Signal 0 is the POSIX liveness probe - "may I signal this pid?" -
+     * and it must not signal anything. Nothing here delivers signals
+     * yet (that is the next piece of work), so without this a probe
+     * would be a kill with a made-up status: `kill(pid, 0)` is exactly
+     * how a program asks whether its child is still there, and the
+     * answer it used to get was the child dying of signal 9. */
+    bool found = false;
     for (int i = 0; i < MAX_PROCS; ++i) {
-        if (table[i].state != State::Unused && table[i].pid == pid) {
-            table[i].exit_code = 9;
-            table[i].state = State::Zombie;
+        if (table[i].state == State::Unused || table[i].pid != pid)
+            continue;
+        found = true;
+        if (sig == 0)
             return 0;
-        }
+        table[i].exit_code = 9;
+        table[i].state = State::Zombie;
+        /* A parent asleep in waitpid() is waiting on a channel this
+         * exit never wakes, so it would sleep until the child's own
+         * luck ran out. Waking it is what makes the kill visible. */
+        wakeup(WAIT_ZOMBIE_ANY);
+        wakeup(wait_chan_of_child(table[i].pid));
+        return 0;
     }
-    return -VNU_ESRCH;
+    return found ? 0 : -VNU_ESRCH;
 }
 
 bool schedule()

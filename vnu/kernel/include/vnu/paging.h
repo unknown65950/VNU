@@ -53,6 +53,18 @@ bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t nu
 // frames. Safe to call with kernel_pgdir_phys() (a no-op).
 void destroy_address_space(uint32_t pgdir_phys);
 
+/* Copies `num_pages` pages of `vaddr_start` from one address space to
+ * another, page by page, through the kernel's identity-mapped view of
+ * both: every private frame is handed out below the 32 MiB identity
+ * map, so a physical frame address is a valid kernel pointer. The
+ * destination must already have those pages mapped
+ * (create_address_space()/extend_address_space()) - only the contents
+ * move. Returns false if either side is missing a page of the range.
+ *
+ * This is what makes fork() a copy rather than a shared mapping: the
+ * child gets its own frames, filled in from the parent's. */
+bool copy_pages(uint32_t dst_pgdir, uint32_t src_pgdir, uint32_t vaddr_start, uint32_t num_pages);
+
 void switch_to(uint32_t pgdir_phys);
 uint32_t current_pgdir();
 

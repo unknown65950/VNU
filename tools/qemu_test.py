@@ -461,6 +461,26 @@ SUITE = [
     # `install` is a `vnu` subcommand now, so it has no page of its own.
     ("man-no-install", "man install",
      [r"^man: no manual page for install$"], []),
+    # -- fork(2) --------------------------------------------------------
+    # `forkdemo` prints one line per claim the kernel makes about a
+    # forked child: two processes that run at the same time, separate
+    # pid/ppid, a private address space, and a reaped child with its
+    # exit status. The two marker lines are the memory claim, and their
+    # order is the concurrency claim: the parent prints while the child
+    # is still asleep, which a child that only ran at the parent's exit
+    # could not manage.
+    ("fork-man", "man forkdemo > /tmp/man-forkdemo.out", [],
+     [r"press h for help"]),
+    ("fork-man-text", "cat /tmp/man-forkdemo.out",
+     [r"^NAME$", r"forkdemo -", r"^SYNOPSIS$", r"^SEE ALSO$"], []),
+    ("fork-run", "forkdemo",
+     [r"^forkdemo: parent pid=\d+$",
+      r"^forkdemo: parent forked pid=\d+, marker=1$",
+      r"^forkdemo: child pid=0 getpid=\d+ getppid=\d+$",
+      r"^forkdemo: child marker=2 \(its own copy\)$",
+      r"^forkdemo: parent marker=1, child alive\? yes$",
+      r"^forkdemo: parent marker=1 after the child wrote 2$",
+      r"^forkdemo: waitpid -> pid=\d+ status=7$"], []),
     ("df", "df", [r"^Filesystem", r"^vfs +\d+ +\d+ +\d+ +\d+% /$"], []),
     ("motd", "cat /etc/motd", [r"Welcome to VNU"], []),
     ("echo", "echo hello world", [r"^hello world$"], []),

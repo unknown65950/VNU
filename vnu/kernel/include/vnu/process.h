@@ -13,6 +13,14 @@ enum class State : uint8_t { Unused=0, Runnable, Running, Blocked, Zombie };
 struct Registers {
     uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
     uint32_t eip, eflags;
+    /* Where this snapshot was read from, when the caller can say: the
+     * address of the interrupt frame the CPU pushed on the *process's
+     * own* stack (a syscall runs on it - this kernel has one address
+     * space and no TSS ring stack), as a virtual address in that
+     * process. A forked child resumes from its copy of exactly this
+     * frame, which is why the value has to be a virtual address and
+     * not just a register set (see sys_fork). 0 = not recorded. */
+    uint32_t frame;
 };
 
 struct Process {

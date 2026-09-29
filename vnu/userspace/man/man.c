@@ -1099,6 +1099,33 @@ DESCRIPTION\n\
     vector, showing how the kernel passes argc/argv to an\n\
     embedded userspace binary. Mostly useful as a test.\n"
 
+#define FORKDEMO_PAGE "NAME\n\
+    forkdemo - what fork(2) gives a child, and what it does not\n\
+\n\
+SYNOPSIS\n\
+    forkdemo\n\
+\n\
+DESCRIPTION\n\
+    Forks once and reports what the two processes can see of each\n\
+    other. The child is a second process in its own address space:\n\
+    it runs while the parent runs, has its own pid, and resumes at\n\
+    the instruction after fork() with a return value of 0. Memory is\n\
+    not shared - the child writes to a variable in .data and the\n\
+    parent never sees it. The filesystem, the console and every other\n\
+    process are shared, and the parent reaps the child with\n\
+    waitpid().\n\
+\n\
+    Useful as a smoke test for the process table and for fork()\n\
+    itself: every line printed is a claim about what the kernel\n\
+    guarantees.\n\
+\n\
+EXIT STATUS\n\
+    0 if waitpid() returned the child's pid and its exit status 7,\n\
+    1 if fork() failed or the child was not reaped as expected.\n\
+\n\
+SEE ALSO\n\
+    ttytest(1), man(1)\n"
+
 #define TTYTEST_PAGE "NAME\n\
     ttytest - POSIX compatibility smoke test\n\
 \n\
@@ -1347,6 +1374,8 @@ static const struct Page pages[] = {
      HELLO_PAGE},
     {"ttytest",  "POSIX compatibility smoke test",
      TTYTEST_PAGE},
+    {"forkdemo", "fork(2) demonstration program",
+     FORKDEMO_PAGE},
     {"tlsdemo",  "TLS 1.2 client demo",
      TLSDEMO_PAGE},
     {"echoserver", "TCP echo server demo",

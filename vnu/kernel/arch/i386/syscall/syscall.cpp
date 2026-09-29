@@ -226,6 +226,12 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
         return static_cast<std::uint32_t>(vnu::proc::sys_getpid());
     case VNU_SYS_fork: {
         vnu::proc::Registers trap{};
+        /* The frame the CPU pushed on this process's own stack: where
+         * the child is, and the only way back to user mode for it (a
+         * fork resumes through the same popad+iretd the preemptive
+         * timer path uses, so it lands with the parent's registers and
+         * fork()'s return value of 0). */
+        trap.frame = reinterpret_cast<std::uint32_t>(tf);
         trap.edi = tf->edi;
         trap.esi = tf->esi;
         trap.ebp = tf->ebp;

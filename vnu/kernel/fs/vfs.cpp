@@ -784,6 +784,7 @@ void init()
     add("/bin/clear", false);
     add("/bin/vedit", false);
     add("/bin/ttytest", false);
+    add("/bin/forkdemo", false);
     add("/bin/wc", false);
     add("/bin/head", false);
     add("/bin/tail", false);
