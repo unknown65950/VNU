@@ -2,6 +2,8 @@
 
 namespace {
 
+extern "C" void vnu_debug_putc(char c); /* serial (COM1), like every driver */
+
 uint8_t inb(uint16_t p)
 {
     uint8_t x;
@@ -157,57 +159,141 @@ int decode_scancode(uint8_t s, DecoderState& st)
     return ch ? static_cast<int>(static_cast<uint8_t>(ch)) : -1;
 }
 
+/* --- The scancode queue --------------------------------------------
+ * The scancodes the controller has handed over, in arrival order, and
+ * the state of the one decoder that turns them into characters.
+ *
+ * Reading port 0x60 is destructive, and this machine has more than one
+ * place that wants a key: the shell's read is a spin over poll_char()
+ * that yields to the scheduler between characters, and a desktop that
+ * is up has its own event loop doing the same. Two readers on one
+ * destructive port are a byte gone from both - and worse, a *stale*
+ * one: each reader checks the status register and then reads the data
+ * register, and a timer interrupt between those two instructions lets
+ * the other reader take the byte, so the second read returns whatever
+ * the output register still holds. A stream read that way loses makes
+ * and duplicates breaks, and the text typed comes out with holes in it:
+ * a `cat /proc/gfx` sent at the shell arrives as `cat /procgfx`, one
+ * make code gone and its break code read twice.
+ *
+ * So the controller is drained into this queue, with interrupts off -
+ * the status/data pair has to be read as one - and every reader takes
+ * from the queue. Each byte is read once, goes to exactly one reader,
+ * and the decoder state is the device's rather than a reader's: which
+ * modifier is held and whether an 0xE0 prefix is outstanding is a fact
+ * about the keyboard, so one state per reader would be two half-true
+ * answers to the same question, and a key the desktop read between two
+ * shell reads leaves a prefix pending that turns the shell's next
+ * character into an arrow key.
+ *
+ * Overflow drops the newest byte: the alternative is a reader that
+ * never catches up, and a lost keypress is a smaller harm than a
+ * keyboard stuck in one state. */
+constexpr int SCAN_QUEUE = 256;
+uint8_t scan_queue[SCAN_QUEUE];
+int scan_head = 0;
+int scan_tail = 0;
+DecoderState decoder;
+
+bool queue_empty()
+{
+    return scan_head == scan_tail;
+}
+
+void note_overflow()
+{
+    /* The queue holds 255 scancodes: a power-on self-test, a mouse
+     * handshake, or a keypress away faster than anyone can type. It has
+     * not happened in a boot, and one line about it is all it deserves. */
+    static bool said = false;
+    if (said)
+        return;
+    said = true;
+    for (const char* s = "kbd: scancode queue overflow\n"; *s; ++s)
+        vnu_debug_putc(*s);
+}
+
+/* Move everything the controller has into the queue. The cli is the
+ * whole point of this: it runs from the shell's read loop (which yields
+ * between characters) and from the desktop's event loop, and a
+ * preemption between the status read and the data read is exactly what
+ * produced the stale bytes. The interrupt flag is put back as it was
+ * found, so this is also correct in a caller that runs with interrupts
+ * already off. cli and not a spinlock, because the drain is a handful
+ * of inb instructions and there is nothing here to block on. */
+void fill_queue()
+{
+    uint32_t flags;
+    asm volatile("pushfl; popl %0" : "=r"(flags));
+    asm volatile("cli" ::: "memory");
+    for (;;) {
+        /* Status bit0 = output buffer full, bit5 = the byte came from
+         * the aux (mouse) device rather than the keyboard. Both are
+         * checked, or a pending mouse packet byte is stolen and
+         * dropped here before vnu::mouse::poll() ever sees it. */
+        if ((inb(0x64) & 0x21) != 0x01)
+            break;
+        uint8_t s = inb(0x60);
+        int next = (scan_tail + 1) % SCAN_QUEUE;
+        if (next == scan_head) {
+            note_overflow();
+            continue;
+        }
+        scan_queue[scan_tail] = s;
+        scan_tail = next;
+    }
+    if (flags & 0x200u)
+        asm volatile("sti" ::: "memory");
+}
+
 } // namespace
 
 namespace vnu::kbd {
 
 char getch_blocking()
 {
-    static DecoderState st;
     for (;;) {
-        if (!(inb(0x64) & 1)) {
-            asm volatile("pause");
-            continue;
+        fill_queue();
+        if (!queue_empty()) {
+            uint8_t s = scan_queue[scan_head];
+            scan_head = (scan_head + 1) % SCAN_QUEUE;
+            int ch = decode_scancode(s, decoder);
+            if (ch >= 0)
+                return static_cast<char>(ch);
+            continue;   /* a modifier or a prefix, not a character */
         }
-        uint8_t s = inb(0x60);
-        int ch = decode_scancode(s, st);
-        if (ch >= 0)
-            return static_cast<char>(ch);
+        /* Nothing queued and the controller has nothing either. This is
+         * the fallback reader for contexts with nothing else to run
+         * (the native console); the shell's read goes through
+         * poll_char() so the machine can run other processes. */
+        asm volatile("pause");
     }
 }
 
 int poll_char()
 {
-    /* Separate decoder state from getch_blocking()'s — safe because
-     * the two are never used in the same session (the GUI owns the
-     * keyboard exclusively via poll_char() while it's running; every
-     * other context uses the blocking reader). */
-    static DecoderState st;
-    if (!scancode_ready())
+    /* One scancode out of the queue, decoded with the device's own
+     * state. -1 means either "nothing to read" or "that byte was not a
+     * character" (a modifier, a release, a prefix); both are the same
+     * to a caller that polls in a loop, and both leave the queue one
+     * byte shorter. */
+    fill_queue();
+    if (queue_empty())
         return -1;
-    uint8_t s = read_raw_scancode();
-    return decode_scancode(s, st);
-}
-
-bool scancode_ready()
-{
-    /* Status bit0 = output buffer full, bit5 = byte came from the aux
-     * (mouse) device rather than the keyboard. Must check both, or a
-     * pending mouse packet byte gets stolen and dropped here before
-     * vnu::mouse::poll() ever sees it. */
-    uint8_t status = inb(0x64);
-    return (status & 0x21) == 0x01;
+    uint8_t s = scan_queue[scan_head];
+    scan_head = (scan_head + 1) % SCAN_QUEUE;
+    return decode_scancode(s, decoder);
 }
 
 void drain_excess()
 {
-    while (scancode_ready())
-        (void)inb(0x60);
-}
-
-uint8_t read_raw_scancode()
-{
-    return inb(0x60);
+    /* Whatever the controller has, plus whatever the queue took on its
+     * way in, and the decoder state that goes with it: the desktop does
+     * this before it re-initialises the aux device, so a key pressed
+     * earlier cannot be read as a mouse acknowledgement. */
+    fill_queue();
+    scan_head = scan_tail;
+    decoder = DecoderState{};
 }
 
 } // namespace vnu::kbd

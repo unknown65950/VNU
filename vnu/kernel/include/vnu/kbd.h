@@ -21,17 +21,17 @@ constexpr int K_F10 = 0x91;
 constexpr int K_F11 = 0x92;
 constexpr int K_F12 = 0x93;
 
+/* The next character typed, waiting for one. The scancodes behind it
+ * go through one queue with one decoder state (see kbd.cpp): port 0x60
+ * is destructive, and two readers of it lose bytes - and read stale
+ * ones - so every reader in the machine takes from that queue. */
 char getch_blocking();
 
-/* Non-blocking raw access, used by the GUI event loop so it can poll
- * keyboard + mouse in the same frame instead of blocking on a key. */
-bool scancode_ready();
-uint8_t read_raw_scancode();
-
-/* Discard any bytes already sitting in the keyboard output buffer.
- * Used by the GUI before re-initialising the aux device, so a stale
- * keyboard byte left over from an earlier read isn't misread as a
- * mouse command acknowledgement. */
+/* Discard any bytes the controller and the queue are holding, and the
+ * decoder state that goes with them. Used by the GUI before
+ * re-initialising the aux device, so a stale keyboard byte left over
+ * from an earlier read isn't misread as a mouse command
+ * acknowledgement. */
 void drain_excess();
 
 /* Non-blocking, shift/ctrl-aware character decode (same mapping as
