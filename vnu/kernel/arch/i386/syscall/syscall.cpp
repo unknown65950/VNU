@@ -16,11 +16,7 @@
 #include <vnu/audio.h>
 #include <vnu/wallpaper.h>
 #include <vnu/vga_gfx.h>
-
-struct TrapFrame {
-    std::uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
-    std::uint32_t eip, cs, eflags;
-};
+#include <vnu/trapframe.h>
 
 extern "C" void vnu_debug_putc(char c);
 void vnu_debug_putc(char c)
@@ -41,7 +37,7 @@ extern "C" std::uint8_t vnu_pending_user_esp_flag;
 extern "C" std::uint32_t vnu_pending_user_eip;
 extern "C" std::uint8_t vnu_pending_jump_flag;
 
-extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
+static std::uint32_t dispatch_syscall(TrapFrame* tf)
 {
     switch (tf->eax) {
     case VNU_SYS_write: {
@@ -113,13 +109,32 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
                     for (;;) {
                         int c = vnu::kbd::poll_char();
                         if (c >= 0) {
+                            /* ^C is not a character at the console, it is
+                             * a signal: the terminal driver turns it into
+                             * SIGINT for the process at the keyboard and
+                             * hands the read an EINTR, so the key never
+                             * becomes a byte in the program's input and
+                             * the handler runs between the key and the
+                             * read's return. A windowed console is a
+                             * different terminal - its keys come from
+                             * the GUI, not the controller - and delivers
+                             * the byte as before. */
+                            if (c == vnu::kbd::K_INTR) {
+                                if (vnu::proc::console_signal(VNU_SIGINT))
+                                    return static_cast<std::uint32_t>(-VNU_EINTR);
+                                continue;
+                            }
                             ch = static_cast<char>(c);
                             break;
                         }
+                        if (vnu::proc::interrupt_pending())
+                            return static_cast<std::uint32_t>(-VNU_EINTR);
                         vnu::proc::yield_current();
                     }
                 } else {
                     ch = vnu::kbd::getch_blocking();
+                    if (ch == vnu::kbd::K_INTR && vnu::proc::console_signal(VNU_SIGINT))
+                        return static_cast<std::uint32_t>(-VNU_EINTR);
                 }
                 buf[i] = ch;
                 if (ch == '\n')
@@ -420,6 +435,24 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
     case VNU_SYS_kill:
         return static_cast<std::uint32_t>(
             vnu::proc::sys_kill(static_cast<int>(tf->ebx), static_cast<int>(tf->ecx)));
+    case VNU_SYS_rt_sigaction:
+        return static_cast<std::uint32_t>(vnu::proc::sys_rt_sigaction(
+            static_cast<int>(tf->ebx), reinterpret_cast<const std::uint32_t*>(tf->ecx),
+            reinterpret_cast<std::uint32_t*>(tf->edx)));
+    case VNU_SYS_rt_sigprocmask:
+        return static_cast<std::uint32_t>(vnu::proc::sys_rt_sigprocmask(
+            static_cast<int>(tf->ebx), reinterpret_cast<const std::uint32_t*>(tf->ecx),
+            reinterpret_cast<std::uint32_t*>(tf->edx)));
+    case VNU_SYS_rt_sigreturn:
+        return vnu::proc::sys_rt_sigreturn(tf);
+    case VNU_SYS_sigraise:
+        return static_cast<std::uint32_t>(
+            vnu::proc::sys_sigraise(static_cast<int>(tf->ebx)));
+    case VNU_SYS_sigpending:
+        return static_cast<std::uint32_t>(
+            vnu::proc::sys_sigpending(reinterpret_cast<std::uint32_t*>(tf->ebx)));
+    case VNU_SYS_alarm:
+        return vnu::proc::sys_alarm(tf->ebx);
     case VNU_SYS_uname: {
         auto* u = reinterpret_cast<vnu_utsname*>(tf->ebx);
         if (!u)
@@ -720,6 +753,29 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
     default:
         return static_cast<std::uint32_t>(-VNU_ENOSYS);
     }
+}
+
+/* The syscall proper, and the one place a signal is handed to a program
+ * that asked for one: the kernel is on its way back to the process it
+ * took the call from, which is the moment the program is about to run
+ * its own code again. The handler is built on the frame this very
+ * syscall is leaving behind, so when the handler is done sigreturn can
+ * point the return path back at the interrupted call - the program sees
+ * the syscall's own return value and the handler both, in that order,
+ * which is what POSIX means by "the system call fails with EINTR".
+ *
+ * Not for an execve or a windowed task landing: those take over the
+ * stack with vnu_pending_jump_flag, and a signal has to wait for the
+ * next boundary. Nor while a handler is already running, which is the
+ * one case the flag covers (a signal raised between the handler's
+ * sigreturn and the flag being cleared). */
+extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
+{
+    std::uint32_t rc = dispatch_syscall(tf);
+    if (!vnu_pending_jump_flag && !vnu::wintask::current_is_task() &&
+        vnu::proc::deliver_pending_signal(reinterpret_cast<std::uint32_t>(tf)) != 0)
+        rc = static_cast<std::uint32_t>(-VNU_EINTR);
+    return rc;
 }
 
 extern "C" {

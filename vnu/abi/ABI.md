@@ -78,6 +78,12 @@ must never be renumbered.
 | 63 | gfx_getmode |
 | 64 | gfx_getinfo |
 | 65 | gfx_palette |
+| 66 | rt_sigaction |
+| 67 | rt_sigprocmask |
+| 68 | rt_sigreturn |
+| 69 | alarm |
+| 70 | sigraise |
+| 71 | sigpending |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
@@ -330,6 +336,55 @@ with `-1` leaves a field unchanged; only root may chown.
 - `audio_close()` — stops playback, resets the bus-master DMA state and
   closes the session, releasing the device for the next `audio_open`.
   Returns 0, or `-VNU_EIO` if the device was never opened.
+- `rt_sigaction(ebx, ecx, edx)` — `ecx` points at a `struct vnu_sigaction`
+  (`handler`, `mask`, `flags`, `restorer`, 16 bytes) and `edx`, when not
+  null, gets the action being replaced. `handler` is a `void (*)(int)`
+  address or one of `VNU_SIG_DFL`/`VNU_SIG_IGN`; `mask` is added to the
+  process's blocked set for as long as the handler runs; `restorer` is
+  the address the handler's own `return` lands on, and
+  `VNU_SA_RESTORER` is therefore not optional in practice — the kernel
+  has no other way to learn that a handler has finished. Of the flags,
+  `VNU_SA_NODEFER` and `VNU_SA_RESETHAND` work; `VNU_SA_ONSTACK`,
+  `VNU_SA_RESTART` and `VNU_SA_SIGINFO` are accepted and ignored, since
+  there are no alternate stacks and no `siginfo`. Returns 0, or
+  `-VNU_EINVAL` for a signal outside 1..`VNU_NSIG`-1.
+- `rt_sigprocmask(ebx, ecx, edx)` — `how` is `VNU_SIG_BLOCK`,
+  `VNU_SIG_UNBLOCK` or `VNU_SIG_SETMASK`; `ecx` is a pointer to a set
+  of signals (one 32-bit word, bit n = signal n) and `edx`, when not
+  null, receives the old set. `SIGKILL` can never be blocked. Returns
+  0, or `-VNU_EINVAL` for a `how` that is none of the three.
+- `rt_sigreturn()` — takes no arguments and is not meant to be called by
+  a program: it is the end of every handler, reached through the
+  `restorer` address above. It restores the saved signal mask and drops
+  back into the code the signal interrupted, with that call's own return
+  value in `eax`.
+- `alarm(ebx)` — arms `SIGALRM` for `ebx` seconds from now (0 cancels a
+  pending one, which then returns the seconds left; the call is
+  one-shot, there is no `setitimer`). Returns the seconds of a previous
+  alarm still pending, 0 if there was none.
+- `sigraise(ebx)` — raises signal `ebx` for the calling process.
+  Returns 0, or `-VNU_EINVAL` for a signal outside the range above.
+- `sigpending(ebx)` — stores the set of signals raised but not yet
+  delivered in the 32-bit word at `ebx`. Returns 0.
+
+Signals are raised and delivered at two different moments, which is what
+POSIX means and what the console depends on. Raising records the signal
+against the process (`kill`, `sigraise`, `SIGALRM` firing, a reader
+going away for `SIGPIPE`); it is not a jump, so a signal raised while
+the process is inside a syscall, or between two of its own instructions,
+does not run the handler there and then. Delivery happens at the next
+boundary where the process is on its way back to its own code — which
+for a blocked console `read()` is that very call's return — and the
+handler is built on the interrupt frame of the call being left behind.
+The call then fails with `EINTR` *and* the handler has run, in that
+order, which is the POSIX meaning of "the system call fails with
+`EINTR`". A windowed task is not a boundary: it must let its slice end
+instead (see the `gfx_surface` note), so a signal raised for one waits
+for the next boundary. `SIGINT` from the console is the everyday case:
+Ctrl+C is a signal, never a byte, so a program reading the keyboard
+never sees character 3 from the real console (a windowed console, whose
+keys come from the GUI rather than the controller, still delivers the
+byte — both are `3`, and what differs is where the key was read).
 
 ### Removed
 
@@ -340,7 +395,7 @@ pixels with `write(3, ...)` (repositioned by `lseek(3, ...)`) and the
 kernel copied them into the window's buffer. `gfx_surface` (61) replaced
 it; fd 3 is an ordinary descriptor now, as is every fd from 3 up.
 
-### Future (append-only, start at 64)
+### Future (append-only, start at 72)
 
 Unsupported calls return `-VNU_ENOSYS`.
 

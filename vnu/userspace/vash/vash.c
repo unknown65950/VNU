@@ -9,11 +9,23 @@
 #include <vlibc/stdlib.h>
 #include <vlibc/fcntl.h>
 #include <vlibc/keys.h>
+#include <vlibc/signal.h>
+#include <vlibc/errno.h>
 #include <vlibc/sys/stat.h>
 
 /* read_line is defined near the bottom (after load_hist); login/session
  * helpers above it need the prototype. */
 static int read_line(char* line, int max);
+
+/* The SIGINT handler, which does nothing on purpose: ^C is an event in
+ * the line, and only the line editor knows what the line looks like
+ * (how much of it there is to rub out, whether a password is being
+ * typed). read() below is what gets interrupted, and it comes back as
+ * EINTR with the handler already run, so all this has to do is exist. */
+static void on_intr(int sig)
+{
+    (void)sig;
+}
 
 #define HIST 16
 #define LMAX 128
@@ -183,7 +195,12 @@ static int read_secret(char* out, int max)
     int n = 0;
     for (;;) {
         char raw = 0;
-        if (read(0, &raw, 1) <= 0)
+        long r = read(0, &raw, 1);
+        if (r < 0 && r == -EINTR) { /* ^C: give up on the password */
+            w("^C\n");
+            return -1;
+        }
+        if (r <= 0)
             return -1;
         unsigned char ch = (unsigned char)raw;
         if (ch == '\n') {
@@ -192,6 +209,9 @@ static int read_secret(char* out, int max)
             return n;
         }
         if (ch == VNU_KEY_INTR) {
+            /* The byte form of ^C, which is what a windowed console
+             * delivers: its keys come from the GUI, not the keyboard
+             * controller, so nothing raises a signal for them. */
             w("^C\n");
             return -1;
         }
@@ -657,11 +677,24 @@ static int read_line(char* line, int max)
 
     for (;;) {
         char raw = 0;
-        if (read(0, &raw, 1) <= 0)
+        long r = read(0, &raw, 1);
+        if (r < 0 && r == -EINTR) {
+            /* SIGINT: the handler has run (it does nothing) and the read
+             * that was waiting for a key is over. Whatever was typed so
+             * far is a line nobody will ever run, so it is dropped and a
+             * new prompt starts from nothing — which is what ^C means at
+             * a shell. */
+            w("^C\n");
+            line[0] = 0;
+            return 0;
+        }
+        if (r <= 0)
             return -1;
         unsigned char ch = (unsigned char)raw;
 
         if (ch == VNU_KEY_INTR) {
+            /* The byte form of ^C, from a windowed console (see
+             * read_secret). */
             w("^C\n");
             line[0] = 0;
             return 0;
@@ -777,6 +810,21 @@ int main(int argc, char** argv)
 {
     (void)argc;
     (void)argv;
+    /* ^C at the console is SIGINT, and the terminal hands it to
+     * whichever process is reading it — which is this one, at the
+     * prompt, and the command this shell has execve()d over itself
+     * with while that command runs. A caught handler is what makes the
+     * difference: without one, ^C would end the shell (and, with it,
+     * the command) with a signal, and the kernel would have nothing to
+     * hand the console to but a brand-new shell. The handler itself
+     * does nothing — the line editor below decides what ^C looks like,
+     * and read() comes back with EINTR so it gets the chance. */
+    struct sigaction sa;
+    sa.sa_handler = on_intr;
+    sa.sa_mask = 0;
+    sa.sa_flags = 0;
+    sa.sa_restorer = 0; /* sigaction() fills the restorer itself */
+    sigaction(SIGINT, &sa, 0);
     /* First time in a boot: login. Later respawns (after an external
      * command execve()d over us) re-adopt the /tmp/.session identity. */
     if (access_session_exists())

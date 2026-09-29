@@ -114,6 +114,7 @@ build_vlibc() {
     local sources=(
         src/sys/syscall.c src/sys/uname.c src/sys/audio.c
         src/term/tty_size.c
+        src/signal/signal.c
         src/unistd/write.c src/unistd/read.c src/unistd/open.c src/unistd/close.c
         src/unistd/gethostname.c src/unistd/sethostname.c
         src/unistd/lseek.c src/unistd/exit.c src/unistd/getpid.c

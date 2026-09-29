@@ -19,7 +19,6 @@ constexpr char K_DOWN = (char)0x84;
 constexpr char K_HOME = (char)0x85;
 constexpr char K_END = (char)0x86;
 constexpr char K_DEL = (char)0x87;
-constexpr char K_INTR = 3; /* Ctrl+C */
 
 /* Unshifted US QWERTY (set 1). */
 const char map[0x58] = {

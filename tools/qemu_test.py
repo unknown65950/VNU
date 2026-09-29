@@ -73,6 +73,10 @@ SPECIAL_KEYS = {
     "<home>": "home", "<end>": "end", "<pgup>": "pgup", "<pgdn>": "pgdn",
     "<esc>": "esc", "<ret>": "ret", "<spc>": "spc", "<tab>": "tab",
     "<f12>": "f12",
+    # A chord, not a character: Ctrl+C is the one key the console turns
+    # into a signal, so it never reaches a program as a byte and there
+    # is no KEYMAP entry that could type it as one.
+    "<ctrl-c>": "ctrl-c",
 }
 
 
@@ -1074,6 +1078,75 @@ def run_gfx_resolution(guest, result, verbose, timeout=60.0):
     return True
 
 
+# The line typed but never entered, and the command typed after the ^C.
+# The first is a line the shell has read and echoed but not run, so ^C
+# has something to throw away; the second proves the shell is still
+# there afterwards. Both are echoed by the shell, so their text is in the
+# log exactly once each when all is well.
+CTRLC_LINE = "echo ctrlc-discarded"
+CTRLC_AFTER = "echo ctrlc-survived"
+
+
+def run_ctrlc(guest, result, verbose, timeout=60.0):
+    """Ctrl+C at the console is a signal, and the shell lives through it.
+
+    Not a SUITE case because the thing under test is a keystroke, not a
+    command: the console turns Ctrl+C into SIGINT for the process at the
+    keyboard, the blocked read fails with EINTR, and the shell drops the
+    line it was reading and prints a fresh prompt. The keys are sent here
+    and the session is checked at the end.
+
+    What makes this more than "the shell printed something" is what it
+    checks besides the ^C. The line is typed but *not* entered, so the
+    only thing that can discard it is the signal: a kernel that turned
+    Ctrl+C into a byte instead would leave the shell waiting for an
+    Enter that the check never sends, and the fresh prompt after it would
+    not come. And the command typed afterwards has to run, because a
+    sigreturn that resumed the process on the wrong stack looks exactly
+    like a working one until the next thing the program does touches the
+    stack - which is the failure this was written for.
+    """
+    print("==> ctrl+c (SIGINT at the console)")
+    problems = []
+    try:
+        frm = guest.wait_ready()
+        # Type a line and leave it unentered: the echo is what says the
+        # shell has it, so the ^C lands on a line rather than on an idle
+        # prompt with nothing to discard.
+        guest._type(CTRLC_LINE)
+        guest.wait(re.escape(CTRLC_LINE), timeout, frm)
+        typed = len(guest.tail(frm))
+        guest._type("<ctrl-c>")
+        # The ^C and the newline after it are the shell's report that the
+        # read it was waiting on failed, and the prompt behind them is a
+        # new one - the signal returned the line to the shell, which
+        # printed a fresh prompt instead of the old line's.
+        after = guest.wait(r"\^C", timeout, typed)
+        guest.wait_ready(after)
+        out = guest.tail(frm)
+        if out.count(CTRLC_LINE) != 1:
+            problems.append("the unentered line %r appears %d times, "
+                            "expected once (its echo): it was run, or the "
+                            "^C did not discard it"
+                            % (CTRLC_LINE, out.count(CTRLC_LINE)))
+        # And the shell is still a shell afterwards.
+        output, _ = guest.sh(CTRLC_AFTER, timeout)
+        check("ctrlc-after", output,
+              [r"^%s$" % re.escape(CTRLC_AFTER.split()[1])], [], result,
+              verbose)
+    except (TimeoutError, RuntimeError) as exc:
+        problems.append(str(exc))
+
+    if problems:
+        result.failed.append(("ctrl-c", "", problems))
+        print("FAIL %-18s %s" % ("ctrl-c", "; ".join(problems)))
+        return False
+    result.passed += 1
+    if verbose:
+        print("ok   %-18s" % "ctrl-c")
+    return True
+
+
 def run_console_screen(guest, result, verbose, timeout=60.0):
     """The text console is on the display, on whichever display there is,
     and it is the *live* one.
@@ -1700,6 +1773,7 @@ def main():
         print("%-18s %s" % ("console-screen",
                             "text prompt on the display (screendump)"))
         print("%-18s %s" % ("man-pager", "man vcc (keys, then q)"))
+        print("%-18s %s" % ("ctrl-c", "ctrl+c at the prompt (SIGINT)"))
         print("%-18s %s" % ("prefs-wallpaper",
                             "/apps/prefs/bin (arrows, enter, esc)"))
         print("%-18s %s" % ("gfx-surface",
@@ -1721,8 +1795,8 @@ def main():
 
     # The interactive checks are functions, not SUITE rows, so a filter
     # that names one of them selects no shell case and still runs.
-    interactive = ("console-screen", "man-pager", "prefs-wallpaper",
-                   "gfx-surface", "gfx-resolution")
+    interactive = ("console-screen", "man-pager", "ctrl-c",
+                   "prefs-wallpaper", "gfx-surface", "gfx-resolution")
     cases = SUITE
     if args.only:
         cases = [c for c in SUITE
@@ -1745,6 +1819,9 @@ def main():
                 if not args.only or any(sel in "man-pager"
                                         for sel in args.only):
                     run_man_pager(guest, result, args.verbose, args.timeout)
+                if not args.only or any(sel in "ctrl-c"
+                                        for sel in args.only):
+                    run_ctrlc(guest, result, args.verbose, args.timeout)
                 if not args.only or any(sel in "prefs-wallpaper"
                                         for sel in args.only):
                     run_prefs_wallpaper(guest, result, args.verbose,

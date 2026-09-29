@@ -73,6 +73,12 @@
 #define VNU_SYS_gfx_getmode 63
 #define VNU_SYS_gfx_getinfo 64
 #define VNU_SYS_gfx_palette 65
+#define VNU_SYS_rt_sigaction  66
+#define VNU_SYS_rt_sigprocmask 67
+#define VNU_SYS_rt_sigreturn 68
+#define VNU_SYS_alarm        69
+#define VNU_SYS_sigraise     70
+#define VNU_SYS_sigpending   71
 
 /* Which display driver is in use, as vnu_gfx_info::driver. */
 #define VNU_GFX_DRIVER_VGA        0 /* Bochs VBE, 8bpp indexed */
@@ -95,10 +101,69 @@ struct vnu_gfx_info {
 #define VNU_GFX_PALETTE_SLOTS 16
 #define VNU_GFX_PALETTE_BYTES 64 /* SLOTS * sizeof(uint32_t) */
 
+/* --- signals -----------------------------------------------------------
+ * A signal is a number, a handler is an address, and a set of signals
+ * is one 32-bit word with a bit per signal (bit n is signal n, so
+ * signal 0 is the empty set and is never a signal at all). */
+#define VNU_NSIG 32
+
+/* The POSIX numbers, for the signals VNU has an answer for, so a
+ * program written against a real system means the same thing here.
+ * The signals POSIX also has and VNU does not (SIGSTOP, SIGCONT, the
+ * job-control trio) are deliberately left undefined rather than
+ * defined and ignored. */
+#define VNU_SIGHUP  1  /* the console went away */
+#define VNU_SIGINT  2  /* ^C at the console */
+#define VNU_SIGQUIT 3
+#define VNU_SIGILL  4
+#define VNU_SIGTRAP 5
+#define VNU_SIGABRT 6
+#define VNU_SIGFPE  8
+#define VNU_SIGKILL 9  /* cannot be caught, blocked or ignored */
+#define VNU_SIGUSR1 10
+#define VNU_SIGSEGV 11
+#define VNU_SIGUSR2 12
+#define VNU_SIGPIPE 13 /* a reader went away mid-write */
+#define VNU_SIGALRM 14 /* alarm() ran out */
+#define VNU_SIGTERM 15
+#define VNU_SIGCHLD 17 /* a child changed state */
+
+/* The two handler values that are not addresses. */
+#define VNU_SIG_DFL 0u /* do the default thing: terminate */
+#define VNU_SIG_IGN 1u /* do nothing at all */
+
+/* What the kernel does with a signal it delivers. SA_RESTORER is not
+ * optional: it is where the handler's own `return` lands, and the
+ * kernel has no other way to be told the handler is done. */
+#define VNU_SA_ONSTACK   0x08000000u /* not supported: ignored */
+#define VNU_SA_RESTART   0x10000000u /* not supported: ignored */
+#define VNU_SA_NODEFER   0x40000000u /* do not block the signal itself */
+#define VNU_SA_RESETHAND 0x80000000u /* back to default after one delivery */
+#define VNU_SA_SIGINFO   0x00000004u /* not supported: ignored */
+#define VNU_SA_RESTORER  0x04000000u /* the restorer field is valid; vlibc's
+                                       * sigaction() always sets it */
+
+/* VNU_SYS_rt_sigaction: what a program asks for. `handler` is the
+ * address of a void (*)(int), or one of the two values above;
+ * `mask` is added to the process's blocked set for as long as the
+ * handler runs; `restorer` is the address the handler returns to. */
+struct vnu_sigaction {
+    uint32_t handler;
+    uint32_t mask;
+    uint32_t flags;
+    uint32_t restorer;
+};
+
+/* VNU_SYS_rt_sigprocmask: `how` is one of these. */
+#define VNU_SIG_BLOCK   0u
+#define VNU_SIG_UNBLOCK 1u
+#define VNU_SIG_SETMASK 2u
+
 #define VNU_EPERM 1
 #define VNU_ENOENT 2
 #define VNU_ESRCH 3
 #define VNU_EIO 5
+#define VNU_EINTR 4
 #define VNU_ENOEXEC 8
 #define VNU_EBADF 9
 #define VNU_ECHILD 10

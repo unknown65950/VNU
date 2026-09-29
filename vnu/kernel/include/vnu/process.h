@@ -1,6 +1,8 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <vnu/abi.h>
+#include <vnu/trapframe.h>
 
 namespace vnu::proc {
 
@@ -64,6 +66,29 @@ struct Process {
      * program starts (spawn or exec), so ps-like tools show which
      * command a process actually runs instead of one global string. */
     char name[16];
+    /* --- signals (numbers, flags and the action struct live in
+     * <vnu/abi.h>) ---------------------------------------------------
+     * A set of signals is one word, bit n being signal n. Nothing is
+     * blocked and nothing is handled until a program says so: a fresh
+     * process has a zeroed mask, so a signal that nobody asked about
+     * does what a signal always does to an ordinary process, which is
+     * terminate the process.
+     *
+     * sig_action[] is the whole answer to "what happens to this signal",
+     * one entry per signal: the address its handler runs at (or one of
+     * the two non-addresses, VNU_SIG_DFL / VNU_SIG_IGN) together with
+     * the set it asks to be blocked for while that handler runs and the
+     * restorer its `return` lands on. */
+    struct vnu_sigaction sig_action[VNU_NSIG];
+    uint32_t sig_pending;    /* raised, not yet delivered */
+    uint32_t sig_mask;       /* blocked right now */
+    uint32_t sig_saved_mask; /* the mask from before the running handler,
+                              * put back when that handler is done */
+    uint32_t sig_frame;      /* the base of the interrupted context's
+                              * frame while a handler is running, else 0;
+                              * sigreturn puts that context back */
+    uint32_t alarm_at;       /* the jiffy SIGALRM is raised at, 0 when no
+                              * alarm is set; see sys_alarm */
 };
 
 void init();
@@ -86,6 +111,68 @@ int sys_waitpid(int pid, int* status, int options);
  * one-way / windowed path that has no scheduler to come back to. */
 int sys_sleep(uint32_t ms);
 int sys_kill(int pid, int sig);
+/* --- signals (see <vnu/abi.h> for the numbers and the flags) ----------
+ * sys_rt_sigaction() reads the requested handler/flags/mask out of
+ * `act` and, when `old` is not null, writes the previous one there;
+ * the restorer is required, so that the kernel is always told where a
+ * handler's `return` lands.
+ * sys_rt_sigprocmask() adds (`how` = SIG_BLOCK), removes
+ * (SIG_UNBLOCK) or replaces (SIG_SETMASK) signals in the blocked set
+ * that applies outside a handler. SIGKILL is never in that set.
+ * sys_rt_sigreturn() is not a normal syscall: it is the address
+ * sigaction() puts in VNU_SA_RESTORER, and a handler's `return` jumps
+ * to it, which puts the interrupted context back.
+ * sys_sigraise() raises a signal in the calling process, which is how
+ * a program asks to be interrupted itself.
+ * sys_sigpending() writes the raised-but-undelivered signals as a set
+ * (signal 0 is the "is anything pending" probe VNU_SYS_kill(pid, 0)
+ * already offers, so it stays the only caller of that shape).
+ * sys_alarm() arms SIGALRM `seconds` from now (0 cancels) and returns
+ * what was left of the previous alarm, 0 if there was none.
+ * signal_kill() is the entry point for raising a signal in another
+ * process: SIGKILL and SIGINT are raised, and a signal that kills does
+ * not wait to be delivered. */
+int sys_rt_sigaction(int sig, const uint32_t* act, uint32_t* old);
+int sys_rt_sigprocmask(int how, const uint32_t* set, uint32_t* old);
+uint32_t sys_rt_sigreturn(TrapFrame* cur);
+int sys_sigraise(int sig);
+int sys_sigpending(uint32_t* set);
+uint32_t sys_alarm(uint32_t seconds);
+int signal_kill(int pid, int sig);
+/* SIGINT at the console (^C), raised at whoever is reading it. Returns
+ * true when that interrupt is waiting to be delivered, so the read that
+ * noticed the key can report EINTR; false when the signal was ignored
+ * or blocked, and the read goes on waiting for a key like nothing
+ * happened. */
+bool console_signal(int sig);
+/* The signal that would be delivered next to this process, lowest
+ * first, or 0 if none of its pending signals is deliverable. */
+int pending_delivery(const Process* p);
+/* True when the current process has a signal waiting that is neither
+ * blocked nor being ignored, i.e. the syscall it is inside cannot
+ * finish and has to say so with EINTR. */
+bool interrupt_pending();
+/* Build this process's handler frame below `stack_anchor` and switch to
+ * it on the way out. Returns the signal delivered, or 0 if there was
+ * nothing to deliver. A signal whose action is to terminate does not
+ * come through here: it ends the process where it was raised.
+ *
+ *   frame_base  base of the context being abandoned, where the saved
+ *               cs/eflags to run the handler with are read from.
+ *   stack_anchor an address on the process's stack to build the frame
+ *               below, or 0 to use this function's own frame - which is
+ *               the right answer for a caller running on the interrupted
+ *               process's stack, since the kernel has no stack of its
+ *               own. The kernel runs on the interrupted process's own
+ *               stack, so the C frames of the syscall/ISR path sit
+ *               right underneath the interrupted frame; a handler frame
+ *               placed there would land in a caller's locals. */
+int deliver_signal_at(Process& p, uint32_t frame_base, uint32_t stack_anchor,
+                      int sig);
+/* The same, for the frame the current process is about to return from
+ * a syscall with (the syscall's own pushad frame, which the caller
+ * holds). Does nothing for a process the scheduler does not own. */
+int deliver_pending_signal(uint32_t frame_base);
 /* User identity. uid 0 (root) bypasses VFS permission checks. setuid/
  * setgid are only allowed for root or to keep your own ids. */
 uint32_t sys_getuid();

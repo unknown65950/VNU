@@ -21,6 +21,13 @@ constexpr int K_F10 = 0x91;
 constexpr int K_F11 = 0x92;
 constexpr int K_F12 = 0x93;
 
+/* Ctrl+C is the one control key the console turns into a signal instead
+ * of a character: see the tty read in arch/i386/syscall/syscall.cpp.
+ * A windowed console still delivers it as the plain byte 3, which is
+ * VNU_KEY_INTR in vlibc/keys.h — both are 3, and the difference is where
+ * the byte is read from, not what the key means. */
+constexpr int K_INTR = 3;
+
 /* The next character typed, waiting for one. The scancodes behind it
  * go through one queue with one decoder state (see kbd.cpp): port 0x60
  * is destructive, and two readers of it lose bytes - and read stale

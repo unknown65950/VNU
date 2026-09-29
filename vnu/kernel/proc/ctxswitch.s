@@ -19,6 +19,8 @@ global vnu_proc_preempt
 global vnu_proc_resume_preempted
 
 extern vnu_timer_tick
+extern vnu_pending_user_esp
+extern vnu_pending_user_esp_flag
 
 ; void vnu_swtch(uint32_t* old_esp_out, uint32_t new_esp)
 ;
@@ -168,7 +170,12 @@ vnu_proc_trampoline:
 ; in-service bit and kills all further master-side interrupts), then
 ; defers to vnu_timer_tick(frame_esp). On "no preemption" (current
 ; process is the scheduler itself, or nobody else is runnable) it simply
-; returns; on a preemption vnu_timer_tick never comes back.
+; returns; on a preemption vnu_timer_tick never comes back. A signal
+; waiting for this process is the other reason not to popad+iretd back
+; into the interrupted instruction: vnu_timer_tick builds the handler's
+; frame on the same stack and sets vnu_pending_user_esp, and this ISR
+; returns into that instead - the same handoff the syscall return path
+; does, in the same few instructions that consume it.
 vnu_timer_isr:
     cli
     push eax
@@ -179,6 +186,12 @@ vnu_timer_isr:
     push esp
     call vnu_timer_tick
     add esp, 4
+    cmp byte [vnu_pending_user_esp_flag], 0
+    je .popad_return
+    mov byte [vnu_pending_user_esp_flag], 0
+    mov esp, [vnu_pending_user_esp]
+    iretd
+.popad_return:
     popad
     iretd
 
@@ -214,7 +227,11 @@ vnu_proc_preempt:
 ; [edi][esi][ebx][ebp][ret] park of g_sched_esp (so the process can
 ; preempt/yield back into run_slice later), CR3 swap, then popad+iretd
 ; straight into the interrupted instruction instead of the callee-saved
-; pops + ret of vnu_proc_switch.
+; pops + ret of vnu_proc_switch. A signal raised while the process was
+; parked makes run_slice() build the handler's frame on this one and set
+; vnu_pending_user_esp, and then this resumes a handler instead of the
+; interrupted instruction - which is why the flag is checked here and not
+; only in the syscall return path.
 vnu_proc_resume_preempted:
     push ebp
     push ebx
@@ -228,6 +245,12 @@ vnu_proc_resume_preempted:
     mov [vnu_proc_old_pd], eax
     mov eax, [vnu_proc_new_pd]
     mov cr3, eax
+    cmp byte [vnu_pending_user_esp_flag], 0
+    je .popad_return
+    mov byte [vnu_pending_user_esp_flag], 0
+    mov esp, [vnu_pending_user_esp]
+    iretd
+.popad_return:
     popad
     iretd
 

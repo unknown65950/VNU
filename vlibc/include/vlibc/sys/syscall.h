@@ -26,6 +26,12 @@
 #define SYS_dup VNU_SYS_dup
 #define SYS_dup2 VNU_SYS_dup2
 #define SYS_kill VNU_SYS_kill
+#define SYS_rt_sigaction VNU_SYS_rt_sigaction
+#define SYS_rt_sigprocmask VNU_SYS_rt_sigprocmask
+#define SYS_rt_sigreturn VNU_SYS_rt_sigreturn
+#define SYS_alarm VNU_SYS_alarm
+#define SYS_sigraise VNU_SYS_sigraise
+#define SYS_sigpending VNU_SYS_sigpending
 #define SYS_uname VNU_SYS_uname
 #define SYS_getppid VNU_SYS_getppid
 #define SYS_isatty VNU_SYS_isatty

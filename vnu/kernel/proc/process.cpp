@@ -384,6 +384,17 @@ constexpr uint32_t wait_chan_of_child(int pid)
     return WAIT_ZOMBIE_ANY | (static_cast<uint32_t>(pid) & 0xFFFFu);
 }
 
+/* A process that has just stopped existing (an exit, or a signal whose
+ * action is to terminate it) has to wake the parent that is asleep in
+ * waitpid() on it: that wait is parked on a channel only an exit here
+ * knows to wake, so without this the parent would sleep until the dead
+ * child's own luck ran out. */
+void wake_waiter_of(int pid)
+{
+    vnu::proc::wakeup(WAIT_ZOMBIE_ANY);
+    vnu::proc::wakeup(wait_chan_of_child(pid));
+}
+
 /* Park the current coro process (park=true) and swap to the scheduler
  * coroutine, or (park=false, exit path) abandon its stack for good. */
 void switch_to_scheduler(bool park)
@@ -710,6 +721,19 @@ int sys_execve(Registers* trap, const char* path, char* const* argv)
     p.regs.eip = entry;
     p.regs.eflags = 0x202;
     setup_user_stack(p, argc, arg_ptrs, path_copy);
+    /* What POSIX says execve does to signals, and why each half is the
+     * way it is: the new image is a new program, so what it does about
+     * a signal is its own business and every handler goes back to the
+     * default action (a handler address in the old image is not even a
+     * valid address in the new one) - but the mask is the process's,
+     * not the program's, and stays. The alarm belongs to the old
+     * program and its deadline goes with it, and no handler is running
+     * across the image change, so there is no frame to give back. */
+    for (int i = 0; i < VNU_NSIG; ++i)
+        p.sig_action[i] = {};
+    p.sig_frame = 0;
+    p.sig_saved_mask = 0;
+    p.alarm_at = 0;
 
     trap->eip = p.regs.eip;
     trap->esp = p.regs.esp;
@@ -738,12 +762,9 @@ void sys_exit(int status)
     if (p.coro) {
         /* Scheduler-managed process: turn into a zombie for the parent
          * (init) to reap via waitpid, and hand control back to the
-         * scheduler coroutine — its stack is abandoned for good. Wake
-         * any parent blocked in waitpid on this child, or on "any
-         * child", so the reaper runs on the next pass. */
+         * scheduler coroutine — its stack is abandoned for good. */
         p.state = State::Zombie;
-        wakeup(WAIT_ZOMBIE_ANY);
-        wakeup(wait_chan_of_child(p.pid));
+        wake_waiter_of(p.pid);
         switch_to_scheduler(false);
         return; /* not reached */
     }
@@ -783,6 +804,11 @@ int sys_waitpid(int pid, int* status, int options)
 {
     int self = table[current_idx].pid;
     for (;;) {
+        /* A signal takes the process out of the wait, not just out of
+         * this pass: POSIX has waitpid() fail with EINTR so the program
+         * can decide what to do about the signal that woke it. */
+        if (interrupt_pending())
+            return -VNU_EINTR;
         for (int i = 0; i < MAX_PROCS; ++i) {
             Process& c = table[i];
             if (c.state != State::Zombie)
@@ -840,28 +866,334 @@ int sys_waitpid(int pid, int* status, int options)
 int sys_kill(int pid, int sig)
 {
     /* Signal 0 is the POSIX liveness probe - "may I signal this pid?" -
-     * and it must not signal anything. Nothing here delivers signals
-     * yet (that is the next piece of work), so without this a probe
-     * would be a kill with a made-up status: `kill(pid, 0)` is exactly
-     * how a program asks whether its child is still there, and the
-     * answer it used to get was the child dying of signal 9. */
-    bool found = false;
+     * and it must not signal anything: `kill(pid, 0)` is exactly how a
+     * program asks whether its child is still there. */
+    if (sig == 0) {
+        for (int i = 0; i < MAX_PROCS; ++i)
+            if (table[i].state != State::Unused && table[i].pid == pid)
+                return 0;
+        return -VNU_ESRCH;
+    }
+    return signal_kill(pid, sig);
+}
+
+/* --- signals ----------------------------------------------------------
+ *
+ * Raising a signal and delivering it are two different moments, and the
+ * gap between them is what makes this behave like a signal system
+ * rather than a kill. Raising it (signal_kill) only records the signal
+ * and, for a signal whose action is "terminate", ends the process right
+ * there: a process that has not asked for anything cannot be asked to
+ * run any code, so a default signal has to be its last. A signal with a
+ * handler waits in sig_pending until the process is about to run its own
+ * code again, which is delivery, and delivery is the only place that
+ * touches the user's stack.
+ *
+ * Delivery never rewrites the interrupted context. It builds the
+ * handler's own entry frame on the process's stack, just below the frame
+ * it is interrupting, and the return path in assembly switches to that
+ * instead of popping the old one. The old frame is still there, byte for
+ * byte, with the syscall's return value already in its EAX slot, so
+ * sigreturn only has to point the popad+iretd back at it and the program
+ * continues exactly where it was, with exactly the values it had - which
+ * is why a signal can interrupt a program anywhere, not just between
+ * two convenient places in the kernel. */
+extern "C" std::uint32_t vnu_pending_user_esp;
+extern "C" std::uint8_t vnu_pending_user_esp_flag;
+
+namespace {
+
+/* The interrupted frame both delivery points see: pushad's 8 dwords
+ * followed by the 3 dwords the gate pushed (eip, cs, eflags). See
+ * arch/i386/syscall/syscall.s and proc/ctxswitch.s, which both popad
+ * from it and then iretd out of the last 3 words. */
+constexpr uint32_t FRAME_EIP = 32;
+constexpr uint32_t FRAME_CS = 36;
+constexpr uint32_t FRAME_EFLAGS = 40;
+
+/* Below the interrupted frame: a 16-byte-aligned slot holding what the
+ * handler's `return` pops ([0] = the restorer, [4] = the signal number,
+ * so a handler written as `void h(int sig)` gets its argument from the
+ * same place a `ret` would leave it), and just below that the three
+ * words an iret pops (handler, cs, eflags). The slot is not built on the
+ * interrupted frame itself but below the kernel's own C frames, which sit
+ * between the two: the kernel runs on the interrupted process's stack, so
+ * a frame placed right under the pushad frame would land in the locals of
+ * the call that is still running. Nothing writes below the anchor the
+ * caller passes until the iret, a few instructions later. */
+constexpr uint32_t SIG_BLOCK_WORDS = 4; /* restorer, signo */
+constexpr uint32_t SIG_IRET_WORDS = 3;  /* handler, cs, eflags */
+
+} // namespace
+
+int pending_delivery(const Process* p)
+{
+    uint32_t ready = p->sig_pending & ~p->sig_mask;
+    for (int sig = 1; sig < VNU_NSIG; ++sig)
+        if (ready & (1u << sig))
+            return sig;
+    return 0;
+}
+
+bool interrupt_pending()
+{
+    return pending_delivery(&table[current_idx]) != 0;
+}
+
+int deliver_signal_at(Process& p, uint32_t frame_base, uint32_t stack_anchor, int sig)
+{
+    if (sig == 0)
+        return 0;
+    const struct vnu_sigaction& act = p.sig_action[sig];
+    /* A default or ignored action never gets this far: both are carried
+     * out where the signal is raised (see signal_kill() and the alarm
+     * deadline in vnu_timer_tick()). What is left is a real handler,
+     * whose address is where the process was told to go. */
+    if (act.handler <= VNU_SIG_IGN || !act.restorer)
+        return 0;
+    /* The block goes at the very bottom of what the kernel is using of
+     * this process's stack, so that nothing that is still live - a
+     * caller's locals on the way out of here, the frame the iret is
+     * about to pop - writes over it. Usually that is this function's own
+     * frame, the deepest thing on the stack right now. A caller that is
+     * running on a *different* stack (the scheduler handing a preempted
+     * process back in) has no frames on the process's stack to avoid and
+     * passes the parked frame instead. */
+    volatile char here = 0;
+    uint32_t low = stack_anchor ? stack_anchor : reinterpret_cast<uint32_t>(&here);
+    uint32_t block = (low - SIG_BLOCK_WORDS * 4) & ~0xFu;
+    uint32_t* w = reinterpret_cast<uint32_t*>(block);
+    w[0] = act.restorer; /* where the handler's `return` lands */
+    w[1] = static_cast<uint32_t>(sig);
+    /* The iret pops its three words in increasing address order, and it
+     * runs with esp = &w[-3]: eip, cs, eflags. */
+    w[-3] = act.handler;
+    w[-2] = *reinterpret_cast<uint32_t*>(frame_base + FRAME_CS);
+    /* Same flags the context had, except that the handler runs with
+     * interrupts on (the syscall path saved eflags with IF cleared by
+     * the trap gate) and never with the trap flag still set, which would
+     * fire a single-step interrupt out of the first instruction. */
+    w[-1] = (*reinterpret_cast<uint32_t*>(frame_base + FRAME_EFLAGS) | 0x200u) & ~0x100u;
+
+    p.sig_pending &= ~(1u << sig);
+    p.sig_saved_mask = p.sig_mask;
+    /* Block the signal itself (unless the action says not to) plus the
+     * signals it asked for, so a handler cannot be interrupted by the
+     * signal it is handling unless it asked for that. */
+    uint32_t block_now = act.mask;
+    if (!(act.flags & VNU_SA_NODEFER))
+        block_now |= 1u << sig;
+    p.sig_mask |= block_now;
+    if (act.flags & VNU_SA_RESETHAND) {
+        p.sig_action[sig].handler = VNU_SIG_DFL;
+        p.sig_action[sig].restorer = 0;
+    }
+    p.sig_frame = frame_base;
+
+    /* Tell the assembly return path to switch stacks instead of popping
+     * the frame it is looking at. The flag is a single slot on purpose:
+     * it is set and consumed within one return path, with interrupts
+     * off (a syscall handler runs cli'd, the timer with the CLI in
+     * vnu_timer_isr), so no other process can ever see it. */
+    vnu_pending_user_esp = block - SIG_IRET_WORDS * 4;
+    vnu_pending_user_esp_flag = 1;
+    return sig;
+}
+
+int deliver_pending_signal(uint32_t frame_base)
+{
+    Process& p = table[current_idx];
+    if (!p.coro || vnu_pending_user_esp_flag)
+        return 0;
+    /* This runs on the process's own stack, in between the syscall's
+     * frame and the assembly that is about to iret, so there is nothing
+     * on it but the frames of this very call chain. */
+    return deliver_signal_at(p, frame_base, 0, pending_delivery(&p));
+}
+
+int sys_rt_sigaction(int sig, const uint32_t* act_in, uint32_t* old_out)
+{
+    if (sig <= 0 || sig >= VNU_NSIG)
+        return -VNU_EINVAL;
+    if (sig == VNU_SIGKILL) /* not even root may catch or block this one */
+        return -VNU_EINVAL;
+    Process& p = table[current_idx];
+    struct vnu_sigaction* slot = &p.sig_action[sig];
+    if (old_out) {
+        old_out[0] = slot->handler;
+        old_out[1] = slot->mask;
+        old_out[2] = slot->flags;
+        old_out[3] = slot->restorer;
+    }
+    if (!act_in)
+        return 0; /* a NULL act is the "just tell me" query */
+    struct vnu_sigaction act;
+    act.handler = act_in[0];
+    act.mask = act_in[1] & ~(1u << VNU_SIGKILL);
+    act.flags = act_in[2];
+    act.restorer = act_in[3];
+    /* A handler is an address, and the kernel has to be able to get the
+     * program back out of it: the `return` at the end of the handler
+     * goes wherever the restorer says, and a handler without one would
+     * jump into whatever happens to follow it. */
+    if (act.handler > VNU_SIG_IGN && !act.restorer)
+        return -VNU_EINVAL;
+    *slot = act;
+    return 0;
+}
+
+int sys_rt_sigprocmask(int how, const uint32_t* set, uint32_t* old_out)
+{
+    if (how != VNU_SIG_BLOCK && how != VNU_SIG_UNBLOCK && how != VNU_SIG_SETMASK)
+        return -VNU_EINVAL;
+    Process& p = table[current_idx];
+    if (old_out)
+        *old_out = p.sig_mask;
+    if (!set)
+        return 0;
+    uint32_t add = *set & ~(1u << VNU_SIGKILL); /* never blockable */
+    if (how == VNU_SIG_BLOCK)
+        p.sig_mask |= add;
+    else if (how == VNU_SIG_UNBLOCK)
+        p.sig_mask &= ~add;
+    else
+        p.sig_mask = add;
+    return 0;
+}
+
+uint32_t sys_rt_sigreturn(TrapFrame* cur)
+{
+    Process& p = table[current_idx];
+    if (!p.sig_frame)
+        return 0; /* not from a handler: nothing to go back to */
+    p.sig_mask = p.sig_saved_mask;
+    p.sig_saved_mask = 0;
+    TrapFrame* interrupted = reinterpret_cast<TrapFrame*>(p.sig_frame);
+    p.sig_frame = 0;
+    *cur = *interrupted;
+    /* popad restores the eight registers but *discards* the ESP the frame
+     * saved, so a copy alone resumes the process with esp = tf + 32, in
+     * the middle of this frame instead of where it was interrupted. The
+     * interrupted frame's own esp is the address its eip/cs/eflags sit
+     * at, so pointing the return path there hands the iret exactly the
+     * words the copy just wrote, and leaves the process with the esp the
+     * interrupted instruction had. */
+    vnu_pending_user_esp = interrupted->esp;
+    vnu_pending_user_esp_flag = 1;
+    return cur->eax;
+}
+
+int sys_sigraise(int sig)
+{
+    if (sig <= 0 || sig >= VNU_NSIG)
+        return -VNU_EINVAL;
+    if (sig == VNU_SIGKILL) {
+        sys_exit(128 + sig);
+        return 0; /* not reached */
+    }
+    /* raise() on a signal whose action is to terminate dies here and now,
+     * the same as kill(getpid(), sig): there is nothing to defer it to,
+     * the caller is the one that stops. */
+    if (table[current_idx].sig_action[sig].handler == VNU_SIG_DFL) {
+        sys_exit(128 + sig);
+        return 0; /* not reached */
+    }
+    table[current_idx].sig_pending |= 1u << sig;
+    return 0;
+}
+
+int sys_sigpending(uint32_t* set)
+{
+    if (set)
+        *set = table[current_idx].sig_pending;
+    return 0;
+}
+
+uint32_t sys_alarm(uint32_t seconds)
+{
+    Process& p = table[current_idx];
+    uint32_t left = 0;
+    if (p.alarm_at) {
+        int32_t pending = static_cast<int32_t>(p.alarm_at - now_jiffies());
+        left = pending > 0 ? (pending + 9) / 10 : 0;
+    }
+    p.alarm_at = seconds ? now_jiffies() + seconds * 100u : 0;
+    return left;
+}
+
+int signal_kill(int pid, int sig)
+{
+    if (sig <= 0 || sig >= VNU_NSIG)
+        return -VNU_EINVAL;
     for (int i = 0; i < MAX_PROCS; ++i) {
-        if (table[i].state == State::Unused || table[i].pid != pid)
+        Process& p = table[i];
+        if (p.state == State::Unused || p.pid != pid)
             continue;
-        found = true;
-        if (sig == 0)
-            return 0;
-        table[i].exit_code = 9;
-        table[i].state = State::Zombie;
-        /* A parent asleep in waitpid() is waiting on a channel this
-         * exit never wakes, so it would sleep until the child's own
-         * luck ran out. Waking it is what makes the kill visible. */
-        wakeup(WAIT_ZOMBIE_ANY);
-        wakeup(wait_chan_of_child(table[i].pid));
+        uint32_t handler = p.sig_action[sig].handler;
+        if (sig == VNU_SIGKILL) {
+            /* The one signal with no answer to give: no handler, no
+             * block, no pending. */
+            if (i != current_idx) {
+                /* Another process: the death is its own to have, so
+                 * leave it as a zombie for its parent to reap, the same
+                 * shape an exit leaves. */
+                p.exit_code = 128 + sig;
+                p.state = State::Zombie;
+                wake_waiter_of(p.pid);
+                return 0;
+            }
+            sys_exit(128 + sig);
+            return 0; /* not reached */
+        }
+        if (handler == VNU_SIG_IGN)
+            return 0; /* ignore means ignore, byte included */
+        if (handler == VNU_SIG_DFL) {
+            /* A blocked signal still gets its default action in
+             * VNU: there is no "terminate" action to defer, and a
+             * program that blocks a signal and then never unblocks it
+             * has asked for a process it cannot leave anyway. */
+            if (i != current_idx) {
+                /* Another process: the death is its own to have, so
+                 * leave it as a zombie for its parent to reap, the same
+                 * shape an exit leaves. */
+                p.exit_code = 128 + sig;
+                p.state = State::Zombie;
+                wake_waiter_of(p.pid);
+                return 0;
+            }
+            sys_exit(128 + sig);
+            return 0; /* not reached */
+        }
+        p.sig_pending |= 1u << sig;
+        /* A process asleep in a syscall has to come back to be told:
+         * without this the signal would sit in sig_pending until the
+         * next thing it happens to wait for. */
+        if (p.state == State::Blocked) {
+            p.state = State::Runnable;
+            p.wait_chan = 0;
+            p.sleep_until = 0;
+        }
         return 0;
     }
-    return found ? 0 : -VNU_ESRCH;
+    return -VNU_ESRCH;
+}
+
+bool console_signal(int sig)
+{
+    /* The process reading the console is the process the console is
+     * talking to: VNU has no process groups, and it does not need one,
+     * because vash execve()s over itself for every external command, so
+     * the shell's own process IS the command. ^C therefore belongs to
+     * whoever is at the keyboard right now, which is what the reader of
+     * the console is by construction. */
+    if (signal_kill(current_pid(), sig) < 0)
+        return false;
+    /* signal_kill either recorded the signal or dropped it (an ignored
+     * action), and if the action was "terminate" it never came back at
+     * all. All that is left to say is whether anything is left to
+     * interrupt: a blocked ^C stays pending, exactly as POSIX asks, and
+     * the console read goes on waiting for a key. */
+    return interrupt_pending();
 }
 
 bool schedule()
@@ -1313,8 +1645,13 @@ int sys_sleep(uint32_t ms)
 {
     if (!table[current_idx].coro)
         return -VNU_EAGAIN; /* windowed/legacy: no scheduler to wait on */
+    if (interrupt_pending())
+        return -VNU_EINTR;
     sleep_ms(ms);
-    return 0;
+    /* A signal raised while asleep wakes the process (signal_kill makes
+     * it runnable), which lands here again; the sleep is then over as
+     * far as the program is concerned. */
+    return interrupt_pending() ? -VNU_EINTR : 0;
 }
 
 /* PIT IRQ0 entry (see ctxswitch.s's vnu_timer_isr). Returns 0 when the
@@ -1333,6 +1670,30 @@ extern "C" uint32_t vnu_timer_tick(uint32_t frame_esp)
     if (!cur.coro)
         return 0;
 
+    /* An alarm that ran out raises SIGALRM, and the tick is the only
+     * thing that ever notices the deadline passing: nothing in userspace
+     * is running, let alone asking what time it is. raise_not_self()
+     * rather than signal_kill() because a SIGALRM whose action is to
+     * terminate must not make the dying process switch stacks from
+     * inside the interrupt frame that is about to be thrown away. */
+    if (cur.alarm_at && static_cast<int32_t>(g_jiffies - cur.alarm_at) >= 0) {
+        cur.alarm_at = 0;
+        const uint32_t handler = cur.sig_action[VNU_SIGALRM].handler;
+        if (handler == VNU_SIG_IGN) {
+            /* ignored: the deadline is simply gone */
+        } else if (handler == VNU_SIG_DFL) {
+            /* The default action for SIGALRM is to terminate. Done here
+             * rather than by queueing the signal, because the only return
+             * path out of this frame leads straight back into the code
+             * being interrupted - there is no place for a handler frame
+             * to be built, and sys_exit() switches stacks itself. */
+            sys_exit(128 + VNU_SIGALRM);
+            return 0; /* not reached */
+        } else {
+            cur.sig_pending |= 1u << VNU_SIGALRM;
+        }
+    }
+
     /* Round-robin: only preempt if some OTHER process is on the ready
      * list (blocked processes keep their Runnable state and are
      * re-visited exactly like they are today, on every pass). A single
@@ -1346,9 +1707,29 @@ extern "C" uint32_t vnu_timer_tick(uint32_t frame_esp)
             break;
         }
     }
-    if (!other)
+    if (!other) {
+        /* Nobody to give the CPU to, so this tick preempts nothing and
+         * the ISR pops the frame and returns into the interrupted
+         * instruction. That is also the moment to hand a pending signal
+         * to the process: it is about to run its own code, which is
+         * exactly where a signal belongs, and the flag is consumed a few
+         * instructions later by that same return path (IF is off in
+         * here, so nothing can come between the two). */
+        int sig = pending_delivery(&cur);
+        if (sig) {
+            /* This runs on the interrupted process's own stack, inside
+             * the timer ISR, so 0 puts the handler's frame at the
+             * bottom of the whole call chain. */
+            deliver_signal_at(cur, frame_esp, 0, sig);
+        }
         return 0;
+    }
 
+    /* Preemption: park the whole frame and let the scheduler decide who
+     * runs next. Whether this process has a signal waiting is not
+     * decided here - run_slice() asks again on the way back in, which
+     * is the only point where the flag it sets is certain to be the
+     * next return path to consume it. */
     cur.coro_esp = frame_esp;
     cur.preempted = true;
     vnu_proc_new_pd = g_sched_pgdir;
@@ -1378,6 +1759,19 @@ void run_slice(int i)
          * popad+iret back into whatever instruction it was interrupted
          * in, instead of the cooperative callee-saved switch. */
         p.preempted = false;
+        /* A signal raised while it was parked is delivered on the way
+         * back in - the frame it is about to be resumed through is
+         * exactly the interrupted context, and the handler is built on
+         * it right here so the flag below cannot be seen by (or stolen
+         * by) another process: the scheduler runs with interrupts off
+         * and consumes it in the very next call. */
+        int sig = pending_delivery(&p);
+        if (sig) {
+            /* Delivered from the scheduler, whose stack is not this
+             * process's, so the parked frame is the only thing on the
+             * process's stack and makes a safe anchor by itself. */
+            deliver_signal_at(p, p.coro_esp, p.coro_esp, sig);
+        }
         vnu_proc_resume_preempted(&g_sched_esp, p.coro_esp);
     } else {
         vnu_proc_switch(&g_sched_esp, p.coro_esp);
