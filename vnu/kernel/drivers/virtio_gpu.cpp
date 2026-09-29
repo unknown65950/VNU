@@ -245,6 +245,25 @@ bool g_active = false;
 uint32_t g_next_res_id = 1;
 uint32_t g_scanout_id; /* the one on screen, 0 while there is none */
 
+/* The size the scanout resource was built at, which is not the same
+ * question as the mode the card is in - and the host insists it is. A
+ * display is shown from the mode the card is programmed for, so QEMU
+ * refuses a scanout resource that is not that size
+ * (ERR_INVALID_PARAMETER) and keeps showing what it had; the guest would
+ * also be copying a frame larger than the frames it has. The two are
+ * answered in different places - program_mode() by the card,
+ * scanout_alloc() here - and either can move first: a session ends with
+ * the console taking the geometry back (720x400) and the next one starts
+ * at the desktop's mode. So this is the one place that makes the
+ * resource and the mode agree, rather than assuming they do. */
+uint32_t g_scanout_w, g_scanout_h;
+
+bool scanout_is(int w, int h)
+{
+    return g_scanout_id != 0 && g_scanout_w == static_cast<uint32_t>(w) &&
+           g_scanout_h == static_cast<uint32_t>(h);
+}
+
 /* The frames the scanout resource is backed by, in the order the host
  * was given them: byte n of the image lives at byte n of the list. */
 struct Segment {
@@ -723,6 +742,8 @@ const char* build_scanout(uint32_t id, uint32_t w, uint32_t h)
         return "create_2d";
     if (!gpu_attach_backing(id))
         return "attach_backing";
+    g_scanout_w = w;
+    g_scanout_h = h;
     return nullptr;
 }
 
@@ -878,9 +899,27 @@ void present()
  * another. */
 void show_scanout()
 {
-    if (!g_active || g_scanout_id == 0)
+    if (!g_active)
         return;
-    (void)gpu_set_scanout(g_scanout_id, vgfx::width(), vgfx::height());
+    /* The host shows what the mode in use allows, so a resource left at
+     * the geometry of the mode that came before is a display that will
+     * not switch to it. Bringing the resource to the mode is one
+     * allocation and two commands, and it is cheaper than the desktop
+     * coming up on a display that stayed on the console. */
+    if (!scanout_is(vgfx::width(), vgfx::height()) &&
+        !set_resolution(vgfx::width(), vgfx::height()))
+        return;   /* nothing to show, and the driver has said why */
+    if (g_scanout_id == 0)
+        return;
+    if (!gpu_set_scanout(g_scanout_id, g_scanout_w, g_scanout_h)) {
+        outstr("virtio-gpu: resource ");
+        putdec(static_cast<unsigned long>(g_scanout_id));
+        outstr(" (");
+        putdec(static_cast<unsigned long>(g_scanout_w));
+        out('x');
+        putdec(static_cast<unsigned long>(g_scanout_h));
+        outstr(") refused on the display\n");
+    }
 }
 
 /* Move the display to w x h. The scanout resource is exactly the size
@@ -908,11 +947,13 @@ bool set_resolution(int w, int h)
 {
     if (!g_active)
         return false;
-    if (w == vgfx::width() && h == vgfx::height())
+    if (scanout_is(w, h))
         return true;
 
     gpu_unref(g_scanout_id);
     g_scanout_id = 0;
+    g_scanout_w = 0;
+    g_scanout_h = 0;
     scanout_free();
     if (!scanout_alloc(w, h)) {
         outstr("virtio-gpu: ");
