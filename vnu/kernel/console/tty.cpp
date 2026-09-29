@@ -8,14 +8,30 @@ uint16_t row = 0, col = 0;
 uint8_t attr = 0x07; /* VNU default: white on black */
 bool cursor_dirty = false;
 
-/* True once a cell has changed since the last time something that draws
- * the console as pixels said it had drawn all of it. A display with a
+/* Which text rows have a cell written in them that whoever draws the
+ * console as pixels has not put on the screen yet. A display with a
  * text mode of its own never asks (the characters are in the plane and
  * the hardware shows them); a display without one does, on every
- * scheduler pass - see vgfx::console_tick(). It is not the same flag as
- * cursor_dirty, which is about the CRTC and means nothing at all on such
- * a display. */
-bool cells_dirty = false;
+ * scheduler pass - see vgfx::console_tick(). Not the same flag as
+ * cursor_dirty, which is about the CRTC and means nothing at all on
+ * such a display.
+ *
+ * One bit per row: which of the 25 text rows has a cell written in it
+ * that whoever draws the console as pixels has not put on the screen
+ * yet (see console_dirty_rows()/console_presented()). A row mask and
+ * not a single "something changed" bit, because drawing the console is
+ * per-row work: a keystroke that moves the cursor changes one row, and
+ * a redraw that had to redo all 400 lines of it to show that would cost
+ * more than the whole shell session it interrupted. */
+uint32_t rows_dirty = 0;
+
+constexpr uint32_t ALL_ROWS = (uint32_t{1} << H) - 1;
+
+inline void row_dirty(uint32_t r)
+{
+    if (r < H)
+        rows_dirty |= uint32_t{1} << r;
+}
 
 /* --- ANSI CSI state ---
  * The installer draws its own blue setup screens, so the console must
@@ -101,7 +117,7 @@ void erase_to_line_end()
                              (static_cast<uint16_t>(attr) << 8);
     col = start;
     cursor_dirty = true;
-    cells_dirty = true;
+    row_dirty(row);
 }
 
 void csi_finish(uint8_t final)
@@ -143,7 +159,7 @@ const uint32_t cell = 0x20u | (static_cast<uint32_t>(attr) << 8);
                                      (static_cast<uint16_t>(attr) << 8);
         }
         cursor_dirty = true;
-        cells_dirty = true;
+        rows_dirty = ALL_ROWS;
         break;
     case 'K':
         erase_to_line_end();
@@ -184,7 +200,7 @@ void scroll_up()
         last[i] = blank;
     if (row > 0)
         --row;
-    cells_dirty = true;
+    rows_dirty = ALL_ROWS;
 }
 
 } // namespace
@@ -196,7 +212,7 @@ void init()
     attr = 0x07;
     row = col = 0;
     cursor_dirty = true;
-    cells_dirty = true;
+    rows_dirty = ALL_ROWS;
     flush_cursor();
 }
 
@@ -208,7 +224,7 @@ void clear()
     for (size_t i = 0; i < (static_cast<size_t>(W * H) / 2); ++i)
         p[i] = blank;
     row = col = 0;
-    cells_dirty = true;
+    rows_dirty = ALL_ROWS;
     hw_cursor_now();
 }
 
@@ -275,7 +291,7 @@ void putc(char c)
         if (col > 0) {
             --col;
             vga[row * W + col] = static_cast<uint16_t>(' ') | (static_cast<uint16_t>(attr) << 8);
-            cells_dirty = true;
+            row_dirty(row);
         } else if (row > 0) {
             --row;
             col = W - 1;
@@ -292,7 +308,7 @@ void putc(char c)
     }
     vga[row * W + col] = static_cast<uint16_t>(static_cast<uint8_t>(c)) |
                           (static_cast<uint16_t>(attr) << 8);
-    cells_dirty = true;
+    row_dirty(row);
     if (++col >= W) {
         col = 0;
         if (++row >= H) {
@@ -380,22 +396,24 @@ void restore_screen()
         vga[i] = g_saved_screen[i];
     g_screen_saved = false;   /* the live cells are the console's again */
     cursor_dirty = true;
-    cells_dirty = true;
+    rows_dirty = ALL_ROWS;
     flush_cursor();
 }
 
-/* The two ends of vgfx::console_tick()'s question. cells_dirty is set
- * wherever a cell is written (see the flag's own comment), and cleared
- * by whoever has just drawn the whole console as pixels - the only
- * caller of that is present_text(). */
-bool console_dirty()
+/* The two ends of vgfx::console_tick()'s question. The rows are set
+ * wherever a cell is written (see the mask's own comment), and cleared
+ * row by row by whoever has just drawn them as pixels - the only caller
+ * of that is present_text(), which clears what it drew and no more, so
+ * a row written while a redraw was in flight is redrawn next time
+ * instead of being lost with the row that was clean. */
+uint32_t console_dirty_rows()
 {
-    return cells_dirty;
+    return rows_dirty;
 }
 
-void console_presented()
+void console_presented(uint32_t rows)
 {
-    cells_dirty = false;
+    rows_dirty &= ~rows;
 }
 
 } // namespace vnu::tty

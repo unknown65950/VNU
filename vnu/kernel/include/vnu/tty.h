@@ -17,14 +17,18 @@ void get_cursor(uint16_t* row, uint16_t* col);
 void get_size(uint16_t* rows, uint16_t* cols);
 /* Flush pending hardware cursor update (after a batch of putc). */
 void flush_cursor();
-/* Has a cell changed since the last console_presented()? A display with
- * no text mode of its own has to be told the console is not what it
- * last showed, and the scheduler asks this on every pass to find out
- * (see vgfx::console_tick). A display with a text mode never asks: the
- * characters are in the plane and the hardware shows them. */
-bool console_dirty();
-/* The console has been drawn as pixels in full, by whoever asked. */
-void console_presented();
+/* Which text rows have changed since they were last drawn as pixels, as
+ * a bitmask of rows (bit n is row n), or 0 if none. A display with no
+ * text mode of its own has to be told the console is not what it last
+ * showed, and the scheduler asks this on every pass to find out (see
+ * vgfx::console_tick); it is a mask and not a single bit because
+ * redrawing one line of the console has to cost one line and not the
+ * 400 of them. A display with a text mode never asks: the characters
+ * are in the plane and the hardware shows them. */
+uint32_t console_dirty_rows();
+/* The console has been drawn as pixels: clear these rows (a mask in the
+ * shape console_dirty_rows() returns) from what is pending. */
+void console_presented(uint32_t rows);
 /* The character and attribute word of one cell: the character in the
  * low byte, the attribute above it. The console renderer on a display
  * with no text mode of its own draws these as pixels (see

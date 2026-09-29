@@ -379,6 +379,42 @@ int g_bpp = 0;
 uint32_t g_console_tick = 0;
 constexpr int CONSOLE_TICK_JIFFIES = 6;   /* 60 ms */
 
+/* Every text row, as vnu::tty::console_dirty_rows() spells it. */
+constexpr uint32_t ALL_CONSOLE_ROWS = 0xFFFFFFFFu;
+
+/* True once the host has been pointed at a scanout resource of ours.
+ * On a virtio display that is the moment the console stops being
+ * something the hardware shows all by itself: until then the monitor
+ * is on the legacy VGA text plane and every character lands in VRAM
+ * with the hardware putting it on screen, and a console redraw would be
+ * a megabyte of pixels and a transfer to a host that is not looking.
+ * Nothing ever points the host back at the text plane - a desktop that
+ * exits leaves the scanout up, which is the whole reason exit_to_text()
+ * has to draw the console as pixels - so this stays true for the rest of
+ * the session. A display with a text mode of its own never sets it and
+ * never needs it. See console_tick(). */
+bool g_scanout_shown = false;
+
+/* True when g_backbuf is a frame nothing has drawn the console into
+ * yet: freshly allocated, or left holding the desktop's last picture.
+ * Set wherever a new backbuffer is taken, so the first console redraw
+ * after it blacks the frame and repaints every row instead of trusting
+ * whatever the pool handed over. Cleared by the redraw that does that
+ * work, and only by it, so a frame that could not be taken stays to be
+ * tried again. */
+bool g_console_full = true;
+
+/* Point the host at our scanout, and remember that from now on the
+ * console has to be drawn for it. The one place that does this, so the
+ * bookkeeping cannot be left out of one of the call sites. */
+void arm_scanout()
+{
+    if (!vnu::virtio_gpu::active())
+        return;
+    vnu::virtio_gpu::show_scanout();
+    g_scanout_shown = true;
+}
+
 int resolve_bpp()
 {
     if (g_bpp == 0)
@@ -637,6 +673,7 @@ bool enter_gfx_mode()
         g_backbuf = alloc_backbuf(g_width, g_height, g_bpp);
         if (!g_backbuf)
             return false;
+        g_console_full = true;
     }
 
     program_mode(g_width, g_height);
@@ -647,8 +684,7 @@ bool enter_gfx_mode()
      * is what changes that, so the scanout is claimed here - after the
      * mode is programmed, never before, so a failed mode change leaves
      * the console on the screen where it already was. */
-    if (vnu::virtio_gpu::active())
-        vnu::virtio_gpu::show_scanout();
+    arm_scanout();
 
     /* Swap in the Catppuccin DAC the first time we enter graphics mode;
      * the boot palette is saved so exit_to_text() can hand it back. */
@@ -691,6 +727,7 @@ bool set_resolution(int w, int h)
     }
     release_backbuf(); /* still sized for the mode being left */
     g_backbuf = next;
+    g_console_full = true;
     g_width = w;
     g_height = h;
     /* A new resource is a new thing to be shown: the host is still
@@ -700,8 +737,8 @@ bool set_resolution(int w, int h)
      * /etc/vnuconfig/gfx.conf at boot changes the mode the desktop will
      * come up in, and the console keeps the display until something
      * actually draws. */
-    if (g_in_gfx_mode && vnu::virtio_gpu::active())
-        vnu::virtio_gpu::show_scanout();
+    if (g_in_gfx_mode)
+        arm_scanout();
     return true;
 }
 
@@ -733,12 +770,13 @@ static bool restore_console_geometry(uint16_t cols, uint16_t rows)
     }
     release_backbuf();
     g_backbuf = next;
+    g_console_full = true;
     g_width = w;
     g_height = h;
     /* A new resource is a new thing to show: the host is still pointed
      * at the one the mode being left had. */
-    if (g_in_gfx_mode && vnu::virtio_gpu::active())
-        vnu::virtio_gpu::show_scanout();
+    if (g_in_gfx_mode)
+        arm_scanout();
     return true;
 }
 
@@ -1295,9 +1333,22 @@ void present()
     present_with(CATT_PAL);
 }
 
-/* The console as pixels. See vga_gfx.h for why this exists. */
-void present_text()
+/* The console as pixels (see vga_gfx.h for why this exists at all),
+ * drawing the given rows: a bitmask of text rows as
+ * vnu::tty::console_dirty_rows() returns them, or ALL_CONSOLE_ROWS for
+ * all of them, and putting the frame on the screen. The whole console
+ * is what a caller with no better idea asks for, and the only thing
+ * that forces it here is a frame that holds nothing of the console yet
+ * (g_console_full). */
+static void present_rows(uint32_t want)
 {
+    if (g_console_full) {
+        want = ALL_CONSOLE_ROWS;
+        g_console_full = false;
+    }
+    if (want == 0)
+        return;   /* nothing to redraw, and nothing to send */
+
     /* The console is drawn on the grid the tty keeps its cells in, so a
      * text mode of another size would be drawn as itself. */
     uint16_t rows = 0, cols = 0;
@@ -1316,8 +1367,10 @@ void present_text()
      * the desktop's frame back to the pool, and the next thing to be
      * shown here is the console. */
     (void)restore_console_geometry(cols, rows);
-    if (!g_backbuf)
+    if (!g_backbuf) {
+        g_console_full = true;   /* no frame to draw into: try again */
         return;
+    }
 
     /* A VGA text cell is 8 glyph pixels wide and 16 tall, and the text
      * mode puts a ninth, always blank, column between cells - which is
@@ -1334,8 +1387,15 @@ void present_text()
      * either depth: at 8bpp the cells are indices and present_with()
      * expands them there, and at 32bpp they are already colours. */
     const uint8_t (&pal)[16][3] = g_have_saved_pal ? g_saved_pal : CATT_PAL;
-    clear(0);   /* the console is a screen of its own, on black */
+    /* Blacking the frame is a whole screen of writes, and only a draw
+     * that is doing all of it needs it: a redraw of one row paints over
+     * every pixel of that row as it goes, and the rows either side are
+     * already the console's. */
+    if (want == ALL_CONSOLE_ROWS)
+        clear(0);
     for (int row = 0; row < rows; ++row) {
+        if (!(want & (uint32_t{1} << row)))
+            continue;
         for (int col = 0; col < cols; ++col) {
             const uint16_t c = vnu::tty::cell(row, col);
             const uint8_t* bits = g_font[c & 0xFF];
@@ -1363,9 +1423,15 @@ void present_text()
         }
     }
     present_with(pal);
-    /* Every cell of the console is in that frame now, so a display that
-     * has been told about the screen has nothing left to ask for. */
-    vnu::tty::console_presented();
+    /* These cells are in that frame now, so a display that has been told
+     * about the screen has nothing left to ask for them. A row written
+     * since the mask was read is not in it and stays pending. */
+    vnu::tty::console_presented(want);
+}
+
+void present_text()
+{
+    present_rows(ALL_CONSOLE_ROWS);
 }
 
 /* Housekeeping the scheduler calls between passes: put the console on
@@ -1384,18 +1450,27 @@ void present_text()
  * the frame is a megabyte and a bit at this geometry: a pass every
  * 60 ms is faster than anyone can read and collapses a page of output
  * into a handful of transfers. Nothing at all happens while the console
- * is idle, and nothing on a display with a text mode. */
+ * is idle, and nothing on a display with a text mode - nor on a virtio
+ * display before a desktop has ever claimed the scanout, which is the
+ * whole of a machine's first console session.
+ *
+ * Only the rows that changed are drawn, which is what makes the transfer
+ * here cheap enough to sit in a scheduler pass: a keystroke echo is one
+ * row of 720x16 pixels, not a screen of them. The transfer is of the
+ * whole frame either way, but that is the host's work and the host is
+ * not the guest's problem to wait on. */
 void console_tick()
 {
-    if (!vnu::virtio_gpu::active() || g_in_gfx_mode)
-        return;   /* the desktop owns the screen, and presents every frame */
-    if (!vnu::tty::console_dirty())
+    if (!g_scanout_shown || g_in_gfx_mode)
+        return;   /* either the text plane is still what the host shows, or
+                   * the desktop owns the screen and presents every frame */
+    if (vnu::tty::console_dirty_rows() == 0)
         return;
     if (static_cast<int32_t>(vnu::proc::now_jiffies() - g_console_tick) <
         CONSOLE_TICK_JIFFIES)
         return;
     g_console_tick = vnu::proc::now_jiffies();
-    present_text();
+    present_rows(vnu::tty::console_dirty_rows());
 }
 
 void present_with(const uint8_t (&pal)[16][3])

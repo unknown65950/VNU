@@ -203,7 +203,11 @@ void present_with(const uint8_t (&pal)[16][3]);
  * Takes a frame for the console if there is none (a machine at the
  * console holds none), and puts the display back in the console's own
  * 720x400 geometry first: the host shows the scanout resource, and
- * after a desktop that is still the desktop's mode. */
+ * after a desktop that is still the desktop's mode.
+ *
+ * All of it, which is what a caller that has not been told which rows
+ * moved asks for. Console_tick() below is the one that knows, and draws
+ * only those. */
 void present_text();
 
 /* Put the console on the screen if it has changed, for the scheduler to
@@ -219,8 +223,13 @@ void present_text();
  * changes, which is the one thing that display cannot do for itself.
  *
  * Does nothing while the desktop is running (it owns the screen and
- * presents every frame) and nothing at all on a display with a text
- * mode. */
+ * presents every frame), nothing at all on a display with a text mode,
+ * and nothing on a virtio display that no desktop has claimed the
+ * scanout of yet: the characters are in the text plane and the hardware
+ * is showing it, so there is nothing to draw and nothing to wait for.
+ *
+ * Draws the rows that changed rather than the whole console, so what a
+ * keystroke costs is one row of pixels and not all 400 lines of them. */
 void console_tick();
 
 } // namespace vnu::vgfx
