@@ -8,6 +8,15 @@ uint16_t row = 0, col = 0;
 uint8_t attr = 0x07; /* VNU default: white on black */
 bool cursor_dirty = false;
 
+/* True once a cell has changed since the last time something that draws
+ * the console as pixels said it had drawn all of it. A display with a
+ * text mode of its own never asks (the characters are in the plane and
+ * the hardware shows them); a display without one does, on every
+ * scheduler pass - see vgfx::console_tick(). It is not the same flag as
+ * cursor_dirty, which is about the CRTC and means nothing at all on such
+ * a display. */
+bool cells_dirty = false;
+
 /* --- ANSI CSI state ---
  * The installer draws its own blue setup screens, so the console must
  * understand a small ANSI subset: SGR colors/bold/blink, cursor
@@ -92,6 +101,7 @@ void erase_to_line_end()
                              (static_cast<uint16_t>(attr) << 8);
     col = start;
     cursor_dirty = true;
+    cells_dirty = true;
 }
 
 void csi_finish(uint8_t final)
@@ -133,6 +143,7 @@ const uint32_t cell = 0x20u | (static_cast<uint32_t>(attr) << 8);
                                      (static_cast<uint16_t>(attr) << 8);
         }
         cursor_dirty = true;
+        cells_dirty = true;
         break;
     case 'K':
         erase_to_line_end();
@@ -173,6 +184,7 @@ void scroll_up()
         last[i] = blank;
     if (row > 0)
         --row;
+    cells_dirty = true;
 }
 
 } // namespace
@@ -184,6 +196,7 @@ void init()
     attr = 0x07;
     row = col = 0;
     cursor_dirty = true;
+    cells_dirty = true;
     flush_cursor();
 }
 
@@ -195,6 +208,7 @@ void clear()
     for (size_t i = 0; i < (static_cast<size_t>(W * H) / 2); ++i)
         p[i] = blank;
     row = col = 0;
+    cells_dirty = true;
     hw_cursor_now();
 }
 
@@ -261,6 +275,7 @@ void putc(char c)
         if (col > 0) {
             --col;
             vga[row * W + col] = static_cast<uint16_t>(' ') | (static_cast<uint16_t>(attr) << 8);
+            cells_dirty = true;
         } else if (row > 0) {
             --row;
             col = W - 1;
@@ -277,6 +292,7 @@ void putc(char c)
     }
     vga[row * W + col] = static_cast<uint16_t>(static_cast<uint8_t>(c)) |
                           (static_cast<uint16_t>(attr) << 8);
+    cells_dirty = true;
     if (++col >= W) {
         col = 0;
         if (++row >= H) {
@@ -364,7 +380,22 @@ void restore_screen()
         vga[i] = g_saved_screen[i];
     g_screen_saved = false;   /* the live cells are the console's again */
     cursor_dirty = true;
+    cells_dirty = true;
     flush_cursor();
+}
+
+/* The two ends of vgfx::console_tick()'s question. cells_dirty is set
+ * wherever a cell is written (see the flag's own comment), and cleared
+ * by whoever has just drawn the whole console as pixels - the only
+ * caller of that is present_text(). */
+bool console_dirty()
+{
+    return cells_dirty;
+}
+
+void console_presented()
+{
+    cells_dirty = false;
 }
 
 } // namespace vnu::tty

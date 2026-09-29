@@ -4,6 +4,7 @@
 #include <vnu/abi.h>
 #include <vnu/paging.h>
 #include <vnu/pmm.h>
+#include <vnu/vga_gfx.h>   /* console_tick(): the console on a pixelless display */
 #include <vnu/vfs.h>
 #include <vnu/posix.h>
 #include "embedded_vash.h"
@@ -1336,6 +1337,13 @@ int run_scheduler(const char* primary, const char* fallback)
                 p.sleep_until = 0;
             }
         }
+
+        /* A display that shows the console only as pixels needs telling
+         * that it has changed, and the scheduler is the one thing that
+         * runs whether or not any process is runnable: a shell waiting
+         * on a keystroke is the state a console is in most of the time.
+         * Free on a display with a text mode of its own. */
+        vnu::vgfx::console_tick();
 
         if (init_slot < 0 || table[init_slot].state == State::Unused) {
             /* A previous session may have left a redirection (> file) on

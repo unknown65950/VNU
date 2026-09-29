@@ -1242,3 +1242,62 @@ whole file now, in a loop, and the three wallpaper cases that the new
 line had broken pass on both drivers.
 
 - `make test` 86/86, `make test-gpu` 86/86, `make test-install` 9/9.
+
+### Sixteenth drop: the console after a desktop session is the live one
+
+"`gui`, Esc, and nothing is written any more`" - the shell was alive and
+correct the whole time: the serial log went on typing, every command ran,
+every prompt came back. The monitor showed the frame the desktop had left
+when it quit, and stayed there.
+
+The fourteenth drop made the console reach a display that has no text
+mode of its own by drawing it as pixels and presenting it. It did that
+*once*, in `exit_to_text()`, and that was enough to look right: the
+console came back. But the whole of the arrangement is that the host
+shows a scanout resource from then on. A virtio-gpu does not go back to
+the legacy VGA plane when it is unpointed - the comment on
+`show_scanout()` says so, and knows the next session has to present into
+it again rather than wait for a mode change. So the text plane the
+console keeps writing into, `0xB8000`, was a plane nobody was looking
+at, and the one present in `exit_to_text()` drew a picture of the prompt
+that nothing ever drew over again.
+
+The tty already knew when its own screen had moved: `cursor_dirty`, next
+to the CRTC update it drives, is set everywhere a cell is written. It is
+also the wrong question on such a display, where the CRTC does not exist
+and the cells have to be *redrawn as pixels and handed over*. So there
+is a second flag now, `cells_dirty`, set where a cell is written and
+nothing else (a cursor that only moved does not set it), and the console
+renderer clears it once the whole grid is in the frame.
+
+Who asks is the one thing that runs whether or not a process is
+runnable: a shell waiting for a keystroke is the state a console is in
+most of the time, so `vgfx::console_tick()` runs on the scheduler's
+between-passes housekeeping and does three things' worth of nothing at
+all - it is not a display that has a text mode, it is a desktop that
+owns the screen, or the console has not changed - before it redraws the
+grid and presents it. Rate-limited to one pass in 60 ms, because the
+frame is 1.15 MiB at this geometry and a burst of output is many
+`write(2)` batches; that is still faster than anyone can read, and
+nothing moves while the console is idle.
+
+`present_text()` had to grow one more thing: a frame for the console
+when there is none, which is the normal state of a machine sitting at
+the console now that it refreshes - `exit_to_text()` gives the desktop's
+frame back to the pool, and `restore_console_geometry()` takes a
+720x400 one (1.15 MiB at 32bpp) on the first output that needs it. It
+is taken in the same order a mode change takes one, so the pool never
+holds two.
+
+The suite missed all of this, and the way it missed it is the interesting
+part: `console-screen` compared the console before a desktop session
+with the console after one, allowing for the lines that scrolled, and a
+*frozen* screen matches that comparison perfectly - zero changed rows is
+a "small part of the console" by any reading of the check, and the
+frozen frame it was comparing against was the very same prompt. The check
+now types a command at the console that came back and requires the
+display to move. With the refresh taken out again it fails with "the
+console on it is a still picture", which is the sentence this drop is
+about.
+
+- `make test` 86/86, `make test-gpu` 86/86, `make test-install` 9/9.

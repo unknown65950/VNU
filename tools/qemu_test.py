@@ -1016,13 +1016,21 @@ def run_gfx_resolution(guest, result, verbose, timeout=60.0):
 
 
 def run_console_screen(guest, result, verbose, timeout=60.0):
-    """The text console is on the display, on whichever display there is.
+    """The text console is on the display, on whichever display there is,
+    and it is the *live* one.
 
     Not a SUITE case because the answer is in pixels: nothing typed
     reaches the screen, and the serial log is exactly where the text
     *is* even when the monitor shows nothing at all. So the check looks
     at what QEMU is showing, on a machine at its boot prompt and again
     after a desktop session has given the display back.
+
+    The second half is not only about the console being *there*: a
+    driver that takes the screen, draws the console once and then never
+    repaints it passes every shape check above with a still picture of
+    the prompt from the moment the desktop quit - the shell goes on
+    working, into a text plane the host is no longer showing. So a
+    command is typed at it and the display has to move.
     """
     print("==> console on screen (screendump)")
     shotdir = tempfile.mkdtemp(prefix="vnu-console-")
@@ -1043,6 +1051,19 @@ def run_console_screen(guest, result, verbose, timeout=60.0):
         else:
             shot = settled_shot(guest, os.path.join(shotdir, "back.ppm"))
             console_on_screen(shot, problems, "after a desktop session")
+
+            # And it has to still be the console being used: type at it
+            # and the display has to show it. Typed, not sh()'d - the
+            # echo is the point, and there is no prompt to wait on.
+            guest._type("echo console-live-marker\n")
+            time.sleep(1.0)
+            live = settled_shot(guest, os.path.join(shotdir, "live.ppm"))
+            if not any(changed_rows(live[2], shot[2], live[0], live[1])):
+                problems.append("after a desktop session, typing a command "
+                                "changed nothing on the display: the "
+                                "console on it is a still picture")
+            else:
+                console_on_screen(live, problems, "while typing")
     except (TimeoutError, RuntimeError, OSError) as exc:
         problems.append(str(exc))
 

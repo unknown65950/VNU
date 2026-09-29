@@ -2,6 +2,7 @@
 #include <vnu/abi.h>   /* VNU_GFX_PALETTE_*: the shape of the answer below */
 #include <vnu/font8x16.h>
 #include <vnu/pmm.h>
+#include <vnu/process.h>   /* now_jiffies(): the console refresh's rate limit */
 #include <vnu/tty.h>
 #include <vnu/virtio_gpu.h>
 #include <vnu/wallpaper.h>
@@ -370,6 +371,14 @@ uint8_t* g_backbuf = nullptr;
  * could change would be a buffer the pool was never told about. */
 int g_bpp = 0;
 
+/* When the console was last put on a display that cannot show the text
+ * plane itself, in 100 Hz jiffies. See console_tick() at the bottom:
+ * the point is to collapse a burst of output into one redraw, and to do
+ * nothing at all while the console is idle. Wraps with the counter, and
+ * the compare is signed, so a wrap is not a 49-day stall. */
+uint32_t g_console_tick = 0;
+constexpr int CONSOLE_TICK_JIFFIES = 6;   /* 60 ms */
+
 int resolve_bpp()
 {
     if (g_bpp == 0)
@@ -707,9 +716,13 @@ static bool restore_console_geometry(uint16_t cols, uint16_t rows)
 {
     const int w = cols * 9;
     const int h = rows * 16;
-    if (g_width == w && g_height == h)
+    /* The right size *and* a frame to put it in: a machine sitting at
+     * the console has none, the desktop's having gone back to the pool,
+     * and the depth is resolved by the first frame this takes. */
+    if (g_width == w && g_height == h && g_backbuf)
         return true;
 
+    resolve_bpp();
     uint8_t* next = alloc_backbuf(w, h, g_bpp);
     if (!next)
         return false;
@@ -1285,9 +1298,6 @@ void present()
 /* The console as pixels. See vga_gfx.h for why this exists. */
 void present_text()
 {
-    if (!g_backbuf)
-        return;
-
     /* The console is drawn on the grid the tty keeps its cells in, so a
      * text mode of another size would be drawn as itself. */
     uint16_t rows = 0, cols = 0;
@@ -1300,8 +1310,14 @@ void present_text()
      * is still the desktop's mode - so without this the console would
      * come back 1024x768 with 720x400 of text in the middle of it, and
      * stay that way until something changed the mode again. The console
-     * is the display's original state, so it is put back to it. */
+     * is the display's original state, so it is put back to it. This
+     * also takes a frame when there is none, which is the normal state
+     * of a machine that is sitting at the console: exit_to_text() gives
+     * the desktop's frame back to the pool, and the next thing to be
+     * shown here is the console. */
     (void)restore_console_geometry(cols, rows);
+    if (!g_backbuf)
+        return;
 
     /* A VGA text cell is 8 glyph pixels wide and 16 tall, and the text
      * mode puts a ninth, always blank, column between cells - which is
@@ -1347,6 +1363,39 @@ void present_text()
         }
     }
     present_with(pal);
+    /* Every cell of the console is in that frame now, so a display that
+     * has been told about the screen has nothing left to ask for. */
+    vnu::tty::console_presented();
+}
+
+/* Housekeeping the scheduler calls between passes: put the console on
+ * the screen when it has changed and the display cannot be doing it
+ * itself. A display with a text mode of its own needs nothing - the
+ * characters land in the text plane and the hardware shows them - but a
+ * virtio display is showing a scanout resource, and the text plane is
+ * not it, so after a desktop session has pointed the host at one the
+ * console is a still picture of whatever was last presented and every
+ * keystroke, every prompt and every line of output goes nowhere: the
+ * shell is alive and the monitor is blank. Hence one redraw and
+ * transfer whenever the console has moved, which is the same thing the
+ * VGA path gets from the CRTC.
+ *
+ * Rate-limited, because a burst of output is many write(2) batches and
+ * the frame is a megabyte and a bit at this geometry: a pass every
+ * 60 ms is faster than anyone can read and collapses a page of output
+ * into a handful of transfers. Nothing at all happens while the console
+ * is idle, and nothing on a display with a text mode. */
+void console_tick()
+{
+    if (!vnu::virtio_gpu::active() || g_in_gfx_mode)
+        return;   /* the desktop owns the screen, and presents every frame */
+    if (!vnu::tty::console_dirty())
+        return;
+    if (static_cast<int32_t>(vnu::proc::now_jiffies() - g_console_tick) <
+        CONSOLE_TICK_JIFFIES)
+        return;
+    g_console_tick = vnu::proc::now_jiffies();
+    present_text();
 }
 
 void present_with(const uint8_t (&pal)[16][3])
