@@ -470,7 +470,7 @@ bool hit_test_scrollbar(const Window& win, int mx, int my)
 
 /* --- Taskbar --- */
 
-enum class PB : uint8_t { None = 0, Close, Min, Reboot, Exit, App, Clock };
+enum class PB : uint8_t { None = 0, Close, Min, Reboot, Exit, App };
 
 struct PBtn {
     int x, y, w, h;
@@ -512,8 +512,6 @@ int layout_panel(PBtn* out, int focused, const vnu::apps::AppEntry* apps, int ap
 
     /* --- Left cluster --- */
     int x = 6;
-    out[n++] = {x, y, 26, BTN_H, PB::Clock, -1}; /* analog clock */
-    x += 26 + 4;
 
     const char* exit_label = "Exit";
     int w2 = text_width(exit_label) + 10;
@@ -574,7 +572,6 @@ int hit_panel(const PBtn* out, int n, int mx, int my)
     return -1;
 }
 
-void draw_clock(int cx, int cy, int r);
 void draw_panel(const PBtn* out, int n, const vnu::apps::AppEntry* apps, int app_count)
 {
     using namespace vnu::vgfx;
@@ -639,99 +636,10 @@ void draw_panel(const PBtn* out, int n, const vnu::apps::AppEntry* apps, int app
                         vnu::wintask::console(b.handle) ? vnu::wintask::console(b.handle)->title : "",
                         COLOR_BLACK);
             break;
-        case PB::Clock:
-            draw_clock(b.x + b.w / 2, b.y + b.h / 2, 10);
-            break;
         default:
             break;
         }
     }
-}
-
-/* --- Analog clock (from the RTC) --- */
-
-inline uint8_t rtc_read(uint8_t reg)
-{
-    asm volatile("outb %0, $0x70" : : "a"(reg));
-    uint8_t v;
-    asm volatile("inb $0x71, %0" : "=a"(v));
-    return v;
-}
-
-void read_rtc_time(int& h, int& m, int& s)
-{
-    while (rtc_read(0x0A) & 0x80) {
-    }
-    uint8_t sb = rtc_read(0x0B);
-    bool bcd = !(sb & 0x04);
-    uint8_t sec = rtc_read(0x00);
-    uint8_t min = rtc_read(0x02);
-    uint8_t hour = rtc_read(0x04);
-    auto norm = [bcd](uint8_t v) { return bcd ? ((v & 0x0F) + ((v >> 4) & 0x0F) * 10) : v; };
-    s = norm(sec);
-    m = norm(min);
-    h = norm(hour);
-}
-
-int sine1000(int deg)
-{
-    static const int T[90] = {
-        0,    17,   34,   52,   69,   87,   104,  121,  139,  156,
-        173,  190,  207,  224,  241,  258,  275,  292,  309,  325,
-        342,  358,  374,  390,  406,  422,  438,  453,  469,  484,
-        499,  515,  529,  544,  559,  573,  587,  601,  615,  629,
-        642,  656,  669,  681,  694,  707,  719,  731,  743,  754,
-        766,  777,  788,  798,  809,  819,  829,  838,  848,  857,
-        866,  875,  883,  891,  899,  906,  913,  920,  927,  933,
-        939,  945,  950,  956,  961,  965,  970,  974,  978,  981,
-        985,  988,  990,  993,  995,  997,  998,  999,  1000, 1000,
-    };
-    int q = deg % 360;
-    if (q < 0)
-        q += 360;
-    int seg = q / 90;
-    int r = q % 90;
-    switch (seg) {
-    case 0:
-        return T[r];
-    case 1:
-        return T[89 - r];
-    case 2:
-        return -T[r];
-    default:
-        return -T[89 - r];
-    }
-}
-
-int cosine1000(int deg)
-{
-    return sine1000(deg + 90);
-}
-
-void draw_clock(int cx, int cy, int r)
-{
-    using namespace vnu::vgfx;
-    int h = 0, m = 0, s = 0;
-    read_rtc_time(h, m, s);
-
-    fill_circle(cx, cy, r, COLOR_WHITE);
-    circle(cx, cy, r, COLOR_BLACK);
-    circle(cx, cy, r - 2, COLOR_DGRAY);
-
-    int sec_deg = s * 6;
-    int min_deg = m * 6 + s / 10;
-    int hr_deg = (h % 12) * 30 + m / 2;
-
-    int hx = (cx * 1000 + (r - 6) * sine1000(hr_deg)) / 1000;
-    int hy = (cy * 1000 - (r - 6) * cosine1000(hr_deg)) / 1000;
-    line(cx, cy, hx, hy, COLOR_BLACK);
-    int mx2 = (cx * 1000 + (r - 2) * sine1000(min_deg)) / 1000;
-    int my2 = (cy * 1000 - (r - 2) * cosine1000(min_deg)) / 1000;
-    line(cx, cy, mx2, my2, COLOR_BLACK);
-    int sx2 = (cx * 1000 + (r - 1) * sine1000(sec_deg)) / 1000;
-    int sy2 = (cy * 1000 - (r - 1) * cosine1000(sec_deg)) / 1000;
-    line(cx, cy, sx2, sy2, COLOR_BLACK);
-    put_pixel(cx, cy, COLOR_BLACK);
 }
 
 void reboot_now()
