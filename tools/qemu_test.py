@@ -37,6 +37,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # user@hostname:cwd$ , where the host name comes from /etc/hostname (a
 # live image is "vnu", an installed disk the name it was installed with).
 PROMPT = re.compile(r"[a-z_]+@[a-z0-9][a-z0-9_.-]*:[^\n]*[$#] ")
+# The same prompt, but as the *end* of what has been printed: the shell
+# echoes each command as it is typed, and that echo is a prompt line, so
+# "a prompt showed up" is true the moment the typing ends - long before
+# the command has run. See Guest.wait_ready().
+PROMPT_END = re.compile(PROMPT.pattern.rstrip() + "$", re.MULTILINE)
 
 # QEMU QKeyCode names for a US layout, so a test can type any of the
 # commands below (quotes, pipes, semicolons) exactly as a user would.
@@ -212,14 +217,49 @@ class Guest:
     def wait_prompt(self, timeout=60.0, frm=0):
         return self.wait(PROMPT.pattern, timeout, frm)
 
+    def wait_ready(self, frm=0, timeout=60.0):
+        """Block until the shell has finished printing and is back at its
+        prompt, and return the offset of that prompt.
+
+        What ends a command is a prompt at the end of the output, not
+        the first prompt after the typing: the shell echoes the command
+        line as it is typed, so a search for "a prompt" is satisfied by
+        the echo and the check then runs against output the command has
+        not produced yet. One case then reads the previous case's text,
+        and every case after it inherits that."""
+        deadline = time.time() + timeout
+        while True:
+            text = self.tail(frm).rstrip()
+            match = PROMPT_END.search(text)
+            if match:
+                return frm + match.end()
+            if self.proc.poll() is not None:
+                raise RuntimeError("qemu exited while waiting for the shell")
+            if time.time() >= deadline:
+                raise TimeoutError("timed out after %ss waiting for the "
+                                   "shell to be ready again (log: %s)"
+                                   % (timeout, self.log))
+            time.sleep(0.1)
+
     # ---- input --------------------------------------------------------
 
-    def _type(self, text, hold_ms=10):
+    def _type(self, text, hold_ms=50, step=0.05):
         """Send one key at a time: HMP `sendkey` takes a '+'/'-' chord or
         key, and a batch would either be rejected (spaces are not a
         separator) or apply the shift of `shift-a` to the whole batch. One
         call per character is unambiguous, and the hold time keeps the
         i8042 buffer from being overrun by the guest's own polling.
+
+        The 50 ms hold and the 50 ms between keys are not decoration.
+        QEMU's PS/2 model hands the guest a scancode from a one-byte
+        mailbox and refills it from a queue as the guest reads, and
+        under a burst it gets that wrong: a byte that is already spent
+        comes back a second time and the two behind it are dropped, so
+        `cat /proc/gfx` arrives as `cat /procgfx`. It needs the guest to
+        be keeping up, and right after a desktop session the guest is
+        busy copying console frames around, which is exactly when it is
+        not. Typing at a speed a person can manage keeps that queue
+        shallow, so a failing check is the guest's and not the model's.
 
         A <name> token from SPECIAL_KEYS (e.g. <down>) stands for a key
         that is not a character, such as an arrow. Returns the number of
@@ -244,7 +284,7 @@ class Guest:
             reply = self.qmp.hmp("sendkey %s %d" % (k, hold_ms))
             if reply and "invalid" in reply:
                 raise RuntimeError("sendkey %s: %s" % (k, reply))
-            time.sleep(0.01)
+            time.sleep(step)
         return len(keys)
 
     def type_line(self, text, expect=None, timeout=60.0):
@@ -265,9 +305,8 @@ class Guest:
         frm = len(self.tail(0))
         self._type(command + "\n")
         time.sleep(0.2)
-        end = self.wait_prompt(timeout, frm)
-        chunk = self.tail(frm)
-        return strip_echo(chunk, command), end
+        end = self.wait_ready(frm, timeout)
+        return strip_echo(self.tail(frm), command), end
 
     def login(self, user="root", password="root", timeout=30.0):
         """Type through the login prompt (which is not a shell prompt)."""
