@@ -1235,6 +1235,91 @@ def present_rect(proc_gfx):
             int(m.group(3)), int(m.group(4))), int(m.group(5))
 
 
+def esc_to_shell(guest, timeout, tries=4):
+    """Leave the desktop and wait for the shell back.
+
+    Esc is the desktop's own "close the front window, and quit when the
+    last one is gone". A vgfx reader wants a byte after a bare Esc to
+    make a key of it, so the first press can be swallowed - hence the
+    retries. Waiting on the prompt from the current offset matters: the
+    log still holds every prompt typed before the desktop ever started.
+    """
+    for _ in range(tries):
+        frm = len(guest.tail(0))
+        guest._type("<esc>")
+        try:
+            guest.wait_prompt(timeout, frm)
+            return True
+        except TimeoutError:
+            continue
+    return False
+
+
+def run_console_screen(guest, result, verbose, timeout=60.0):
+    """The text console is on the display, on whichever display there is,
+    and it is the *live* one.
+
+    Not a SUITE case because the answer is in pixels: nothing typed
+    reaches the screen, and the serial log is exactly where the text
+    *is* even when the monitor shows nothing at all. So the check looks
+    at what QEMU is showing, on a machine at its boot prompt and again
+    after a desktop session has given the display back.
+
+    The second half is not only about the console being *there*: a
+    driver that takes the screen, draws the console once and then never
+    repaints it passes every shape check above with a still picture of
+    the prompt from the moment the desktop quit - the shell goes on
+    working, into a text plane the host is no longer showing. So a
+    command is typed at it and the display has to move.
+    """
+    print("==> console on screen (screendump)")
+    shotdir = tempfile.mkdtemp(prefix="vnu-console-")
+    problems = []
+    try:
+        # At the prompt, before anything has taken the display.
+        shot = settled_shot(guest, os.path.join(shotdir, "boot.ppm"))
+        console_at_boot(shot, problems, "at the boot prompt")
+
+        # And after a desktop has run and quit: a driver that takes the
+        # screen and does not hand it back leaves the last frame there.
+        # Typed, not sh(): the desktop owns the terminal until Esc, so
+        # there is no prompt for sh() to wait on.
+        guest._type("gui\n")
+        time.sleep(3.0)
+        if not esc_to_shell(guest, timeout):
+            problems.append("the desktop did not give the console back")
+        else:
+            shot = settled_shot(guest, os.path.join(shotdir, "back.ppm"))
+            console_on_screen(shot, problems, "after a desktop session")
+
+            # And it has to still be the console being used: type at it
+            # and the display has to show it. Typed, not sh()'d - the
+            # echo is the point, and there is no prompt to wait on.
+            guest._type("echo console-live-marker\n")
+            time.sleep(1.0)
+            live = settled_shot(guest, os.path.join(shotdir, "live.ppm"))
+            if not any(changed_rows(live[2], shot[2], live[0], live[1])):
+                problems.append("after a desktop session, typing a command "
+                                "changed nothing on the display: the "
+                                "console on it is a still picture")
+            else:
+                console_on_screen(live, problems, "while typing")
+    except (TimeoutError, RuntimeError, OSError) as exc:
+        problems.append(str(exc))
+
+    if problems:
+        keep_frames(shotdir, "console-screen")
+    shutil.rmtree(shotdir, ignore_errors=True)
+    if problems:
+        result.failed.append(("console-screen", "", problems))
+        print("FAIL %-18s %s" % ("console-screen", "; ".join(problems)))
+        return False
+    result.passed += 1
+    if verbose:
+        print("ok   %-18s" % "console-screen")
+    return True
+
+
 def run_gfx_damage(guest, result, verbose, timeout=60.0):
     """Check that a pass which changes little hands the host little.
 
@@ -1423,89 +1508,730 @@ def run_gfx_damage(guest, result, verbose, timeout=60.0):
         print("ok   %-18s" % "gfx-damage")
 
 
-def run_console_screen(guest, result, verbose, timeout=60.0):
-    """The text console is on the display, on whichever display there is,
-    and it is the *live* one.
+def present_total(proc_gfx):
+    """The cumulative count of bytes the desktop has transferred to the
+    host since boot, as /proc/gfx reports it - or None when the kernel
+    predates the counter (a /proc/gfx without the line) or already had
+    one transfer of an enormous size (overflow is impossible)."""
+    m = re.search(r"^present_total\t(\d+) bytes$", proc_gfx, re.MULTILINE)
+    return int(m.group(1)) if m else None
 
-    Not a SUITE case because the answer is in pixels: nothing typed
-    reaches the screen, and the serial log is exactly where the text
-    *is* even when the monitor shows nothing at all. So the check looks
-    at what QEMU is showing, on a machine at its boot prompt and again
-    after a desktop session has given the display back.
 
-    The second half is not only about the console being *there*: a
-    driver that takes the screen, draws the console once and then never
-    repaints it passes every shape check above with a still picture of
-    the prompt from the moment the desktop quit - the shell goes on
-    working, into a text plane the host is no longer showing. So a
-    command is typed at it and the display has to move.
-    """
-    print("==> console on screen (screendump)")
-    shotdir = tempfile.mkdtemp(prefix="vnu-console-")
-    problems = []
-    try:
-        # At the prompt, before anything has taken the display.
-        shot = settled_shot(guest, os.path.join(shotdir, "boot.ppm"))
-        console_at_boot(shot, problems, "at the boot prompt")
+# The desktop icons are laid out on a 4-by-9 grid (icon_rect(),
+# gui/gui.cpp: 24x24 tiles on 80x48 cells from (8, 42)), and the tiles
+# are in the order install_demo_apps() seeded /apps - hello, vedit,
+# term, calc, files, picview, prefs, clock, play. These are the tile
+# centres the harness clicks; a change to the /apps seed order moves
+# them and fails every click below loudly.
+ICONS = {
+    "hello": (20, 54),
+    "vedit": (100, 54),
+    "term": (180, 54),
+    "calc": (260, 54),
+    "files": (20, 102),
+    "picview": (100, 102),
+    "prefs": (180, 102),
+    "clock": (260, 102),
+    "play": (20, 150),
+}
 
-        # And after a desktop has run and quit: a driver that takes the
-        # screen and does not hand it back leaves the last frame there.
-        # Typed, not sh(): the desktop owns the terminal until Esc, so
-        # there is no prompt for sh() to wait on.
-        guest._type("gui\n")
-        time.sleep(3.0)
-        if not esc_to_shell(guest, timeout):
-            problems.append("the desktop did not give the console back")
+# QEMU delivers pointer motion to the guest's PS/2 mouse (the model
+# feeds the 8042, and ps2mouse.cpp reads the deltas 1:1), so the host
+# coordinates are the guest's pixels. Three edges of the protocol
+# matter:
+#
+#   - a delta beyond ±127 has to be re-signed and QEMU gets that wrong,
+#     so a leg travels in MOUSE_CHUNK steps;
+#   - the i8042 model drops bytes when events arrive faster than the
+#     guest drains them (the same mailbox swallow the _type() keys
+#     fight, see above): a packet that is spent comes back a second
+#     time and the one behind it is dropped, so the guest ends up
+#     mid-packet and the driver's sync catch discards the rest. OSHA
+#     says space the events like a person types - one packet a pass is
+#     reliable, three a pass is a coin flip. MOUSE_STEP is that breath;
+#   - the very first event of a desktop session can be swallowed too,
+#     so mouse_warmup() spends one real move on it rather than a real
+#     one later. A (0, 0) packet may not emit anything at all, so the
+#     warmup is an actual small move in a direction that does not
+#     matter.
+MOUSE_CHUNK = 60
+MOUSE_STEP = 0.12
+
+
+def mouse_warmup(guest):
+    """Let the session's first PS/2 event die on a move to nowhere: a
+    real (small) move, so there is a packet to swallow. The desktop
+    starts the pointer at the screen centre, so a few pixels either way
+    on the bare desktop changes nothing visible nor countable."""
+    mouse_move(guest, -3, 5)
+    time.sleep(0.5)
+
+
+def mouse_move(guest, dx, dy):
+    """Move the pointer by `dx`, `dy` pixels, in steps the protocol can
+    carry. The PS/2 path is 1:1, so the arithmetic is exact."""
+    while dx or dy:
+        x = max(-MOUSE_CHUNK, min(MOUSE_CHUNK, dx))
+        y = max(-MOUSE_CHUNK, min(MOUSE_CHUNK, dy))
+        dx -= x
+        dy -= y
+        guest.qmp.hmp("mouse_move %d %d" % (x, y))
+        time.sleep(MOUSE_STEP)
+
+
+def mouse_click(guest):
+    """Press and release the left button, then let the desktop settle
+    and the click's effects clear."""
+    guest.qmp.hmp("mouse_button 1")
+    time.sleep(0.25)
+    guest.qmp.hmp("mouse_button 0")
+    time.sleep(0.5)
+
+
+def panel_calc_label(shot):
+    """True when the panel shows the calculator's button label.
+
+    The panel base is (48, 48, 71) everywhere short of the right-hand
+    clock, and a desktop running only the terminal has nothing in the
+    span x~140..200 that shares the dark (31, 31, 47) of a button
+    outline. Spawning the calculator puts its label there (x~148..154)
+    even though the window itself is fully covered and invisible, so it
+    is a reliable sign the spawn happened."""
+    w, h, px = shot
+    for y in range(2, 30):
+        for x in range(140, 200):
+            b = (y * w + x) * 3
+            if px[b] == 0x1F and px[b + 1] == 0x1F and px[b + 2] == 0x2F:
+                return True
+    return False
+
+
+# Verifiable pointer navigation for the occlusion sessions.
+#
+# The pointer is aimed from screenshots, and that is all there is to aim
+# it with: the desktop swallows the keyboard while it is up, so nothing
+# can be typed at the guest to move the pointer, and /proc/gfx has no
+# pointer in it. What a screenshot does offer is the pointer itself - but
+# only where the desktop is not covered by its own windows. The terminal
+# fills most of the screen, so a position on top of it cannot be read at
+# all: a move there repaints nothing that shows the arrow, and a reading
+# taken from such a frame is a reading of whatever else the desktop was
+# doing. So the navigation works in two halves:
+#
+#   - on the open desktop - the floor below the terminal, the widest
+#     part of the screen - the pointer is read exactly, one packet at a
+#     time, each leg verified by the frame it lands in. That is where
+#     the pointer is put when it has to be *known*, which is the parked
+#     screenshot's spot;
+#
+#   - and where the pointer has to *end*, over a covered window or on
+#     the panel, the run of packets that carries it there cannot be
+#     watched - everything along the way is covered - so the run is
+#     checked by coming back. A run that lost a packet puts the pointer
+#     back somewhere other than where it left from, which is a spot the
+#     screen can show, so the check is a fact rather than a hope. The
+#     run is then sent once more and the click that follows is what the
+#     caller verifies: the calculator's panel button, or the desktop
+#     leaving.
+#
+# Both halves assume nothing about how reliably a packet arrives. The
+# PS/2 path is not something to trust like that (see MOUSE_STEP above):
+# the first event or two of a desktop session are swallowed, a packet
+# can be dropped outright, and the screen edge clamps the last of a run.
+# A leg that is measured is a leg that counts, and one that was lost
+# costs a leg instead of the test.
+#
+# The spots themselves, in the desktop's own terms (gui.cpp: PANEL_H=34,
+# ICON_ORIGIN_Y=PANEL_H+8, 24x24 tiles on 80x48 cells from (8, 42); the
+# left cluster of the panel is Close, Min, Reboot, Exit, each button
+# text_width(label)+10 wide from x 6).
+MOUSE_STEP_GAP = 0.2                   # the breath between packets
+PARK_TOL = 16                          # a park this close is on the spot
+PARK_PACKET = 60                       # one packet: what a leg moves
+OCCL_SCREEN_W, OCCL_SCREEN_H = 1024, 768   # the desktop's screen
+OCCL_FLOOR_Y = 500                    # below the windows: open
+                                       # desktop the whole width of it
+BEACON = (700, 600)                    # open floor, where both sessions
+                                       # park for their screenshot
+EXIT_BUTTON = (22, 16)                 # the panel's Exit button: it starts
+                                       # at x 6 and is 32 wide, and one
+                                       # slot over is Reboot
+OCCL_DBG_DIR = None                    # a dir to trace the frames the
+                                       # navigation is measured from
+OCCL_DBG_N = [0]
+TRACE_NAV = False                      # --trace-nav: fill that dir
+
+
+def occl_ground(guest):
+    """A fresh screendump, available between navigation steps.
+
+    OCCL_DBG_DIR is for a failing run only: the navigation is measured
+    from frames, so a trace of them is the only way to see what a
+    misreading was looking at - and a session draws hundreds of them,
+    which is more than /tmp wants to hold, so it is off unless asked."""
+    global OCCL_DBG_DIR
+    if OCCL_DBG_DIR is not None:
+        OCCL_DBG_N[0] += 1
+        p = os.path.join(OCCL_DBG_DIR, "%03d.ppm" % OCCL_DBG_N[0])
+        guest.qmp.hmp("screendump " + p)
+        time.sleep(0.25)
+        return read_ppm(p)
+    path = tempfile.mktemp(suffix=".ppm")
+    guest.qmp.hmp("screendump " + path)
+    time.sleep(0.25)
+    shot = read_ppm(path)
+    os.unlink(path)
+    return shot
+
+
+def occl_diff(frm, cur):
+    """The pixels where `cur` differs from `frm`, as a set of (x, y).
+
+    A frame is whole 3-byte pixels, so the two are compared as 32-bit
+    words (a 1024-pixel row is 3072 bytes, so no word straddles one): a
+    pixel that changed changes the bytes of the word it sits in, and the
+    word's offset says which pixel that is."""
+    pa = memoryview(frm[2]).cast("I")
+    pb = memoryview(cur[2]).cast("I")
+    w = frm[0]
+    return {(((i * 4) // 3) % w, ((i * 4) // 3) // w)
+            for i in range(len(pa)) if pa[i] != pb[i]}
+
+
+def occl_settle(guest, tries=14, wait=0.5):
+    """A frame the desktop has finished drawing, found by waiting for two
+    frames in a row to be the same.
+
+    The desktop puts a move on the screen late and at no fixed rate - the
+    same move has shown up half a second after it was sent and gone
+    unseen for three - so a frame taken on a timer is a frame of
+    whatever the screen happens to be holding, and a difference taken
+    against one is a difference against a moment that has not finished
+    happening. Two frames in a row that agree is the one way to ask
+    whether it has."""
+    prev = occl_ground(guest)
+    for _ in range(tries):
+        time.sleep(wait)
+        cur = occl_ground(guest)
+        if cur == prev:
+            return cur
+        prev = cur
+    return prev
+
+
+def occl_spots(blobs, near=24):
+    """The changed pixels as spots: where each one is centred, and the
+    pixels in it relative to its own top-left corner.
+
+    That last part is what tells the two spots of a leg apart from two
+    unrelated things that happen to change: the pointer is one fixed
+    40-pixel arrow, so the spot it left and the spot it arrived at are
+    the same shape, and nothing else on the desktop is.
+
+    Pixels join the first spot close enough to hold them, and closeness
+    is measured from where a spot started rather than from its middle.
+    The pointer is drawn as a run of pixels with gaps in it, so a spot
+    has to be gathered by reach and not by neighbour - and a centre that
+    moved while the spot was being gathered would let its own pixels be
+    counted into it twice, and two gaps one packet apart would join into
+    one spot. Two footprints of a leg are a packet apart, which is
+    further than `near`, so a leg's two spots are two spots."""
+    spots = []
+    for (x, y) in blobs:
+        for s in spots:
+            if abs(x - s["seed"][0]) < near and abs(y - s["seed"][1]) < near:
+                s["pix"].add((x, y))
+                break
         else:
-            shot = settled_shot(guest, os.path.join(shotdir, "back.ppm"))
-            console_on_screen(shot, problems, "after a desktop session")
+            spots.append({"seed": (x, y), "pix": {(x, y)}})
+    for s in spots:
+        x0 = min(x for (x, y) in s["pix"])
+        y0 = min(y for (x, y) in s["pix"])
+        s["at"] = (sum(x for (x, y) in s["pix"]) // len(s["pix"]),
+                   sum(y for (x, y) in s["pix"]) // len(s["pix"]))
+        s["n"] = len(s["pix"])
+        s["shape"] = frozenset((x - x0, y - y0) for (x, y) in s["pix"])
+    return spots
 
-            # And it has to still be the console being used: type at it
-            # and the display has to show it. Typed, not sh()'d - the
-            # echo is the point, and there is no prompt to wait on.
-            guest._type("echo console-live-marker\n")
-            time.sleep(1.0)
-            live = settled_shot(guest, os.path.join(shotdir, "live.ppm"))
-            if not any(changed_rows(live[2], shot[2], live[0], live[1])):
-                problems.append("after a desktop session, typing a command "
-                                "changed nothing on the display: the "
-                                "console on it is a still picture")
-            else:
-                console_on_screen(live, problems, "while typing")
-    except (TimeoutError, RuntimeError, OSError) as exc:
-        problems.append(str(exc))
 
-    if problems:
-        keep_frames(shotdir, "console-screen")
-    shutil.rmtree(shotdir, ignore_errors=True)
-    if problems:
-        result.failed.append(("console-screen", "", problems))
-        print("FAIL %-18s %s" % ("console-screen", "; ".join(problems)))
+OCCL_ARROW = [None]                   # the pointer's own bitmap, learned
+OCCL_SAY = None                       # a file to trace navigation into
+
+
+def occl_say(*what):
+    """Trace a navigation step when asked, on one line each: the legs,
+    what each one read, and how long it took, which is the whole of what
+    there is to see when a run went somewhere nobody expected."""
+    if OCCL_SAY is not None:
+        OCCL_SAY.write(" ".join(str(w) for w in what) + "\n")
+        OCCL_SAY.flush()
+
+
+def occl_is_arrow(spot):
+    """Whether a spot is the pointer, checked against the pointer's own
+    shape and not against the shape of what it was drawn over.
+
+    The pointer is one arrow in a 7-by-12 box, and it is the only thing
+    on the desktop that is - no text, no icon, no piece of wallpaper is
+    a moving sprite of that shape - so the first spot of that shape is
+    what the pointer looks like and every later one is matched against
+    it.
+
+    How much of the arrow a spot shows is up to the floor underneath it:
+    the arrow is drawn with a colour of its own over a wallpaper, and a
+    pixel that lands on the exact colour it is drawn over does not change
+    at all, so the same arrow reads as 45 changed pixels over one part of
+    the floor and as 31 over another. A spot is therefore counted as the
+    pointer when two thirds of it is the arrow, and the arrow is widened
+    with every pixel a reading adds to it - the reference is what the
+    pointer has been seen to be, not what it looked like once."""
+    shape = spot["shape"]
+    if not shape or not 24 <= spot["n"] <= 52:
         return False
-    result.passed += 1
-    if verbose:
-        print("ok   %-18s" % "console-screen")
+    if max(x for (x, y) in shape) + 1 > 9:
+        return False
+    if not 9 <= max(y for (x, y) in shape) + 1 <= 14:
+        return False
+    if OCCL_ARROW[0] is None:
+        OCCL_ARROW[0] = shape
+        return True
+    if len(shape & OCCL_ARROW[0]) < max(20, spot["n"] * 2 // 3):
+        return False
+    OCCL_ARROW[0] = OCCL_ARROW[0] | shape
     return True
 
 
-def esc_to_shell(guest, timeout, tries=4):
-    """Leave the desktop and wait for the shell back.
+def occl_arrive(guest, before, dx, dy, at=None, tries=8, wait=0.8):
+    """Where the leg of (dx, dy) came to rest, or None when the screen
+    never shows where.
 
-    Esc is the desktop's own "close the front window, and quit when the
-    last one is gone". A vgfx reader wants a byte after a bare Esc to
-    make a key of it, so the first press can be swallowed - hence the
-    retries. Waiting on the prompt from the current offset matters: the
-    log still holds every prompt typed before the desktop ever started.
-    """
+    A leg is one packet, and the screen answers a leg by showing the
+    pointer at the end of it. When the pointer was at `at` before the
+    leg, that is a place to look: the changed pixels are split along the
+    line across the middle of the leg, and the pointer's own half - a
+    bitmap the same one it always is - is the answer. Nothing else in
+    the frame is held against it, because a desktop erases where the
+    pointer was in its own time, and a frame taken between one move and
+    the next shows the pointer's old place and the one before that
+    besides: a reading that turned on how many arrows the frame holds
+    would throw away every leg that followed a fast one.
+
+    Without `at` there is no middle to split along, and then the leg is
+    read the other way round - the pointer is the arrow furthest along
+    the leg, and the footprint it came from is a packet behind that.
+
+    Either way it has to be waited for, because the desktop puts a move
+    on the screen late and at no fixed rate - the same leg has shown up
+    half a second after it was sent and gone unseen for three - so the
+    frame is polled until the leg is in it, and a leg that never turns
+    up costs a wait and not a guess."""
+    if not dx and not dy:
+        return None
     for _ in range(tries):
-        frm = len(guest.tail(0))
-        guest._type("<esc>")
-        try:
-            guest.wait_prompt(timeout, frm)
-            return True
-        except TimeoutError:
+        time.sleep(wait)
+        blobs = occl_diff(before, occl_ground(guest))
+        if at is not None:
+            # The line across the middle of the leg, so that the pointer
+            # at the end of it and the footprint at the start of it are
+            # two halves of the frame however short the leg is.
+            mx = (at[0] + at[0] + dx) / 2.0
+            my = (at[1] + at[1] + dy) / 2.0
+            want = (at[0] + dx, at[1] + dy)
+            # The half of the frame the pointer moved into, and inside it
+            # only what lies where the pointer came to rest: the desktop
+            # can still be showing an older move of its own, and that
+            # ghost is not this leg's answer.
+            pix = {(x, y) for (x, y) in blobs
+                   if (x - mx) * dx + (y - my) * dy > 0
+                   and (x - want[0]) ** 2 + (y - want[1]) ** 2 <= 144}
+            if not pix:
+                continue
+            spot = {"at": (sum(x for (x, y) in pix) // len(pix),
+                           sum(y for (x, y) in pix) // len(pix)),
+                    "n": len(pix)}
+            x0 = min(x for (x, y) in pix)
+            y0 = min(y for (x, y) in pix)
+            spot["shape"] = frozenset((x - x0, y - y0) for (x, y) in pix)
+            if occl_is_arrow(spot):
+                return spot["at"]
             continue
-    return False
+        spots = [s for s in occl_spots(blobs) if occl_is_arrow(s)]
+        if len(spots) < 2:
+            continue
+        along = (1 if dx > 0 else -1) if dx else 0
+        down = (1 if dy > 0 else -1) if dy else 0
+        spots.sort(key=lambda s: s["at"][0] * along + s["at"][1] * down)
+        arrived, left = spots[-1], spots[-2]
+        if abs(arrived["at"][0] - left["at"][0] - dx) > 12 \
+                or abs(arrived["at"][1] - left["at"][1] - dy) > 12:
+            continue
+        return arrived["at"]
+    return None
+
+
+def occl_step(guest, dx, dy, at=None):
+    """Carry the pointer one leg of (dx, dy) and report where it came to
+    rest, or None when the screen cannot say. `at` is where the pointer
+    was, when the caller knows."""
+    before = occl_settle(guest)
+    mouse_move(guest, dx, dy)
+    where = occl_arrive(guest, before, dx, dy, at)
+    occl_say("leg (%+d,%+d) from %r -> %r" % (dx, dy, at, where))
+    return where
+
+
+def occl_find(guest, deadline=None):
+    """Where the pointer is, read off the screen, or None when a sweep
+    cannot find it.
+
+    The pointer spends most of a session behind a window - the desktop
+    starts it in the middle of the screen, which is behind the terminal,
+    and a covered spot is a spot with one footprint and no reading - so
+    finding it is a walk out onto the open floor, one packet a leg, and
+    the first leg that lands where the screen shows both of its ends is
+    the reading.
+
+    Down first and as many legs as it takes, because the floor is open
+    the whole width of the screen and a pointer anywhere in the top of
+    it only has to keep going down to reach it. Then right, then back up
+    and back left, for a pointer that has already been walked off the
+    bottom of the screen."""
+    here = None
+    for dx, dy, legs in ((0, PARK_PACKET, 8), (PARK_PACKET, 0, 6),
+                         (0, -PARK_PACKET, 6), (-PARK_PACKET, 0, 6)):
+        for _ in range(legs):
+            landed = occl_step(guest, dx, dy, here)
+            if landed is not None:
+                occl_say("find -> %r" % (landed,))
+                return landed
+            if deadline is not None and time.time() > deadline:
+                return None
+    occl_say("find -> None")
+    return None
+
+
+def occl_park(guest, target, tries=32, deadline=None):
+    """Park the pointer on `target` on the open desktop, and return where
+    it came to rest, or None when it never got there.
+
+    One packet a leg, and every leg re-read, so a leg that was lost, or
+    that arrived short, or that arrived on the spot and was read once
+    more, all cost a leg and nothing else. A leg is a whole packet while
+    the spot is a packet away and the exact distance once it is closer,
+    because two footprints only read as two while they are further apart
+    than the pointer is wide."""
+    here = None
+    for _ in range(tries):
+        if here is None:
+            here = occl_find(guest, deadline)
+            if here is None:
+                continue
+        dx = target[0] - here[0]
+        dy = target[1] - here[1]
+        if abs(dx) <= PARK_TOL and abs(dy) <= PARK_TOL:
+            return here
+        if abs(dx) > PARK_PACKET or abs(dy) > PARK_PACKET:
+            step = (PARK_PACKET if dx > 0 else -PARK_PACKET,
+                    PARK_PACKET if dy > 0 else -PARK_PACKET)
+        elif abs(dx) >= 16 or abs(dy) >= 16:
+            step = (dx, dy)
+        elif abs(dx) >= abs(dy):
+            step = (16 if dx > 0 else -16, 0)
+        else:
+            step = (0, 16 if dy > 0 else -16)
+        here = occl_step(guest, step[0], step[1], here)
+        if here is not None and abs(target[0] - here[0]) <= PARK_TOL \
+                and abs(target[1] - here[1]) <= PARK_TOL:
+            occl_say("park %r on %r" % (here, target))
+            return here
+        if deadline is not None and time.time() > deadline:
+            occl_say("park %r gave up" % (target,))
+            return None
+    occl_say("park %r -> None" % (target,))
+    return None
+
+
+def occl_run(guest, dx, dy):
+    """Carry the pointer (dx, dy) in one-packet legs, without overshoot:
+    a run that overshoots is a run that cannot come back, and the last
+    packet of a run onto a button is the one that has to land on it."""
+    while dx or dy:
+        x = max(-PARK_PACKET, min(PARK_PACKET, dx))
+        y = max(-PARK_PACKET, min(PARK_PACKET, dy))
+        dx -= x
+        dy -= y
+        guest.qmp.hmp("mouse_move %d %d" % (x, y))
+        time.sleep(MOUSE_STEP_GAP)
+    occl_settle(guest)
+    return True
+
+
+def occl_where(guest, near):
+    """Where the pointer is, read off the screen - and leave it there.
+    None when it cannot be read.
+
+    Reading a position costs a leg, because two footprints are what make
+    a leg readable and one of them is where the pointer came from. This
+    takes that leg on the open side of `near`, reads the spot the
+    pointer came to rest on, and walks the leg back, so that the answer
+    is the pointer's own position and the pointer is still on it: a
+    caller told where the pointer is can move it from there, and a
+    caller that finds it somewhere else can run from there without
+    counting a leg twice.
+
+    A leg the screen cannot show is walked back too, so that a read
+    nobody got costs a wait and not a move."""
+    if near is None:
+        return None
+    if near[0] + PARK_PACKET <= OCCL_SCREEN_W - 8:
+        leg = (PARK_PACKET, 0)
+    else:
+        leg = (0, PARK_PACKET if near[1] + PARK_PACKET <= OCCL_SCREEN_H - 8
+               else -PARK_PACKET)
+    before = occl_settle(guest)
+    mouse_move(guest, leg[0], leg[1])
+    where = occl_arrive(guest, before, leg[0], leg[1], near)
+    if where is None:
+        return None
+    occl_run(guest, -leg[0], -leg[1])
+    return (where[0] - leg[0], where[1] - leg[1])
+
+
+def occl_goto(guest, target, tries=3):
+    """Carry the pointer to `target` where the desktop covers it, and
+    leave it there - or None when no run could be checked.
+
+    There is nothing to read on the way, so the run is taken out and
+    taken back and the screen is asked afterwards: the pointer is read
+    by a leg on the open desktop, and if it reads back exactly where it
+    left from, then the way out and the way back came to nothing, which
+    is the only claim a run the desktop covers can be held to. A run
+    that lost a packet, one the screen edge clamped and one the guest
+    dropped are each answered with a spot other than the one asked for,
+    and the run is taken again from where the pointer actually is."""
+    here = None
+    for _ in range(tries):
+        if here is None:
+            here = occl_where(guest, occl_find(guest))
+            if here is None:
+                continue
+        dx, dy = target[0] - here[0], target[1] - here[1]
+        if not occl_run(guest, dx, dy) or not occl_run(guest, -dx, -dy):
+            continue
+        where = occl_where(guest, here)
+        if where == here:
+            return occl_run(guest, target[0] - where[0],
+                            target[1] - where[1])
+        if where is not None:
+            here = where
+    return None
+
+
+# What the two occlusion sessions are expected to cost, and how far apart
+# their frames may be. The desktop repaints a few strips a session (the
+# panel, the pointer, whatever the terminal is typing), so a control
+# What the two occlusion sessions are expected to cost, and how far apart
+# their frames may be. A session is not free: the terminal repaints itself
+# whenever the shell inside it blinks or prints, and every one of those
+# repaints is charged for as the window's whole rectangle joined to the
+# pointer's box, since a transfer presents one bounding box for all of its
+# damage. A session that walks the pointer off the calculator's tile, parks
+# it on the floor and walks it to the Exit button moves about 130MB that
+# way, so OCCLUSION_CEIL is twice that: a sanity bound saying a session
+# costs about what an honest session costs, which is what catches a desktop
+# that has started painting the screen on every pass - a whole frame is 3MB
+# and a session has hundreds of passes.
+#
+# The bytes are not what proves the occlusion, and cannot be. A window under
+# the terminal is damaged inside the terminal's own rectangle, and one
+# bounding box covers both, so a compositor that composited the hidden
+# window anyway would move exactly the same bytes as one that culled it.
+# What proves the occlusion is OCCLUSION_SHOT_TOL below: the window under
+# the terminal is on the screen or it is not, and the two sessions' frames,
+# taken with the pointer parked on the same spot, say which.
+OCCLUSION_CEIL = 260 * 1024 * 1024
+OCCLUSION_SHOT_TOL = 2000
+# A session with a window behind the terminal costs a little more than one
+# without it - the click that opens it, the button it puts in the panel -
+# but not a fraction of a screen more, which is what painting it on every
+# pass would come to.
+OCCLUSION_EXTRA = 0.05
+
+
+def run_occlusion(guest, result, verbose):
+    """Two desktop sessions that move the same bytes twice, and the window
+    neither of them ever shows.
+
+    The occlusion case is the one the compositor exists for: a window
+    drawn where the terminal is on top of it costs the desktop a blit
+    per redraw and the user gets nothing at all for it, and no test that
+    only looks at what is on screen can see a byte of that. So the
+    desktop is run twice, the two sessions doing the same thing - open a
+    terminal, move the pointer, sit there - and the second one also
+    clicking the calculator's icon, which opens a window entirely under
+    the terminal. What is checked:
+
+      - the control session moves fewer than OCCLUSION_CEIL bytes in
+        total, which is a session with nothing hidden behind the
+        terminal costing about what an honest session costs;
+      - the session with the calculator costs no more than
+        OCCLUSION_EXTRA of the control session more, which is the click
+        that opens it and the button it leaves in the panel, and not a
+        compositor painting a screenful nobody can see on every pass;
+      - and the two frames taken with the pointer parked on the same spot
+        differ by no more than OCCLUSION_SHOT_TOL pixels. This is the
+        one that proves the occlusion: a window under the terminal is on
+        the screen in neither sense - not its own pixels, and not its
+        absence either - and the bytes cannot tell the two apart, because
+        the hidden window's damage lies inside the terminal's own
+        rectangle.
+
+    This is not a SUITE case because each session is a desktop of its
+    own and the desktop swallows every key while it is up: there is no
+    prompt for sh() to wait on, so the sessions are driven from here and
+    the whole thing is judged at the end.
+    """
+    print("==> occlusion (two desktop sessions)")
+    problems = []
+    shotdir = tempfile.mkdtemp(prefix="vnu-occl-")
+
+    def read_total():
+        """The cumulative present() byte count the guest reports, read
+        through the serial shell - which only answers with the desktop
+        down, so this is how a session's own transfer is measured: on
+        the way in and on the way out."""
+        return present_total(guest.sh("cat /proc/gfx")[0])
+
+    def session(tag, calculated):
+        """One desktop session: (bytes moved, its parked frame).
+
+        `calculated` is the whole difference between the two sessions -
+        the click that opens the covered window. Everything else, the
+        route the pointer walks and the time it spends on the screen, is
+        the same, because a session's cost is its covered time times its
+        pass rate and a session that skipped the route would be timed
+        differently rather than measured the same."""
+        global OCCL_DBG_DIR
+        if TRACE_NAV:
+            OCCL_DBG_DIR = os.path.join(shotdir, "nav-" + tag)
+            os.makedirs(OCCL_DBG_DIR, exist_ok=True)
+        before = read_total()
+        if before is None:
+            problems.append("the kernel's /proc/gfx has no present_total "
+                            "line, so this check has nothing to measure")
+            return None, None
+        # The desktop swallows keystrokes, so any prompt that shows in
+        # the log from here on means the desktop left.
+        exit_frm = len(guest.tail(0))
+        guest._type("gui term\n")
+        time.sleep(4.0)
+        mouse_warmup(guest)
+        up = settled_shot(guest, os.path.join(shotdir, "%s-up.ppm" % tag))
+        if not frame_is_desktop(up):
+            problems.append("%s: the desktop did not come up (%dx%d)"
+                            % (tag, up[0], up[1]))
+            return None, None
+        # Park the pointer on the calculator's tile and, in the second
+        # session, click it. The click is the only difference between the
+        # two sessions, and the window it opens is under the terminal: it
+        # is on screen in neither sense, so what it would draw is painted
+        # over by the terminal above it. The panel is the proof it
+        # spawned - the covered window is never seen, but its panel
+        # button label shows up a moment after the click, so a second
+        # look catches it. A click that really did not spawn it is a
+        # session failure and not a quiet pass: a session without the
+        # calculator would be the terminal-only one bit for bit.
+        if not occl_goto(guest, ICONS["calc"]):
+            problems.append("%s: could not carry the pointer to the "
+                            "calculator's tile" % tag)
+            return None, None
+        if not calculated:
+            time.sleep(4.35)
+        else:
+            mouse_click(guest)
+            check = os.path.join(shotdir, "%s-spawn.ppm" % tag)
+            for wait in (2.0, 1.5):
+                time.sleep(wait)
+                guest.qmp.hmp("screendump " + check)
+                time.sleep(0.4)
+                if panel_calc_label(read_ppm(check)):
+                    break
+            if not panel_calc_label(read_ppm(check)):
+                problems.append("%s: the calculator did not spawn (its panel "
+                                "button never appeared)" % tag)
+                return None, None
+        # Park both sessions on the same spot on the open floor, so the
+        # frames below have the pointer in the same place and what they
+        # differ by is the desktop, not the cursor.
+        if occl_park(guest, BEACON) is None:
+            problems.append("%s: could not park the pointer on the floor"
+                            % tag)
+            return None, None
+        shot = settled_shot(guest, os.path.join(shotdir, "%s.ppm" % tag))
+        # Leave via the panel's Exit button, carried onto it and checked
+        # by the way back, because one slot over is Reboot: a click that
+        # lands wrong restarts the machine and answers with a login
+        # prompt, which is a loud failure and never a quiet pass. The run
+        # is a straight line up from the floor, so a packet lost on the
+        # way puts the click on the panel's bare background instead -
+        # which does nothing at all, and is caught by the desktop still
+        # being up afterwards.
+        if not occl_goto(guest, EXIT_BUTTON):
+            problems.append("%s: could not carry the pointer to the panel's "
+                            "Exit button" % tag)
+            return None, None
+        mouse_click(guest)
+        try:
+            guest.wait_ready(exit_frm, timeout=8.0)
+        except TimeoutError:
+            problems.append("%s: the desktop did not leave via the panel's "
+                            "Exit button" % tag)
+            return None, None
+        after = read_total()
+        if after is None or after < before:
+            problems.append("%s: the guest reported a present_total that "
+                            "went backwards" % tag)
+            return None, None
+        return after - before, shot
+
+    bare, bare_shot = session("a", False)
+    if bare is not None:
+        print("    control session moved %d bytes" % bare)
+        if bare > OCCLUSION_CEIL:
+            problems.append("a desktop with nothing behind the terminal "
+                            "moved %d bytes, over the %d a session with no "
+                            "hidden window should cost"
+                            % (bare, OCCLUSION_CEIL))
+    covered, covered_shot = session("b", True)
+    if covered is not None:
+        print("    session with the calculator moved %d bytes" % covered)
+        if covered > OCCLUSION_CEIL:
+            problems.append("a desktop with a window hidden behind the "
+                            "terminal moved %d bytes, over the %d an "
+                            "honest session costs"
+                            % (covered, OCCLUSION_CEIL))
+        if bare is not None and covered - bare > int(bare * OCCLUSION_EXTRA):
+            problems.append("the window under the terminal cost %d bytes "
+                            "more than the session without it, over the %d "
+                            "more such a session is allowed"
+                            % (covered - bare, int(bare * OCCLUSION_EXTRA)))
+    if bare_shot is not None and covered_shot is not None:
+        apart = diff_pixels(bare_shot, covered_shot)
+        print("    the two parked frames differ by %d pixels" % apart)
+        if apart > OCCLUSION_SHOT_TOL:
+            problems.append("the frames of the two sessions differ by %d "
+                            "pixels, over the %d a window hidden under the "
+                            "terminal can account for"
+                            % (apart, OCCLUSION_SHOT_TOL))
+
+    if problems:
+        for p in problems:
+            print("    FAIL %s" % p)
+        keep_frames(shotdir, "occlusion")
+        result.failed.append(("occlusion", "", problems))
+    else:
+        result.passed += 1
+        shutil.rmtree(shotdir, ignore_errors=True)
 
 
 def read_ppm(path):
@@ -2020,6 +2746,7 @@ def run_install_wizard(iso, result, verbose, timeout, workdir):
 
 
 def main():
+    global TRACE_NAV
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--iso", default=os.path.join(REPO, "vnu/vnu.iso"),
@@ -2040,8 +2767,12 @@ def main():
     ap.add_argument("--log", help="serial log path (default: /tmp/vnu-test.log)")
     ap.add_argument("--keep", action="store_true",
                     help="keep the temporary disk of the install scenario")
+    ap.add_argument("--trace-nav", action="store_true",
+                    help="keep every frame the occlusion check navigates "
+                         "from (hundreds of MB, for a failing run only)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    TRACE_NAV = args.trace_nav
 
     if args.list:
         for name, command, _, _ in SUITE:
@@ -2075,7 +2806,7 @@ def main():
     # that names one of them selects no shell case and still runs.
     interactive = ("console-screen", "man-pager", "ctrl-c",
                    "prefs-wallpaper", "gfx-surface", "gfx-resolution",
-                   "gfx-damage", "vibecommander")
+                   "gfx-damage", "occlusion", "vibecommander")
     cases = SUITE
     if args.only:
         cases = [c for c in SUITE
@@ -2117,6 +2848,9 @@ def main():
                                         for sel in args.only):
                     run_gfx_damage(guest, result, args.verbose,
                                    args.timeout)
+                if not args.only or any(sel in "occlusion"
+                                        for sel in args.only):
+                    run_occlusion(guest, result, args.verbose)
                 if not args.only or any(sel in "vibecommander"
                                         for sel in args.only):
                     run_vibecommander(guest, result, args.verbose,

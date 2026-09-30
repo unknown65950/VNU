@@ -103,6 +103,27 @@ void init()
     g_packet_idx = 0;
 }
 
+void shutdown()
+{
+    /* Reporting off first, so no packet arrives to be stranded in the
+     * output buffer after the last one has been read. */
+    send_to_aux(0xF5);
+    (void)read_ack();
+
+    /* Then whatever the last move already left there, and only mouse
+     * bytes: the keyboard's own reader checks the aux bit before it
+     * takes anything (a pending mouse packet must not be read out from
+     * under poll()), which is right while the desktop is up and polling
+     * this device and is exactly what strands the keyboard when nobody
+     * is polling it any more. */
+    for (int i = 0; i < 32; ++i) {
+        if ((inb(PORT_STATUS) & 0x21) != 0x21)
+            break;
+        (void)inb(PORT_DATA);
+    }
+    g_packet_idx = 0;
+}
+
 bool poll(int& dx, int& dy, uint8_t& buttons, int8_t& wheel)
 {
     bool got_full = false;

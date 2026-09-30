@@ -11,6 +11,13 @@ namespace vnu::mouse {
 
 void init();
 
+// Stop the device reporting and take back the controller. The keyboard
+// driver and this one share the 8042's single output buffer, and a byte
+// left in it is a byte the keyboard cannot deliver: whoever leaves the
+// mouse reporting has to be the one to read the last packet out, or the
+// keyboard is silenced until the machine is rebooted.
+void shutdown();
+
 // Non-blocking: returns true and fills dx/dy (screen-space, already
 // sign-adjusted), buttons (bit0=left, bit1=right, bit2=middle) and the
 // wheel delta (positive = up, negative = down, 0 = no scroll) if a full

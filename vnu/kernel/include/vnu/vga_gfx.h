@@ -236,6 +236,13 @@ void present_rect(int* x, int* y, int* w, int* h);
 // frame at this depth, which is the whole point of the exercise.
 uint32_t present_bytes();
 
+// Every byte ever handed to the host since boot, where present_bytes()
+// is one sample. The difference of two reads is a whole desktop session
+// (or two such sessions), which is what lets an accounting check in
+// /proc/gfx separate "a covered window was still recomposited every
+// pass" from "it was not".
+unsigned long long present_total();
+
 // Flip the damaged part of the backbuffer to the display: the VBE
 // linear framebuffer (0xFD000000), or the virtio-gpu scanout, which is
 // also told the rectangle so the host can skip the rest. Does nothing

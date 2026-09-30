@@ -94,6 +94,129 @@ bool overlaps(const Rect& r, const Window& w)
     return overlaps(r, Rect{w.x, w.y, w.w, w.h});
 }
 
+/* The part of `a` that lies inside `b`, empty when there is none.
+ * Half-open both ways, like the rest of the rect work here. */
+Rect clip_rect(const Rect& a, const Rect& b)
+{
+    const int x0 = a.x > b.x ? a.x : b.x;
+    const int y0 = a.y > b.y ? a.y : b.y;
+    const int x1 = a.x + a.w < b.x + b.w ? a.x + a.w : b.x + b.w;
+    const int y1 = a.y + a.h < b.y + b.h ? a.y + a.h : b.y + b.h;
+    if (x1 <= x0 || y1 <= y0)
+        return {0, 0, 0, 0};
+    return {x0, y0, x1 - x0, y1 - y0};
+}
+
+/* The combined area of up to MAX_TASKS rectangles, by slabs on the x
+ * axis: between each pair of neighbouring x edges, the y spans the
+ * rectangles own in that column are merged and measured. The covers of
+ * a window are never more than this many, so nothing here has to be
+ * clever. */
+long long union_area(const Rect* rs, int n)
+{
+    int xs[2 * MAX_TASKS];
+    int nx = 0;
+    for (int i = 0; i < n; ++i) {
+        xs[nx++] = rs[i].x;
+        xs[nx++] = rs[i].x + rs[i].w;
+    }
+    for (int i = 1; i < nx; ++i) {
+        const int key = xs[i];
+        int j = i;
+        while (j > 0 && xs[j - 1] > key) {
+            xs[j] = xs[j - 1];
+            --j;
+        }
+        xs[j] = key;
+    }
+    int m = 0;
+    for (int i = 0; i < nx; ++i)
+        if (i == 0 || xs[i] != xs[m - 1])
+            xs[m++] = xs[i];
+    long long area = 0;
+    for (int s = 0; s + 1 < m; ++s) {
+        struct Yi {
+            int y0, y1;
+        } iv[2 * MAX_TASKS];
+        int in = 0;
+        for (int i = 0; i < n; ++i) {
+            if (rs[i].x <= xs[s] && xs[s + 1] <= rs[i].x + rs[i].w) {
+                iv[in].y0 = rs[i].y;
+                iv[in].y1 = rs[i].y + rs[i].h;
+                ++in;
+            }
+        }
+        for (int i = 1; i < in; ++i) {
+            const Yi key = iv[i];
+            int j = i;
+            while (j > 0 && iv[j - 1].y0 > key.y0) {
+                iv[j] = iv[j - 1];
+                --j;
+            }
+            iv[j] = key;
+        }
+        int lo = 0, hi = 0;
+        long long span = 0;
+        bool first = true;
+        for (int i = 0; i < in; ++i) {
+            if (first) {
+                lo = iv[i].y0;
+                hi = iv[i].y1;
+                first = false;
+            } else if (iv[i].y0 > hi) {
+                span += hi - lo;
+                lo = iv[i].y0;
+                hi = iv[i].y1;
+            } else if (iv[i].y1 > hi) {
+                hi = iv[i].y1;
+            }
+        }
+        if (!first)
+            span += hi - lo;
+        area += static_cast<long long>(xs[s + 1] - xs[s]) * span;
+    }
+    return area;
+}
+
+/* Whether the window at z-position `i` has nothing showing: the union
+ * of the rectangles of the windows above it (later in the z-order)
+ * covers every pixel of it. A cover counts only when it is known
+ * opaque: a text window is (it fills its client area), a gfx window's
+ * canvas is only below 32bpp, where no pixel has an alpha byte to make
+ * itself see-through. At 32bpp the app may have written transparent
+ * pixels (the depth is there to advertise that), and "a translucent
+ * cover hides this corner of the window under it" is exactly the
+ * picture this must never change.
+ *
+ * A fully covered window is neither drawn nor damaged, and that is the
+ * whole of it: the transfer its redraw would make is the pixels that
+ * lie on top of it, so compositing it is work no one sees, and damage
+ * that says the screen changed when what moved is hidden. */
+bool fully_covered(int i, const Window& win, const Window* geom,
+                   const TaskHandle* order, int order_len,
+                   const bool* minimized)
+{
+    const long long total = static_cast<long long>(win.w) * win.h;
+    if (total == 0)
+        return false;
+    Rect covers[MAX_TASKS];
+    int n = 0;
+    for (int j = i + 1; j < order_len; ++j) {
+        const TaskHandle h = order[j];
+        if (minimized[h])
+            continue;
+        vnu::wintask::Console* con = vnu::wintask::console(h);
+        if (!con || (con->gfx && vnu::vgfx::bpp() != 8))
+            continue;
+        const Rect c = clip_rect(Rect{win.x, win.y, win.w, win.h},
+                                 Rect{geom[h].x, geom[h].y,
+                                      geom[h].w, geom[h].h});
+        if (c.w > 0 && c.h > 0)
+            covers[n++] = c;
+    }
+    return n > 0 && union_area(covers, n) >= total;
+}
+
 /* The box the desktop's icons live in: the tiles and the labels under
  * them, which is what has to be redrawn if anything uncovers any of
  * it. */
@@ -1010,6 +1133,8 @@ void run(const char* open_app)
     static bool redraw[MAX_TASKS];
     static int shown_mx, shown_my;
     static TaskHandle shown_focused = NO_TASK;
+    static vnu::vgfx::CursorShape shown_cursor =
+        vnu::vgfx::CursorShape::Arrow;
     bool first_frame = true;
     bool redraw_icons = false;
     bool redraw_panel = false;
@@ -1399,7 +1524,8 @@ void run(const char* open_app)
              * the whole frame with it. */
             restore[restore_n++] = {0, 0, vnu::vgfx::width(), vnu::vgfx::height()};
         }
-        if (shown_mx != mx || shown_my != my) {
+        const bool pointer_moved = shown_mx != mx || shown_my != my;
+        if (pointer_moved) {
             /* The pointer is the top layer, so where it was is a region
              * that has to be put back like any other. */
             restore[restore_n++] = {shown_mx, shown_my, CURSOR_BOX, CURSOR_BOX};
@@ -1508,6 +1634,13 @@ void run(const char* open_app)
                 continue;
             if (redraw[h] || con->gfx) {
                 const Window& win = geom[h];
+                /* A window with only occluded pixels on screen is not
+                 * composited: drawing it would be overdraw nothing shows,
+                 * and damaging it would charge the host for a screen that
+                 * did not change. It stays alive and keeps its canvas -
+                 * as soon as anything above it moves, it is drawn again. */
+                if (fully_covered(i, win, geom, order, order_len, minimized))
+                    continue;
                 if (con->gfx)
                     draw_gfx_window(win, *con, h == focused);
                 else
@@ -1572,7 +1705,17 @@ void run(const char* open_app)
             vnu::vgfx::draw_cursor(mx, my, vnu::vgfx::COLOR_BLACK);
         else
             vnu::vgfx::draw_cursor_at(mx - 8, my - 8, cursor);
-        vnu::vgfx::damage_add(mx, my, CURSOR_BOX, CURSOR_BOX);
+        /* The pointer is drawn every pass, and a pass that draws the same
+         * pointer on the same spot has changed nothing: its bitmap lands
+         * on the pixels that already hold it. Damaging it anyway would
+         * charge the host for a transfer of a screen that did not move,
+         * once per pass, for as long as the session lasts - which is what
+         * an occlusion check reads as the session's own cost. So the box
+         * is damaged when the pointer moved onto it, when its shape
+         * changed under it, or when the frame is new. */
+        if (first_frame || pointer_moved || shown_cursor != cursor)
+            vnu::vgfx::damage_add(mx, my, CURSOR_BOX, CURSOR_BOX);
+        shown_cursor = cursor;
 
         /* What the frame now holds, which is what the next pass
          * compares against. Taken after the drawing, and only for the
@@ -1600,6 +1743,11 @@ void run(const char* open_app)
 exit_gui:
     for (int i = 0; i < order_len; ++i)
         vnu::wintask::close_task(order[i]);
+    /* The mouse goes with the desktop: it was told to report for this
+     * event loop, and an event loop that has stopped reading it would
+     * leave its last packet in the controller, in front of every
+     * keystroke the shell is about to be sent. */
+    vnu::mouse::shutdown();
     /* Nothing is left on screen to draw the wallpaper into, and the
      * pool is worth more to the console than to a picture nobody is
      * looking at. */

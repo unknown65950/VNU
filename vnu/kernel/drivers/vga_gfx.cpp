@@ -439,6 +439,11 @@ int g_dmg_x0 = 0, g_dmg_y0 = 0, g_dmg_x1 = 0, g_dmg_y1 = 0;
 int g_present_x = 0, g_present_y = 0, g_present_w = 0, g_present_h = 0;
 uint32_t g_present_bytes = 0;
 
+/* Every byte ever handed to the host, since boot, where present_bytes()
+ * above is just the last transfer. The per-pass number is a sample, the
+ * total is the ledger: "a covered window is not recomposited every
+ * pass" is a difference between two runs that only the total shows. */
+unsigned long long g_present_total = 0;
 
 /* Point the host at our scanout, and remember that from now on the
  * console has to be drawn for it. The one place that does this, so the
@@ -1493,6 +1498,11 @@ uint32_t present_bytes()
     return g_present_bytes;
 }
 
+unsigned long long present_total()
+{
+    return g_present_total;
+}
+
 void present()
 {
     present_with(CATT_PAL);
@@ -1809,6 +1819,7 @@ void present_with(const uint8_t (&pal)[16][3])
             }
         }
         g_present_bytes = dmg.pixels() * 4u;
+        g_present_total += g_present_bytes;
         vnu::virtio_gpu::present(dmg.x0, dmg.y0, dmg.x1 - dmg.x0,
                                  dmg.y1 - dmg.y0);
         return;
@@ -1845,6 +1856,7 @@ void present_with(const uint8_t (&pal)[16][3])
                static_cast<unsigned long>(dmg.x1 - dmg.x0));
     }
     g_present_bytes = dmg.pixels();
+    g_present_total += g_present_bytes;
 }
 
 } // namespace vnu::vgfx

@@ -364,6 +364,31 @@ struct Appender {
             buf[len++] = tmp[n];
         buf[len] = 0;
     }
+
+    /* The cumulative counters outgrow 32 bits (a whole night on the
+     * desktop, say), so the general case is this one. Done with shifts
+     * and subtraction, not division: the kernel is freestanding i386
+     * and has no __udivdi3 to call (see how the asm is built). */
+    void num(unsigned long long v)
+    {
+        char tmp[24];
+        int n = 0;
+        do {
+            unsigned long long q = 0, r = 0;
+            for (int bit = 63; bit >= 0; --bit) {
+                r = (r << 1) | ((v >> bit) & 1ULL);
+                if (r >= 10) {
+                    r -= 10;
+                    q |= (1ULL << bit);
+                }
+            }
+            v = q;
+            tmp[n++] = static_cast<char>('0' + r);
+        } while (v && n < 24);
+        while (n-- > 0 && len < cap - 1)
+            buf[len++] = tmp[n];
+        buf[len] = 0;
+    }
 };
 
 inline uint8_t cmos_read(uint8_t reg)
@@ -638,6 +663,17 @@ void regen_synth(Node& n)
         a.num(static_cast<uint32_t>(dy));
         a.str("\t");
         a.num(vnu::vgfx::present_bytes());
+        a.str(" bytes\n");
+        /* The same number, added up since boot: a sample says what the
+         * last pass moved, the total says what a session moved, and the
+         * two together are how "a fully covered window is not
+         * recomposited" (gui/gui.cpp) is verified - read it before and
+         * after a desktop run, and the difference is the cost of that
+         * session's transfers. Only the first desktop sessions of a
+         * boot are cheap to reconcile this way (the counter never
+         * stops), which is all the test in the harness asks of it. */
+        a.str("present_total\t");
+        a.num(vnu::vgfx::present_total());
         a.str(" bytes\n");
         break;
     }
