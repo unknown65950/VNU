@@ -289,7 +289,7 @@ static void load_panel(struct Panel* p)
 static void draw_title(unsigned c0, const struct Panel* p, int active)
 {
     goto_rc(1, c0 + 1);
-    sgr(active ? "1;37;44" : "1;34");
+    sgr(active ? "1;37;44" : "90");
     char buf[72];
     unsigned cap = p_width() > 2 ? p_width() - 2 : 0;
     unsigned i = 0;
@@ -320,8 +320,8 @@ static void draw_list(unsigned c0, const struct Panel* p, int active)
             const struct Ent* e = &p->ent[idx];
             const char* attr = (idx == p->cur && active)     ? "1;37;44"
                                : (idx == p->cur && !active)  ? "0;30;47"
-                               : e->type == T_PARENT         ? "1;36"
-                               : e->type == T_DIR            ? "1;34"
+                               : e->type == T_PARENT         ? "96"
+                               : e->type == T_DIR            ? "94"
                                                              : "0";
             sgr(attr);
             unsigned used = 0;
@@ -353,7 +353,7 @@ static void draw_status_and_bar(void)
     goto_rc(rows - 1, 1);
     struct Panel* p = &g_pan[g_active];
     if (g_msg[0]) {
-        sgr("1;33");
+        sgr("93");
         out(g_msg);
     } else {
         sgr("7");
