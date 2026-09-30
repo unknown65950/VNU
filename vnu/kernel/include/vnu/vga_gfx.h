@@ -151,8 +151,24 @@ void fill_circle(int cx, int cy, int r, uint8_t color);
 void blit_scale(const uint8_t* src, int sw, int sh, int dx, int dy, int dw,
                 int dh, int src_bpp);
 
-// Procedural desktop wallpaper (sky + sun + clouds + hills), drawn each
-// frame in place of the plain gradient.
+// Confine the drawing that follows to one rectangle, and put it back.
+// The screen as a whole by default, so a caller that knows nothing about
+// clipping draws what it always drew.
+//
+// This exists for the one caller that repaints a *region*: the desktop
+// draws its wallpaper once and afterwards only where a window left the
+// screen bare (see the damage notes above), and a procedural scene has
+// no way to draw a piece of itself - the sun is a circle, the hills are
+// a per-column silhouette - except by being confined to the piece it is
+// being asked for. The pair belongs together: everything clipped stays
+// clipped until clip_pop().
+void clip_set(int x, int y, int w, int h);
+void clip_pop();
+
+// Procedural desktop wallpaper (sky + sun + clouds + hills), drawn in
+// place of the plain gradient, and confined to the clip rectangle it is
+// called under. The scene is a function of the pixel, so drawing it
+// clipped draws the same picture the full screen would have.
 void draw_wallpaper();
 
 // 8x16 glyphs, captured from the VGA hardware font.
@@ -177,7 +193,53 @@ void draw_cursor_at(int x, int y, CursorShape shape);
 // Simple filled arrow mouse cursor.
 void draw_cursor(int x, int y, uint8_t color = COLOR_BLACK);
 
-// Flip the backbuffer to the VBE linear framebuffer (0xFD000000).
+/* Damage tracking: the part of the frame the host has not seen yet.
+ *
+ * The desktop used to hand the whole backbuffer over on every pass, and
+ * at 32bpp that is 3 MiB a frame at 1024x768 - a transfer that costs
+ * more than everything else a frame does, which is why the resolution
+ * picker used to work as a responsiveness crutch: at 8bpp the whole
+ * thing is cheap enough that a mode change "revives" the desktop. So the
+ * frame records which part of it was written (damage_add), and
+ * present() moves only that and tells the host the same rectangle. A
+ * frame that changed nothing transfers nothing at all.
+ *
+ * The rectangle is a single bounding box, not a list: the transfers
+ * both paths do are row runs anyway, and one box is the shape a scanout
+ * resource can be flushed with. A caller that writes in many scattered
+ * places therefore pays for the box around them, which is still bounded
+ * by what it drew.
+ *
+ * Every write that is not the desktop's own business says so itself, so
+ * the default is always the safe one: a new framebuffer, a new mode, a
+ * wallpaper that has been decoded, and the console presenting its rows
+ * all damage the screen, and only the desktop's per-element redraw
+ * narrows it. A caller that forgets damage_add() gets a stale rectangle
+ * on the monitor, not a blank one - so a forgotten element is a bug to
+ * find, never a lost frame. */
+void damage_add(int x, int y, int w, int h);
+
+// The whole screen as damaged, for the cases that really did rewrite it.
+void damage_all();
+
+// The pending damage, as x, y, w, h with w and h 0 for "nothing".
+void damage_rect(int* x, int* y, int* w, int* h);
+
+// What the last present() moved, in the same shape as damage_rect() but
+// describing a transfer that happened: w and h 0 when it had nothing to
+// do. Together with present_bytes() this is the accounting /proc/gfx
+// prints, so "the desktop stopped repainting everything" is a number
+// rather than an impression.
+void present_rect(int* x, int* y, int* w, int* h);
+
+// Bytes the last present() actually moved: the damaged rows of the
+// frame at this depth, which is the whole point of the exercise.
+uint32_t present_bytes();
+
+// Flip the damaged part of the backbuffer to the display: the VBE
+// linear framebuffer (0xFD000000), or the virtio-gpu scanout, which is
+// also told the rectangle so the host can skip the rest. Does nothing
+// at all when nothing was damaged since the last present.
 void present();
 
 /* present() with the caller's palette instead of the desktop's, for a

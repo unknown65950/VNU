@@ -230,6 +230,7 @@ struct GpuFlush {
     uint32_t padding;
 } __attribute__((packed)); /* 48 bytes */
 
+
 uint8_t* g_cmd_buf = nullptr;
 uint8_t* g_resp_buf = nullptr;
 bool g_active = false;
@@ -868,23 +869,48 @@ ScanoutSegment scanout_segment(uint32_t index)
                           g_segs[index].frames * 4096u};
 }
 
-void present()
+void present(int x, int y, int w, int h)
 {
     if (!g_active || g_seg_count == 0)
         return;   /* no scanout resource: nothing to push */
 
+    /* Clipped to the resource: a caller asking for a piece that hangs
+     * off the edge of the screen asks for a rectangle the device has
+     * never heard of, and a transfer outside it is refused where a
+     * clipped one is not. */
+    int x0 = x < 0 ? 0 : x;
+    int y0 = y < 0 ? 0 : y;
+    int x1 = x + w;
+    int y1 = y + h;
+    if (x1 > static_cast<int>(g_scanout_w))
+        x1 = static_cast<int>(g_scanout_w);
+    if (y1 > static_cast<int>(g_scanout_h))
+        y1 = static_cast<int>(g_scanout_h);
+    if (x0 >= x1 || y0 >= y1)
+        return;   /* the whole box was off the resource */
+    const GpuRect r{static_cast<uint32_t>(x0), static_cast<uint32_t>(y0),
+                    static_cast<uint32_t>(x1 - x0),
+                    static_cast<uint32_t>(y1 - y0)};
+
     cmd_start(GPU_CMD_TRANSFER_TO_HOST_2D, sizeof(GpuTransfer2D));
     auto* t = reinterpret_cast<GpuTransfer2D*>(g_cmd_buf);
-    t->r.w = static_cast<uint32_t>(vgfx::width());
-    t->r.h = static_cast<uint32_t>(vgfx::height());
+    t->r = r;
+    /* Where in the resource the rectangle starts, which is zero for a
+     * whole frame and not zero for a piece of one. A host that takes the
+     * rectangle's own x/y as the place to read (QEMU's simple 2D path
+     * does) ignores this field, and one that reads the offset gets the
+     * same rectangle either way. */
+    const uint64_t off = static_cast<uint64_t>(r.y) * g_scanout_w * 4u +
+                         static_cast<uint64_t>(r.x) * 4u;
+    t->offset_lo = static_cast<uint32_t>(off & 0xFFFFFFFFu);
+    t->offset_hi = static_cast<uint32_t>(off >> 32);
     t->resource_id = g_scanout_id;
     if (!submit_and_wait(sizeof(GpuTransfer2D), GPU_RESP_OK_NODATA))
         return;
 
     cmd_start(GPU_CMD_RESOURCE_FLUSH, sizeof(GpuFlush));
     auto* f = reinterpret_cast<GpuFlush*>(g_cmd_buf);
-    f->r.w = static_cast<uint32_t>(vgfx::width());
-    f->r.h = static_cast<uint32_t>(vgfx::height());
+    f->r = r;
     f->resource_id = g_scanout_id;
     (void)submit_and_wait(sizeof(GpuFlush), GPU_RESP_OK_NODATA);
 }

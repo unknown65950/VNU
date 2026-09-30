@@ -619,6 +619,26 @@ void regen_synth(Node& n)
         const char* wp = vnu::wallpaper::current_name();
         a.str((wp && wp[0]) ? wp : "none");
         a.str("\n");
+        /* What the last present() actually moved. The desktop does not
+         * hand the whole frame over any more - it sends the part that
+         * changed (see vgfx::damage_add), and this is the number that
+         * says so: 0x0 with 0 bytes for a pass in which nothing changed,
+         * which is the state a desktop sitting still is in. A full frame
+         * at this geometry and depth is what it is a fraction of, and
+         * the fraction is the whole point of the arrangement. */
+        a.str("last_present\t");
+        int dx = 0, dy = 0, dw = 0, dh = 0;
+        vnu::vgfx::present_rect(&dx, &dy, &dw, &dh);
+        a.num(static_cast<uint32_t>(dw));
+        a.str("x");
+        a.num(static_cast<uint32_t>(dh));
+        a.str("+");
+        a.num(static_cast<uint32_t>(dx));
+        a.str("+");
+        a.num(static_cast<uint32_t>(dy));
+        a.str("\t");
+        a.num(vnu::vgfx::present_bytes());
+        a.str(" bytes\n");
         break;
     }
     case SynthKind::Boot: {

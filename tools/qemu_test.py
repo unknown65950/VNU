@@ -1147,6 +1147,219 @@ def run_ctrlc(guest, result, verbose, timeout=60.0):
     return True
 
 
+# The desktop's panel height in pixels, the row below which is the first
+# one a window may cover: matches PANEL_H in gui/gui.cpp. A redraw above
+# it is the panel's own (its clock ticks), which is why the checks here
+# look below this row and not above.
+PANEL_H = 34
+
+# The text console's own geometry, which is what the shell session draws
+# into: matches the 720x400 text mode the console boots in.
+CONSOLE_W, CONSOLE_H = 720, 400
+
+
+def present_rect(proc_gfx):
+    """What /proc/gfx says the last present() moved, as (w, h, x, y) in
+    pixels plus the bytes it moved - or (None, 0) when the line is
+    missing. The box is the damage that pass ended up with, so an idle
+    desktop reports 0x0 and no bytes at all, which is the answer damage
+    tracking is for."""
+    m = re.search(r"^last_present\t(\d+)x(\d+)\+(\d+)\+(\d+)\t(\d+) bytes$",
+                  proc_gfx, re.MULTILINE)
+    if not m:
+        return None, 0
+    return (int(m.group(1)), int(m.group(2)),
+            int(m.group(3)), int(m.group(4))), int(m.group(5))
+
+
+def run_gfx_damage(guest, result, verbose, timeout=60.0):
+    """Check that a pass which changes little hands the host little.
+
+    Damage tracking is the claim that a redraw sends the part of the
+    screen that changed instead of all of it, and neither half of it is
+    visible in the serial log, so this is two checks in one function.
+
+    The first is what the desktop draws: with a window up, typing a
+    line into it must change that window's rows and leave the desktop
+    around it alone, and closing the window must leave the desktop bare
+    again. That is what a per-region repaint looks like from outside,
+    and it fails in both directions - damage too small shows as pixels
+    the redraw never reached, damage too large as changed rows outside
+    the window. The panel is excused (its clock ticks on its own), so
+    only rows below it are judged.
+
+    The second is /proc/gfx, which reports what the last present()
+    moved: the line has to be there, and the bytes it moved have to
+    agree with the rectangle they moved for. It does not bound how small
+    a present gets, and that is worth being straight about: a pass that
+    changes little has to be *seen* in the picture, and the picture is
+    identical whether the copy was of the region or of the frame. So the
+    size of a present is bounded by the code (the damage_add() calls in
+    gui/gui.cpp and the box in vgfx::present_with), and what is checked
+    here is that the region it is given is enough - which is the half
+    that is wrong on screen when it is not.
+    """
+    print("==> gfx damage tracking (screendump + /proc/gfx)")
+    problems = []
+    shotdir = tempfile.mkdtemp(prefix="vnu-dmg-")
+
+    try:
+        def shot(name):
+            return settled_shot(guest, os.path.join(shotdir, name))
+
+        # 1. The redraw, seen from outside the desktop. `calc` is the app
+        #    for this: it repaints its window on every key (so typing is
+        #    visible) and Esc closes it (so the window can be put away -
+        #    Esc reaches a windowed app as a close, while a text window
+        #    just gets the character). A bare desktop first, to know
+        #    where the window goes.
+        guest._type("gui\n")
+        time.sleep(4.0)
+        bare = shot("bare.ppm")
+        if not esc_to_shell(guest, timeout):
+            problems.append("the bare desktop did not give the console back")
+
+        guest._type("gui calc\n")
+        time.sleep(5.0)
+        opened = shot("open.ppm")
+        guest._type("7*6=")
+        time.sleep(1.0)
+        typed = shot("typed.ppm")
+
+        for name, frame in (("bare", bare), ("opened", opened),
+                            ("typed", typed)):
+            if (frame[0], frame[1]) != (bare[0], bare[1]):
+                problems.append("%s is %dx%d, the desktop is %dx%d"
+                                % (name, frame[0], frame[1],
+                                   bare[0], bare[1]))
+        if (opened[0], opened[1]) == (bare[0], bare[1]):
+            # Where the window is, from the frame that has it against the
+            # one that has not. The panel gains a button in the same diff
+            # and is a third of the height, so the longest run of changed
+            # rows is the window's and not the panel's.
+            grew = longest_run(changed_rows(bare[2], opened[2], bare[0],
+                                            bare[1]), 1)
+            if grew[0] < 0:
+                problems.append("opening a window changed nothing on screen")
+            else:
+                win_top, win_bottom = grew
+                # Typing in it has to stay inside the window: a redraw
+                # that reached the desktop around it is a region that
+                # grew, and one that stayed inside is what a per-window
+                # pass looks like from out here.
+                rows = changed_rows(opened[2], typed[2], opened[0],
+                                    opened[1])
+                top, bottom = longest_run(rows, 1)
+                if verbose:
+                    print("   window rows %d..%d, changed %d..%d, "
+                          "changed rows outside: %d"
+                          % (win_top, win_bottom, top, bottom,
+                             sum(1 for y, n in enumerate(rows)
+                                 if n and not win_top <= y <= win_bottom)))
+                if top < 0:
+                    problems.append("typing 7*6= into the calculator "
+                                    "changed nothing on screen: the redraw "
+                                    "did not reach the window")
+                elif top < win_top or bottom > win_bottom:
+                    stray = [y for y, n in enumerate(rows)
+                             if n and not win_top <= y <= win_bottom]
+                    problems.append("typing in the window changed rows "
+                                    "%d..%d, outside its %d..%d: the "
+                                    "redraw was not confined to the window"
+                                    % (top, bottom, win_top, win_bottom)
+                                    + (" (first is row %d)" % stray[0]
+                                       if stray else ""))
+                # And the ground it vacates belongs to the desktop again:
+                # once the window is closed the screen has to be the bare
+                # one, which is the wallpaper surviving a repaint that
+                # only redrew the region the window was on. The panel is
+                # not compared - its clock has moved on.
+                #
+                # Closing the last window does not end the session: the
+                # desktop is still there, empty, until Esc with nothing
+                # focused leaves it. So this is one Esc, a look, and
+                # another Esc if the window is still up (a windowed app
+                # can swallow the first one).
+                gone = None
+                for attempt in range(3):
+                    guest._type("<esc>")
+                    time.sleep(1.5)
+                    gone = shot("gone%d.ppm" % attempt)
+                    if changed_bbox(bare, gone, bare[0], PANEL_H) is None:
+                        break
+                left = changed_bbox(bare, gone, bare[0], PANEL_H)
+                if left is not None:
+                    problems.append("rows %d..%d of the desktop still differ "
+                                    "once the window is closed: the ground "
+                                    "it vacated was not repainted"
+                                    % (left[1], left[3]))
+                if not esc_to_shell(guest, timeout):
+                    problems.append("the desktop did not give the console "
+                                    "back")
+
+        # 2. The transfer, as a number. Read in the shell, and only now:
+        #    a console on the text plane is drawn by the card and never
+        #    presented at all, so before any desktop has run there is
+        #    nothing here to read.
+        #
+        #    What is here to read depends on the driver, which is the
+        #    honest shape of this check. A VGA card puts its text plane
+        #    back on the monitor when the desktop leaves, and the console
+        #    is the card's own drawing again: there is no transfer to
+        #    measure and none is made. A virtio display is still showing
+        #    the scanout resource, which is not a text plane, so the
+        #    console is ours to present - a keystroke's row of it, which
+        #    is the number this is here to bound.
+        #
+        #    Two reads either way: the first console present after a
+        #    desktop session is a whole frame, because the frame was
+        #    handed back to the pool when the desktop left and what the
+        #    host shows is a picture of the desktop. The one after that
+        #    is a keystroke's worth of rows.
+        first, _ = guest.sh("cat /proc/gfx", timeout)
+        if verbose:
+            print(first)
+        if present_rect(first)[0] is None:
+            problems.append("/proc/gfx has no last_present line: %r" % first)
+        guest.sh("echo damage", timeout)
+        time.sleep(1.0)
+        proc, _ = guest.sh("cat /proc/gfx", timeout)
+        if verbose:
+            print(proc)
+        rect, moved = present_rect(proc)
+        if rect is not None:
+            w, h, x, y = rect
+            if moved and moved > w * h * 4:
+                problems.append("%d bytes moved for a %dx%d rectangle: more "
+                                "than 4 per pixel, which no path here does"
+                                % (moved, w, h))
+            if verbose:
+                # Said out loud, because it is the shape of the thing:
+                # once the desktop has been, neither driver is presenting
+                # a console to measure (a VGA card draws the console on
+                # its text plane, a virtio display has given its scanout
+                # back), so the number here is the desktop's last pass and
+                # there is no small one to wait for. What the compositor
+                # sends per pass is bounded by the code, and what the host
+                # ends up holding is checked above, in pixels.
+                print("   (last present is the desktop's own pass: %dx%d "
+                      "at %d,%d)" % (w, h, x, y))
+    except TimeoutError as exc:
+        problems.append("the desktop session timed out: %s" % exc)
+    finally:
+        if result.failed or verbose:
+            keep_frames(shotdir, "gfx-damage")
+        else:
+            shutil.rmtree(shotdir, ignore_errors=True)
+
+    if problems:
+        result.failed.append(("gfx-damage", "", problems))
+        print("FAIL %-18s %s" % ("gfx-damage", "; ".join(problems)))
+    else:
+        result.passed += 1
+        print("ok   %-18s" % "gfx-damage")
+
+
 def run_console_screen(guest, result, verbose, timeout=60.0):
     """The text console is on the display, on whichever display there is,
     and it is the *live* one.
@@ -1780,6 +1993,8 @@ def main():
                             "gui picview (screendump, esc)"))
         print("%-18s %s" % ("gfx-resolution",
                             "gui + F12 mode steps (screendump)"))
+        print("%-18s %s" % ("gfx-damage",
+                            "typing in a window (screendump + /proc/gfx)"))
         print("%-18s %s" % ("install-write", "vnu install 0 vnu-test"))
         print("%-18s %s" % ("install-wizard", "vnu install (keys)"))
         return 0
@@ -1796,7 +2011,8 @@ def main():
     # The interactive checks are functions, not SUITE rows, so a filter
     # that names one of them selects no shell case and still runs.
     interactive = ("console-screen", "man-pager", "ctrl-c",
-                   "prefs-wallpaper", "gfx-surface", "gfx-resolution")
+                   "prefs-wallpaper", "gfx-surface", "gfx-resolution",
+                   "gfx-damage")
     cases = SUITE
     if args.only:
         cases = [c for c in SUITE
@@ -1834,6 +2050,10 @@ def main():
                                         for sel in args.only):
                     run_gfx_resolution(guest, result, args.verbose,
                                        args.timeout)
+                if not args.only or any(sel in "gfx-damage"
+                                        for sel in args.only):
+                    run_gfx_damage(guest, result, args.verbose,
+                                   args.timeout)
         if args.wizard_only:
             run_install_wizard(args.iso, result, args.verbose,
                                args.timeout, workdir)

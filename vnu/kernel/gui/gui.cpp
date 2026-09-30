@@ -10,6 +10,11 @@
 #include <vnu/gfxconf.h>
 #include <vnu/abi.h>
 
+/* The freestanding kernel has no <string.h>: the two routines this file
+ * needs are declared here, as vga_gfx.cpp declares its memcpy. */
+extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
+extern "C" int memcmp(const void* a, const void* b, unsigned long count);
+
 namespace {
 
 using vnu::wintask::MAX_TASKS;
@@ -50,6 +55,99 @@ constexpr int RESIZE_TOP = 6;
 struct Window {
     int x, y, w, h;
 };
+
+/* A rectangle on the screen. Half-open, the way everything else here
+ * measures, so a region of nothing is w == 0 rather than a special
+ * case. */
+struct Rect {
+    int x, y, w, h;
+};
+
+bool same_rect(const Window& a, const Window& b)
+{
+    return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
+}
+
+/* The smallest box holding both, which is what a moved window leaves
+ * behind: where it was and where it is now. Repainting the wallpaper
+ * over both is what puts the ground back under it. */
+Rect both_rects(const Window& a, const Window& b)
+{
+    const int x0 = a.x < b.x ? a.x : b.x;
+    const int y0 = a.y < b.y ? a.y : b.y;
+    const int x1 = (a.x + a.w) > (b.x + b.w) ? a.x + a.w : b.x + b.w;
+    const int y1 = (a.y + a.h) > (b.y + b.h) ? a.y + a.h : b.y + b.h;
+    return {x0, y0, x1 - x0, y1 - y0};
+}
+
+/* Half-open on both sides, so touching edges are not an overlap. Two
+ * shapes, because a window and a region are asked about each other from
+ * both directions. */
+bool overlaps(const Rect& a, const Rect& b)
+{
+    return a.w > 0 && a.h > 0 && b.w > 0 && b.h > 0 && a.x < b.x + b.w &&
+           b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+bool overlaps(const Rect& r, const Window& w)
+{
+    return overlaps(r, Rect{w.x, w.y, w.w, w.h});
+}
+
+/* The box the desktop's icons live in: the tiles and the labels under
+ * them, which is what has to be redrawn if anything uncovers any of
+ * it. */
+Rect icon_area(int count)
+{
+    const int cols = 4;
+    const int rows = (count + cols - 1) / cols;
+    return {ICON_ORIGIN_X,
+            ICON_ORIGIN_Y,
+            cols * ICON_CELL_W,
+            rows * ICON_CELL_H};
+}
+
+/* The pointer's box, and the frame as it was last put together. The
+ * pointer is drawn over everything and is not part of any window, so
+ * this is the compositor's own bookkeeping: where it was, which window
+ * had the focus, and what each window looked like. Without it a pass
+ * has no way to tell a redraw from a no-op, and the honest answer
+ * (repaint everything) is the one that made 32bpp expensive. */
+constexpr int CURSOR_BOX = 16;
+
+struct Shown {
+    Window rect;
+    bool up;   /* the window was on the screen, not minimized */
+    /* A text window's pixels are made of its cell grid and the four
+     * numbers that say which row is where; a gfx window's are the
+     * canvas the app owns, which the compositor cannot compare (see
+     * the redraw below), so for those only the title is kept. */
+    int hist_tail, hist_n, scroll_off, cur_row, cur_col;
+    char title[vnu::wintask::TITLE_CAP];
+    char cells[CON_ROWS][CON_COLS];
+};
+
+/* True when the frame on the screen already holds what this window
+ * would draw: the same rectangle, the same title (the panel and the
+ * title bar show it) and, for a text window, the same characters in the
+ * same places. The cursor is part of the last two: it is a block in the
+ * cell grid and moves with cur_col, so a console whose cursor blinked
+ * somewhere else is a different frame. */
+bool same_window(const Shown& s, const Window& w, const vnu::wintask::Console& con)
+{
+    if (!same_rect(s.rect, w))
+        return false;
+    for (int i = 0; i < static_cast<int>(vnu::wintask::TITLE_CAP); ++i)
+        if (s.title[i] != con.title[i])
+            return false;
+    if (con.gfx)
+        return true;   /* the canvas is the app's, and it is always redrawn */
+    if (s.hist_tail != con.hist_tail || s.hist_n != con.hist_n ||
+        s.scroll_off != con.scroll_off || s.cur_row != con.cur_row ||
+        s.cur_col != con.cur_col)
+        return false;
+    return memcmp(s.cells, con.cell, sizeof(s.cells)) == 0;
+}
 
 enum class DragOp {
     None,
@@ -902,6 +1000,24 @@ void run(const char* open_app)
     int panel_n = 0;
     uint32_t last_tick_sod = 0;
 
+    /* The frame as it was last put together, so this pass can tell what
+     * it has to change (see the redraw below). Static because it is a
+     * desktop's worth of memory - six windows' cell grids, 12 KiB - and
+     * the event loop is not where that belongs; a second session starts
+     * by declaring itself a first frame, which resets all of it. */
+    static Shown shown[MAX_TASKS];
+    static Rect restore[MAX_TASKS + 3];
+    static bool redraw[MAX_TASKS];
+    static int shown_mx, shown_my;
+    static TaskHandle shown_focused = NO_TASK;
+    bool first_frame = true;
+    bool redraw_icons = false;
+    bool redraw_panel = false;
+    /* Set by the sweep above, folded into redraw_panel once this pass's
+     * scratch is cleared. */
+    bool window_list_changed = false;
+    int shown_live = -1;   /* -1 so the first pass redraws the panel */
+
     /* "gui <app>" — the window is up before the first frame, so the
      * desktop never flashes an empty desktop on the way in. */
     if (open_app && open_app[0]) {
@@ -925,6 +1041,7 @@ void run(const char* open_app)
          * since a step chosen for the old geometry would land off the
          * new screen. Everything else the desktop shows is redrawn from
          * scratch every frame, so nothing else needs redoing. */
+        bool g_relayout_pending = g_relayout;
         if (g_relayout) {
             g_relayout = false;
             int max_h = vnu::vgfx::height() - PANEL_H;
@@ -946,6 +1063,22 @@ void run(const char* open_app)
          * input or exits, so this always comes straight back. */
         vnu::wintask::run_all_slices();
         sweep_finished();
+
+        /* The panel is a function of what is open and what has the
+         * focus, so anything that changed either of them has to redraw
+         * it. A window that is merely alive is not enough: the panel
+         * lists windows, and one that appeared or went away is a
+         * different list. */
+        {
+            int live = 0;
+            for (int h = 0; h < MAX_TASKS; ++h)
+                if (vnu::wintask::has_window(h))
+                    ++live;
+            if (live != shown_live) {
+                window_list_changed = true;
+                shown_live = live;
+            }
+        }
 
         /* One per-second tick for every gfx-mode window (the analog
          * clock app animates from it). The RTC is the only clock, so on
@@ -1231,10 +1364,141 @@ void run(const char* open_app)
             }
         }
 
-        /* Redraw. */
-        vnu::vgfx::draw_wallpaper();
-        draw_icons(apps, app_count);
+        /* The scratch for this pass: the regions to rebuild, the windows
+         * to draw again, and the two elements that are a function of
+         * the window list rather than of a window. */
+        int restore_n = 0;
+        for (int i = 0; i < MAX_TASKS; ++i)
+            redraw[i] = false;
+        redraw_icons = false;
+        redraw_panel = window_list_changed;
 
+        /* Redraw, as layers, and only where the layer underneath has
+         * actually changed (see the damage notes in vga_gfx.h: at 32bpp
+         * a full frame is 3 MiB to the host, and almost every pass here
+         * is about one window, one line of text or the pointer).
+         *
+         * The three questions this pass answers, in order:
+         *
+         *   - Which regions of the screen are no longer what they were?
+         *     A window's old ground when it moved, was minimized, closed
+         *     or was raised over another, and the pointer's old spot,
+         *     which belongs to whatever is under it.
+         *   - What has to be drawn back into those regions? The
+         *     wallpaper, then every window that overlaps one - not
+         *     because those windows changed, but because the wallpaper
+         *     just went under them - then the panel and the icons if the
+         *     region reaches them, and the pointer itself.
+         *   - Which windows have new pixels of their own? Drawn in
+         *     z-order afterwards, so a window that changed is never
+         *     painted under one that did not.
+         */
+        if (first_frame || g_relayout_pending) {
+            /* Nothing on the display is known to match this desktop: a
+             * session that has just started, or a mode change that took
+             * the whole frame with it. */
+            restore[restore_n++] = {0, 0, vnu::vgfx::width(), vnu::vgfx::height()};
+        }
+        if (shown_mx != mx || shown_my != my) {
+            /* The pointer is the top layer, so where it was is a region
+             * that has to be put back like any other. */
+            restore[restore_n++] = {shown_mx, shown_my, CURSOR_BOX, CURSOR_BOX};
+            shown_mx = mx;
+            shown_my = my;
+        }
+        if (shown_focused != focused) {
+            /* Focus is drawn into the title bars, in both the window
+             * that had it and the one that took it. */
+            if (shown_focused >= 0 && shown_focused < MAX_TASKS)
+                redraw[shown_focused] = true;
+            if (focused >= 0 && focused < MAX_TASKS)
+                redraw[focused] = true;
+            shown_focused = focused;
+            redraw_panel = true;
+        }
+
+        for (int h = 0; h < MAX_TASKS; ++h) {
+            vnu::wintask::Console* con = vnu::wintask::console(h);
+            const bool live = vnu::wintask::has_window(h) && con;
+            /* If the app flipped between text and gfx mode, re-fit the
+             * window to the new client area (an app that asked for its
+             * shared canvas, or one that never did). Done here, before
+             * anything compares rectangles, so the fit is one change
+             * rather than two. */
+            if (live && con->gfx != was_gfx[h]) {
+                was_gfx[h] = con->gfx;
+                Window sized = size_app_window(geom[h].x, geom[h].y, con);
+                geom[h].w = sized.w;
+                geom[h].h = sized.h;
+                clamp_to_desktop(geom[h]);
+            }
+            /* A window is up when the task has one and it is not
+             * minimized; anything else is not drawn and leaves nothing
+             * of itself on the screen. */
+            const bool up = live && !minimized[h];
+            const bool was_up = shown[h].up;
+            if (up == was_up && up && same_window(shown[h], geom[h], *con)) {
+                /* Same window, same place, same pixels: the frame on
+                 * the screen already holds it. */
+                continue;
+            }
+            if (up) {
+                redraw[h] = true;
+                if (was_up && !same_rect(shown[h].rect, geom[h]))
+                    restore[restore_n++] = both_rects(shown[h].rect, geom[h]);
+            } else if (was_up) {
+                /* It went away, or was minimized: what it covered
+                 * belongs to the desktop again. */
+                const Window& old = shown[h].rect;
+                restore[restore_n++] = {old.x, old.y, old.w, old.h};
+            }
+        }
+
+        /* Layer 1: the wallpaper, in the regions that are bare. Drawn
+         * once when the frame is new and afterwards only here - it is a
+         * scene of whole screen, and a window covers it rather than
+         * changing it, so there is nothing else to redraw. */
+        for (int i = 0; i < restore_n; ++i) {
+            const Rect& r = restore[i];
+            vnu::vgfx::clip_set(r.x, r.y, r.w, r.h);
+            vnu::vgfx::draw_wallpaper();
+            vnu::vgfx::clip_pop();
+            vnu::vgfx::damage_add(r.x, r.y, r.w, r.h);
+        }
+
+        /* Anything drawn into a region that has just been put back has
+         * to go again on top of the wallpaper, whether it changed or
+         * not. */
+        for (int i = 0; i < restore_n; ++i)
+            for (int h = 0; h < MAX_TASKS; ++h)
+                if (vnu::wintask::has_window(h) && !minimized[h] &&
+                    overlaps(restore[i], geom[h]))
+                    redraw[h] = true;
+        if (restore_n > 0) {
+            const Rect icons = icon_area(app_count);
+            const Rect panel = {0, 0, vnu::vgfx::width(), PANEL_H};
+            for (int i = 0; i < restore_n; ++i) {
+                if (overlaps(restore[i], icons))
+                    redraw_icons = true;
+                if (overlaps(restore[i], panel))
+                    redraw_panel = true;
+            }
+        }
+
+        /* Layer 2: the icons, which the desktop never changes after it
+         * has listed them. */
+        if (redraw_icons) {
+            draw_icons(apps, app_count);
+            const Rect icons = icon_area(app_count);
+            vnu::vgfx::damage_add(icons.x, icons.y, icons.w, icons.h);
+        }
+
+        /* Layer 3: the windows, in z-order, so one that changed is never
+         * painted under one that did not. A gfx window is redrawn every
+         * pass whatever its state: the app writes its own pixels into
+         * the shared canvas behind the compositor's back, and telling
+         * "it changed" from "it looks the same" is the app's protocol to
+         * grow, not something a memcmp of its canvas can answer. */
         for (int i = 0; i < order_len; ++i) {
             TaskHandle h = order[i];
             if (minimized[h])
@@ -1242,31 +1506,32 @@ void run(const char* open_app)
             vnu::wintask::Console* con = vnu::wintask::console(h);
             if (!con)
                 continue;
-            /* If the app flipped between text and gfx mode, re-fit the
-             * window to the new client area (an app that asked for its
-             * shared canvas, or one that never did). */
-            bool g = con->gfx;
-            if (g != was_gfx[h]) {
-                was_gfx[h] = g;
-                Window sized = size_app_window(geom[h].x, geom[h].y, con);
-                geom[h].w = sized.w;
-                geom[h].h = sized.h;
-                clamp_to_desktop(geom[h]);
+            if (redraw[h] || con->gfx) {
+                const Window& win = geom[h];
+                if (con->gfx)
+                    draw_gfx_window(win, *con, h == focused);
+                else
+                    draw_console_window(win, *con, h == focused);
+                vnu::vgfx::damage_add(win.x, win.y, win.w, win.h);
             }
-            const Window& win = geom[h];
-            if (con->gfx)
-                draw_gfx_window(win, *con, h == focused);
-            else
-                draw_console_window(win, *con, h == focused);
         }
 
-        panel_n = layout_panel(panel_btns, focused, apps, app_count);
-        draw_panel(panel_btns, panel_n, apps, app_count);
+        /* Layer 4: the panel, which is a function of the focus, the open
+         * windows and the mode - so it changes when any of those do, and
+         * not otherwise. */
+        if (redraw_panel) {
+            panel_n = layout_panel(panel_btns, focused, apps, app_count);
+            draw_panel(panel_btns, panel_n, apps, app_count);
+            vnu::vgfx::damage_add(0, 0, vnu::vgfx::width(), PANEL_H);
+        }
 
         if (dnd_active && drag_path[0]) {
             /* Drag ghost: a little document page riding the cursor, with
-             * the dragged file's bare name beside it. */
-            int gx = mx - 10, gy = my - 4;
+             * the dragged file's bare name beside it. It rides with the
+             * pointer, so the pointer's own restore region covers the
+             * ground it vacates; the name beside it can reach further
+             * than the pointer's box, so that is the extra damage. */
+            const int gx = mx - 10, gy = my - 4;
             vnu::vgfx::fill_rect(gx, gy, 13, 16, vnu::vgfx::COLOR_WHITE);
             vnu::vgfx::rect(gx, gy, 13, 16, vnu::vgfx::COLOR_BLACK);
             vnu::vgfx::hline(gx + 2, gy + 5, 9, vnu::vgfx::COLOR_DGRAY);
@@ -1275,9 +1540,12 @@ void run(const char* open_app)
             for (const char* p = drag_path; *p; ++p)
                 if (*p == '/')
                     base = p + 1;
-            int lx = gx + 17, ly = gy + 3;
+            const int lx = gx + 17, ly = gy + 3;
             vnu::vgfx::draw_string8(lx + 1, ly + 1, base, vnu::vgfx::COLOR_BLACK);
             vnu::vgfx::draw_string8(lx, ly, base, vnu::vgfx::COLOR_WHITE);
+            vnu::vgfx::damage_add(gx - 1, gy - 1,
+                                  lx - gx + vnu::vgfx::text_width8(base) + 1,
+                                  18);
         }
 
         vnu::vgfx::CursorShape cursor = vnu::vgfx::CursorShape::Arrow;
@@ -1304,7 +1572,29 @@ void run(const char* open_app)
             vnu::vgfx::draw_cursor(mx, my, vnu::vgfx::COLOR_BLACK);
         else
             vnu::vgfx::draw_cursor_at(mx - 8, my - 8, cursor);
+        vnu::vgfx::damage_add(mx, my, CURSOR_BOX, CURSOR_BOX);
+
+        /* What the frame now holds, which is what the next pass
+         * compares against. Taken after the drawing, and only for the
+         * windows that were up: a gfx window's cells are not its pixels
+         * and are left alone. */
+        for (int h = 0; h < MAX_TASKS; ++h) {
+            vnu::wintask::Console* con = vnu::wintask::console(h);
+            shown[h].up = vnu::wintask::has_window(h) && con && !minimized[h];
+            if (!shown[h].up)
+                continue;
+            shown[h].rect = geom[h];
+            memcpy(shown[h].title, con->title, sizeof(shown[h].title));
+            shown[h].hist_tail = con->hist_tail;
+            shown[h].hist_n = con->hist_n;
+            shown[h].scroll_off = con->scroll_off;
+            shown[h].cur_row = con->cur_row;
+            shown[h].cur_col = con->cur_col;
+            memcpy(shown[h].cells, con->cell, sizeof(shown[h].cells));
+        }
+
         vnu::vgfx::present();
+        first_frame = false;
     }
 
 exit_gui:

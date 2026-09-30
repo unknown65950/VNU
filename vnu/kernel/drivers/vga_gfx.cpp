@@ -404,6 +404,42 @@ bool g_scanout_shown = false;
  * tried again. */
 bool g_console_full = true;
 
+/* The rectangle every write into the frame is confined to, as a
+ * half-open box; the whole screen unless a caller has narrowed it with
+ * clip_set(). Checked by put_pixel() and by the wallpaper's own row
+ * loops, so a clipped repaint costs the region and not the screen.
+ * Reset with the geometry, since a box of one mode's screen says nothing
+ * about another's. */
+int g_clip_x0 = 0, g_clip_y0 = 0, g_clip_x1 = 0, g_clip_y1 = 0;
+
+/* Whether the clip box excludes a pixel. An empty box has not been
+ * narrowed - clip_pop() is what narrows it back to the screen, and until
+ * it has been called once there is nothing to clip to - so it excludes
+ * nothing, which is also why put_pixel() and the wallpaper's loop bounds
+ * both go through here. */
+bool clipped_out(int x, int y)
+{
+    if (g_clip_x1 <= g_clip_x0 || g_clip_y1 <= g_clip_y0)
+        return false;
+    return x < g_clip_x0 || y < g_clip_y0 || x >= g_clip_x1 || y >= g_clip_y1;
+}
+
+/* What has been written since the last present() went to the host, as a
+ * half-open box (x0,y0)-(x1,y1) with x0 >= x1 meaning nothing pending.
+ * The host's copy of the frame is the reference this is measured
+ * against, so anything that writes a pixel has to widen it - which is
+ * what damage_add() below is for, and why the two calls that present
+ * without a compositor (present_text and a mode change) damage
+ * everything. */
+int g_dmg_x0 = 0, g_dmg_y0 = 0, g_dmg_x1 = 0, g_dmg_y1 = 0;
+
+/* The box the last transfer moved, and the bytes it moved, kept for
+ * /proc/gfx: the claim damage tracking makes is about how much crosses
+ * to the host, so the amount that crossed has to be visible. */
+int g_present_x = 0, g_present_y = 0, g_present_w = 0, g_present_h = 0;
+uint32_t g_present_bytes = 0;
+
+
 /* Point the host at our scanout, and remember that from now on the
  * console has to be drawn for it. The one place that does this, so the
  * bookkeeping cannot be left out of one of the call sites. */
@@ -678,6 +714,12 @@ bool enter_gfx_mode()
 
     program_mode(g_width, g_height);
     g_in_gfx_mode = true;
+    clip_pop();
+    /* What is on the display now is whatever the mode programming left
+     * there, so the host's copy of it is not this framebuffer's and
+     * every pixel of it has to be sent. Reused frame or fresh one, this
+     * is the one place a mode change makes the screen unknown. */
+    damage_all();
 
     /* On a virtio-vga the host shows whichever plane it was pointed at
      * last, and a text-mode console is the legacy VGA one. The desktop
@@ -728,8 +770,16 @@ bool set_resolution(int w, int h)
     release_backbuf(); /* still sized for the mode being left */
     g_backbuf = next;
     g_console_full = true;
+    /* The new geometry first, then the two boxes that describe the new
+     * frame in it: damage_all() and clip_pop() both read the current
+     * width and height, and a damage box or a clip left at the old
+     * screen's size is not merely stale - the box is what a transfer
+     * copies, so one that is too large sends the copy off the end of the
+     * frame it belongs to. */
     g_width = w;
     g_height = h;
+    damage_all();   /* a new frame: the host has none of it */
+    clip_pop();     /* a box of the old screen is not a clip for the new one */
     /* A new resource is a new thing to be shown: the host is still
      * pointed at the one the mode being left had. This is where the new
      * size is already on record, which is what the host is told along
@@ -771,8 +821,16 @@ static bool restore_console_geometry(uint16_t cols, uint16_t rows)
     release_backbuf();
     g_backbuf = next;
     g_console_full = true;
+    /* The new geometry first, then the two boxes that describe the new
+     * frame in it: damage_all() and clip_pop() both read the current
+     * width and height, and a damage box or a clip left at the old
+     * screen's size is not merely stale - the box is what a transfer
+     * copies, so one that is too large sends the copy off the end of the
+     * frame it belongs to. */
     g_width = w;
     g_height = h;
+    damage_all();   /* a new frame: the host has none of it */
+    clip_pop();     /* a box of the old screen is not a clip for the new one */
     /* A new resource is a new thing to show: the host is still pointed
      * at the one the mode being left had. */
     if (g_in_gfx_mode)
@@ -855,16 +913,24 @@ int pr(int r)
  * procedural scene only shows when there is no wallpaper file. */
 void draw_wallpaper()
 {
+    /* The clip as loop bounds, so the four row loops below stay inside a
+     * region repaint. A full-screen call sees the whole screen, which is
+     * what an unset clip means (see clipped_out). */
+    const int cx0 = g_clip_x1 > g_clip_x0 ? g_clip_x0 : 0;
+    const int cx1 = g_clip_x1 > g_clip_x0 ? g_clip_x1 : g_width;
+    const int cy0 = g_clip_y1 > g_clip_y0 ? g_clip_y0 : 0;
+    const int cy1 = g_clip_y1 > g_clip_y0 ? g_clip_y1 : g_height;
+
     if (vnu::wallpaper::ready()) {
         /* A decoded wallpaper is held as one byte per pixel (it is
          * quantized to a palette at startup), so a 32bpp frame is fed
          * from it the way a scanout is: index by index through the same
          * palette the rest of the desktop draws in. */
         const uint8_t* src = vnu::wallpaper::frame();
-        for (int y = 0; y < g_height; ++y) {
+        for (int y = cy0; y < cy1; ++y) {
             const uint8_t* in = src + static_cast<long>(y) * g_width;
             uint8_t* row = row_ptr(y);
-            for (int x = 0; x < g_width; ++x) {
+            for (int x = cx0; x < cx1; ++x) {
                 uint8_t px[4];
                 const uint32_t n = pixel_of(in[x], CATT_PAL, px);
                 for (uint32_t i = 0; i < n; ++i)
@@ -881,7 +947,7 @@ void draw_wallpaper()
     };
     /* Sky: bright blue at the top, fading through cyan toward a pale
      * horizon (three dithered bands so the 16-color palette is smooth). */
-    for (int y = 0; y < g_height; ++y) {
+    for (int y = cy0; y < cy1; ++y) {
         unsigned t = (unsigned)y * 256u / (unsigned)g_height;
         uint8_t top, bottom;
         unsigned lo, hi;
@@ -904,7 +970,7 @@ void draw_wallpaper()
         unsigned u = (t - lo) * 256u / (hi - lo + 1);
         const uint8_t* bayer = B4[y & 3];
         uint8_t* row = row_ptr(y);
-        for (int x = 0; x < g_width; ++x)
+        for (int x = cx0; x < cx1; ++x)
             store(row + x * pixel_bytes(),
                   (u >= (unsigned)(bayer[x & 3] * 17)) ? bottom : top);
     }
@@ -927,21 +993,25 @@ void draw_wallpaper()
     const int far_h = py(150);
     const int near_base = py(748);
     const int near_h = py(110);
-    for (int x = 0; x < g_width; ++x) {
+    /* The two ranges write through pixel_ptr rather than put_pixel, so
+     * the clip has to bound their rows here as well as their columns. */
+    for (int x = cx0; x < cx1; ++x) {
         int idx = (x * 3 * 64 / g_width) % 64;
         int h = far_h * static_cast<int>(HILL_T[idx]) / 256;
-        for (int y = far_base - h; y < far_base; ++y)
+        int ytop = far_base - h < cy0 ? cy0 : far_base - h;
+        for (int y = ytop; y < far_base && y < cy1; ++y)
             store(pixel_ptr(x, y), COLOR_DGRAY);
     }
-    for (int x = 0; x < g_width; ++x) {
+    for (int x = cx0; x < cx1; ++x) {
         int idx = (x * 2 * 64 / g_width + 16) % 64;
         int h = near_h * static_cast<int>(HILL_T[idx]) / 256;
-        for (int y = near_base - h; y < near_base; ++y)
+        int ytop = near_base - h < cy0 ? cy0 : near_base - h;
+        for (int y = ytop; y < near_base && y < cy1; ++y)
             store(pixel_ptr(x, y), COLOR_GREEN);
     }
-    for (int y = near_base; y < g_height; ++y) {
+    for (int y = near_base < cy0 ? cy0 : near_base; y < cy1; ++y) {
         uint8_t* row = row_ptr(y);
-        for (int x = 0; x < g_width; ++x)
+        for (int x = cx0; x < cx1; ++x)
             store(row + x * pixel_bytes(), COLOR_GREEN);
     }
 }
@@ -969,7 +1039,9 @@ void clear_gradient(uint8_t top, uint8_t bottom)
 
 void put_pixel(int x, int y, uint8_t color)
 {
-    if (x < 0 || y < 0 || x >= g_width || y >= g_height)
+    /* The clip is the screen unless a caller narrowed it, so this one
+     * test is both the bounds check and the region repaint. */
+    if (clipped_out(x, y))
         return;
     store(pixel_ptr(x, y), color);
 }
@@ -1328,9 +1400,152 @@ void draw_cursor_at(int x, int y, CursorShape shape)
     blit_cursor_shape(x, y, shape, COLOR_WHITE);
 }
 
+void damage_add(int x, int y, int w, int h)
+{
+    if (!g_backbuf || w <= 0 || h <= 0)
+        return;   /* nothing to write, or nowhere to write it */
+    /* Clipped to the frame, because a caller asks in desktop
+     * coordinates and a window may hang off the edge of the screen. */
+    int x0 = x < 0 ? 0 : x;
+    int y0 = y < 0 ? 0 : y;
+    int x1 = x + w;
+    int y1 = y + h;
+    if (x1 > g_width)
+        x1 = g_width;
+    if (y1 > g_height)
+        y1 = g_height;
+    if (x0 >= x1 || y0 >= y1)
+        return;
+    if (g_dmg_x0 >= g_dmg_x1) {   /* nothing pending: this is the box */
+        g_dmg_x0 = x0;
+        g_dmg_y0 = y0;
+        g_dmg_x1 = x1;
+        g_dmg_y1 = y1;
+        return;
+    }
+    if (x0 < g_dmg_x0)
+        g_dmg_x0 = x0;
+    if (y0 < g_dmg_y0)
+        g_dmg_y0 = y0;
+    if (x1 > g_dmg_x1)
+        g_dmg_x1 = x1;
+    if (y1 > g_dmg_y1)
+        g_dmg_y1 = y1;
+}
+
+void damage_all()
+{
+    damage_add(0, 0, g_width, g_height);
+}
+
+void clip_set(int x, int y, int w, int h)
+{
+    int x0 = x < 0 ? 0 : x;
+    int y0 = y < 0 ? 0 : y;
+    int x1 = x + w;
+    int y1 = y + h;
+    if (x1 > g_width)
+        x1 = g_width;
+    if (y1 > g_height)
+        y1 = g_height;
+    /* A region entirely off the screen clips everything away, which is
+     * the honest answer: there is nothing of it on the display. */
+    if (x0 > x1)
+        x0 = x1;
+    if (y0 > y1)
+        y0 = y1;
+    g_clip_x0 = x0;
+    g_clip_y0 = y0;
+    g_clip_x1 = x1;
+    g_clip_y1 = y1;
+}
+
+void clip_pop()
+{
+    g_clip_x0 = 0;
+    g_clip_y0 = 0;
+    g_clip_x1 = g_width;
+    g_clip_y1 = g_height;
+}
+
+void damage_rect(int* x, int* y, int* w, int* h)
+{
+    if (g_dmg_x0 >= g_dmg_x1) {
+        *x = *y = *w = *h = 0;
+        return;
+    }
+    *x = g_dmg_x0;
+    *y = g_dmg_y0;
+    *w = g_dmg_x1 - g_dmg_x0;
+    *h = g_dmg_y1 - g_dmg_y0;
+}
+
+void present_rect(int* x, int* y, int* w, int* h)
+{
+    *x = g_present_x;
+    *y = g_present_y;
+    *w = g_present_w;
+    *h = g_present_h;
+}
+
+uint32_t present_bytes()
+{
+    return g_present_bytes;
+}
+
 void present()
 {
     present_with(CATT_PAL);
+}
+
+/* The damage a transfer is about, taken out of the frame so the next one
+ * starts from nothing, and recorded as what this present() is about to
+ * move - including the nothing at all, because "a pass changed no pixels"
+ * is the result the whole exercise is after and /proc/gfx prints it. */
+struct Box {
+    int x0, y0, x1, y1;
+    bool empty() const { return x0 >= x1; }
+    uint32_t pixels() const
+    {
+        return static_cast<uint32_t>(x1 - x0) * static_cast<uint32_t>(y1 - y0);
+    }
+};
+
+static Box take_damage()
+{
+    const Box b{g_dmg_x0, g_dmg_y0, g_dmg_x1, g_dmg_y1};
+    g_dmg_x0 = g_dmg_y0 = g_dmg_x1 = g_dmg_y1 = 0;
+    g_present_x = b.empty() ? 0 : b.x0;
+    g_present_y = b.empty() ? 0 : b.y0;
+    g_present_w = b.empty() ? 0 : b.x1 - b.x0;
+    g_present_h = b.empty() ? 0 : b.y1 - b.y0;
+    g_present_bytes = 0;
+    return b;
+}
+
+/* Give a box back to the pending damage, for a transfer that could not be
+ * made: the host still owes the pixels in it, and a narrower damage on
+ * the next pass would not cover them. Widening is all this does, so
+ * putting back a box that is already covered costs nothing. */
+static void put_damage(const Box& b)
+{
+    if (b.empty())
+        return;
+    if (g_dmg_x0 >= g_dmg_x1) {
+        g_dmg_x0 = b.x0;
+        g_dmg_y0 = b.y0;
+        g_dmg_x1 = b.x1;
+        g_dmg_y1 = b.y1;
+        return;
+    }
+    if (b.x0 < g_dmg_x0)
+        g_dmg_x0 = b.x0;
+    if (b.y0 < g_dmg_y0)
+        g_dmg_y0 = b.y0;
+    if (b.x1 > g_dmg_x1)
+        g_dmg_x1 = b.x1;
+    if (b.y1 > g_dmg_y1)
+        g_dmg_y1 = b.y1;
 }
 
 /* The console as pixels (see vga_gfx.h for why this exists at all),
@@ -1393,9 +1608,16 @@ static void present_rows(uint32_t want)
      * already the console's. */
     if (want == ALL_CONSOLE_ROWS)
         clear(0);
+    /* The rows about to be written are the damage: the console is the
+     * only thing presenting here, so it says what it drew rather than
+     * claiming the screen (which is what a caller that has not been
+     * told anything should do). A single row of text is 16 pixels of a
+     * 400-line console, and this is what makes one keystroke cost one
+     * row instead of a frame. */
     for (int row = 0; row < rows; ++row) {
         if (!(want & (uint32_t{1} << row)))
             continue;
+        damage_add(x0, y0 + row * ch, grid_w, ch);
         for (int col = 0; col < cols; ++col) {
             const uint16_t c = vnu::tty::cell(row, col);
             const uint8_t* bits = g_font[c & 0xFF];
@@ -1475,6 +1697,24 @@ void console_tick()
 
 void present_with(const uint8_t (&pal)[16][3])
 {
+    /* What the host is owed. Taken here rather than in present() because
+     * the console has its own idea of what changed (present_rows damages
+     * the rows it drew) and both paths go through this one transfer. */
+    Box dmg = take_damage();
+    /* Clipped to the frame once more, here, where the box is about to
+     * drive a copy. damage_add() clips too, but it clips with the geometry
+     * of the moment it was called, and a frame that is taken after the
+     * damage was declared is smaller than the box said: a transfer is
+     * then asked for rows and columns the frame does not have, and the
+     * copy walks off it. Clamping here makes that impossible from either
+     * direction. */
+    if (dmg.x1 > g_width)
+        dmg.x1 = g_width;
+    if (dmg.y1 > g_height)
+        dmg.y1 = g_height;
+    if (dmg.empty())
+        return;   /* a pass that changed nothing: no copy, no notify */
+
     /* Virtio-gpu path (when QEMU was given a virtio display device):
      * the host scanout is a 32-bpp resource backed by guest memory, so
      * expand the 8-bpp backbuffer through the DAC palette first, then
@@ -1487,31 +1727,61 @@ void present_with(const uint8_t (&pal)[16][3])
          * ones, see virtio_gpu::set_resolution). The desktop keeps
          * drawing into the backbuffer either way; there is simply
          * nothing to hand over until the next attempt gets frames. */
-        if (nsegs == 0)
+        if (nsegs == 0) {
+            put_damage(dmg);
             return;
+        }
 
         /* The scanout is a list of frame runs, so the image is written
          * run by run: a row is 4 bytes per pixel wide and can straddle
          * two of them, while a run holds many rows. Splitting per row
-         * keeps the copy below free of any segment bookkeeping. */
+         * keeps the copy below free of any segment bookkeeping.
+         *
+         * Only the damaged columns of the damaged rows are written, and
+         * the run is walked from where the box starts rather than from
+         * the top of the resource, which is the point of the whole
+         * mechanism: the copy is proportional to what changed. */
+        const uint32_t full_row = static_cast<uint32_t>(g_width) * 4u;
+        /* Into the first damaged pixel: the start of the first damaged
+         * row plus the columns to the left of the first damaged one. The
+         * x term is the one that makes a subrect land where it belongs
+         * rather than in the row's leftmost columns. */
+        uint32_t lead = static_cast<uint32_t>(dmg.y0) * full_row +
+                        static_cast<uint32_t>(dmg.x0) * 4u;
         uint32_t seg = 0;
         vnu::virtio_gpu::ScanoutSegment s = vnu::virtio_gpu::scanout_segment(0);
-        uint8_t* dst = reinterpret_cast<uint8_t*>(s.phys);
-        uint32_t room = s.bytes;
-        const uint32_t row_bytes = static_cast<uint32_t>(g_width) * 4u;
-        for (int y = 0; y < g_height; ++y) {
+        uint32_t room = 0;
+        /* Positioned at the first damaged pixel. */
+        while (seg < nsegs) {
+            s = vnu::virtio_gpu::scanout_segment(seg);
+            if (lead < s.bytes) {
+                room = s.bytes - lead;
+                break;
+            }
+            lead -= s.bytes;
+            ++seg;
+        }
+        if (seg == nsegs) {
+            put_damage(dmg);   /* the list ran out: the host is still owed it */
+            return;
+        }
+        uint8_t* dst = reinterpret_cast<uint8_t*>(s.phys + lead);
+        const uint32_t row_bytes = static_cast<uint32_t>(dmg.x1 - dmg.x0) * 4u;
+        for (int y = dmg.y0; y < dmg.y1; ++y) {
             /* A 32bpp frame is already B8G8R8X8 - the desktop composited
              * straight into the scanout's format, so this is the copy
              * the 8bpp path used to do after expanding every pixel
              * through the DAC. An 8bpp frame is still palette indices
              * and still has to be expanded, in the caller's palette so
              * the console presents in the one the text mode booted with. */
-            const uint8_t* src = row_ptr(y);
+            const uint8_t* src = pixel_ptr(dmg.x0, y);
             uint32_t left = row_bytes;
             while (left > 0) {
                 if (room == 0) {
-                    if (++seg == nsegs)
-                        return;   /* the list ran out: leave the rest alone */
+                    if (++seg == nsegs) {
+                        put_damage(dmg);
+                        return;   /* the list ran out: still owed */
+                    }
                     s = vnu::virtio_gpu::scanout_segment(seg);
                     dst = reinterpret_cast<uint8_t*>(s.phys);
                     room = s.bytes;
@@ -1538,7 +1808,9 @@ void present_with(const uint8_t (&pal)[16][3])
                 dst += chunk;
             }
         }
-        vnu::virtio_gpu::present();
+        g_present_bytes = dmg.pixels() * 4u;
+        vnu::virtio_gpu::present(dmg.x0, dmg.y0, dmg.x1 - dmg.x0,
+                                 dmg.y1 - dmg.y0);
         return;
     }
 
@@ -1561,9 +1833,18 @@ void present_with(const uint8_t (&pal)[16][3])
     while (!(inb(0x3DA) & 0x08)) {
     }
     /* The VBE path never gets past resolve_bpp(): a 32bpp frame exists
-     * only where a virtio-gpu is presenting, and it went out above. */
-    memcpy(reinterpret_cast<void*>(VBE_LFB_ADDR), g_backbuf,
-           static_cast<unsigned long>(g_width * g_height));
+     * only where a virtio-gpu is presenting, and it went out above. A
+     * row is a byte per pixel here, and the copy is per row of the
+     * damaged box rather than one memcpy of the frame: at 640x480 the
+     * whole frame is 300 KiB and a cursor move is a few hundred bytes of
+     * it. */
+    auto* lfb = reinterpret_cast<uint8_t*>(VBE_LFB_ADDR);
+    for (int y = dmg.y0; y < dmg.y1; ++y) {
+        memcpy(lfb + static_cast<long>(y) * g_width + dmg.x0,
+               row_ptr(y) + dmg.x0,
+               static_cast<unsigned long>(dmg.x1 - dmg.x0));
+    }
+    g_present_bytes = dmg.pixels();
 }
 
 } // namespace vnu::vgfx

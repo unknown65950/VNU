@@ -56,9 +56,15 @@ uint32_t scanout_segments();
 ScanoutSegment scanout_segment(uint32_t index);
 
 // Push what vgfx expanded into the segments to the host display
-// (transfer to host + flush). No-op unless init() succeeded and there
-// are segments.
-void present();
+// (transfer to host + flush), for the x, y, w, h rectangle of the
+// resource that changed. A rectangle rather than the whole frame because
+// the transfers are what a 32bpp frame is expensive for - 3 MiB to the
+// host every pass at 1024x768 - and the device has a command for
+// exactly this: a dirty rectangle, which lets the host re-upload only
+// that area. The rectangle is clipped to the resource; a 0-width or
+// 0-height one means the frame changed nothing and nothing is sent.
+// No-op unless init() succeeded and there are segments.
+void present(int x, int y, int w, int h);
 
 // Who the host is showing. A virtio-vga is a VGA-compatible display
 // with two planes, and the host renders whichever one is pointed at it:
