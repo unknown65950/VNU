@@ -23,10 +23,12 @@ extern "C" {
 #define SIGUSR1 10
 #define SIGSEGV 11
 #define SIGUSR2 12
-#define SIGPIPE 13 /* a reader went away mid-write */
+#define SIGPIPE 13 /* reserved: nothing raises it yet, a write with
+                  * no reader fails with EPIPE */
 #define SIGALRM 14 /* alarm() ran out */
 #define SIGTERM 15
-#define SIGCHLD 17 /* a child changed state */
+#define SIGCHLD 17 /* reserved: a child that changes state is not a
+                  * signal yet, waitpid() is how you hear about it */
 
 #define NSIG 32 /* the signals are 1..NSIG-1; 0 is never a signal */
 

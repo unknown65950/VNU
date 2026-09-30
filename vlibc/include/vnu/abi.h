@@ -123,7 +123,9 @@ struct vnu_gfx_info {
 #define VNU_SIGUSR1 10
 #define VNU_SIGSEGV 11
 #define VNU_SIGUSR2 12
-#define VNU_SIGPIPE 13 /* a reader went away mid-write */
+#define VNU_SIGPIPE 13 /* reserved: defined so a program that names it
+                           * compiles, but nothing raises it yet - a
+                           * write with no reader fails with EPIPE */
 #define VNU_SIGALRM 14 /* alarm() ran out */
 #define VNU_SIGTERM 15
 #define VNU_SIGCHLD 17 /* a child changed state */

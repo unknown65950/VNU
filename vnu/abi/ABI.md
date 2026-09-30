@@ -369,8 +369,8 @@ with `-1` leaves a field unchanged; only root may chown.
 
 Signals are raised and delivered at two different moments, which is what
 POSIX means and what the console depends on. Raising records the signal
-against the process (`kill`, `sigraise`, `SIGALRM` firing, a reader
-going away for `SIGPIPE`); it is not a jump, so a signal raised while
+against the process (`kill`, `sigraise`, `SIGALRM` firing); it is not a
+jump, so a signal raised while
 the process is inside a syscall, or between two of its own instructions,
 does not run the handler there and then. Delivery happens at the next
 boundary where the process is on its way back to its own code — which
