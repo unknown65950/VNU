@@ -829,6 +829,47 @@ KEYS\n\
       h         help\n\
       Enter / Esc  return to editing\n"
 
+#define VC_PAGE "NAME\n\
+    vibecommander - two-panel file manager (Norton Commander style)\n\
+\n\
+SYNOPSIS\n\
+    vibecommander [DIRECTORY]\n\
+\n\
+DESCRIPTION\n\
+    A text-mode file manager in the style of Norton Commander and\n\
+    Midnight Commander. Two panels browse two directories side by\n\
+    side; Tab picks which panel is active. Enter opens the entry\n\
+    under the cursor (a directory changes the panel there, a\n\
+    regular file opens in the built-in viewer), Left leaves to the\n\
+    parent directory. A letter typed jumps to the first entry that\n\
+    starts with it.\n\
+\n\
+    The function keys run the file operations, as on a Commander:\n\
+\n\
+      F1 help   F3 view   F4 edit   F5 copy\n\
+      F6 move   F7 mkdir  F8 delete F10 quit\n\
+\n\
+    F4 edits in vedit, running it as a child process; the manager\n\
+    returns when the editor exits. F5 and F6 copy and move the\n\
+    selected file into the other panel's directory. F7 asks for a\n\
+    name and creates the directory, F8 deletes the entry after a\n\
+    yes/no confirmation.\n\
+\n\
+KEYS\n\
+    Tab             switch the active panel\n\
+    Enter / Right   open the entry under the cursor\n\
+    Left            leave to the parent directory\n\
+    Up / Down       move the cursor\n\
+    Home / End      jump to the first / last entry\n\
+    Space           page the list down\n\
+    a..z 0..9 . _ - jump to the first entry starting with it\n\
+    F1 F3 F4 F5 F6 F7 F8 F10   the operations above\n\
+    Esc             quit\n\
+\n\
+    A screen layout from bottom to top: the function-key bar on the\n\
+    last row, the status line with the selected entry's size above\n\
+    it, the two lists, and the panel titles with their paths.\n"
+
 #define CALC_PAGE "NAME\n\
     calc - graphical calculator\n\
 \n\
@@ -1356,6 +1397,8 @@ static const struct Page pages[] = {
       RESOLV_PAGE},
     {"vedit",    "full-screen text editor",
      VEDIT_PAGE},
+    {"vibecommander", "two-panel file manager",
+     VC_PAGE},
     {"calc",     "graphical calculator",
      CALC_PAGE},
     {"files",    "graphical file manager",

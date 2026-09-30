@@ -72,6 +72,9 @@ SPECIAL_KEYS = {
     "<up>": "up", "<down>": "down", "<left>": "left", "<right>": "right",
     "<home>": "home", "<end>": "end", "<pgup>": "pgup", "<pgdn>": "pgdn",
     "<esc>": "esc", "<ret>": "ret", "<spc>": "spc", "<tab>": "tab",
+    "<f1>": "f1", "<f2>": "f2", "<f3>": "f3", "<f4>": "f4",
+    "<f5>": "f5", "<f6>": "f6", "<f7>": "f7", "<f8>": "f8",
+    "<f9>": "f9", "<f10>": "f10", "<f11>": "f11",
     "<f12>": "f12",
     # A chord, not a character: Ctrl+C is the one key the console turns
     # into a signal, so it never reaches a program as a byte and there
@@ -504,6 +507,11 @@ SUITE = [
     # `install` is a `vnu` subcommand now, so it has no page of its own.
     ("man-no-install", "man install",
      [r"^man: no manual page for install$"], []),
+    ("man-vibecommander", "man vibecommander > /tmp/man-vc.out",
+     [], [r"press h for help"]),
+    ("man-vibecommander-text", "cat /tmp/man-vc.out",
+     [r"^NAME$", r"vibecommander - two-panel file manager",
+      r"^KEYS$", r"\bF5 copy\b"], []),
     # -- fork(2) --------------------------------------------------------
     # `forkdemo` prints one line per claim the kernel makes about a
     # forked child: two processes that run at the same time, separate
@@ -641,6 +649,61 @@ def run_man_pager(guest, result, verbose, timeout=60.0):
     result.passed += 1
     if verbose:
         print("ok   %-18s" % "man-pager")
+    return True
+
+
+def run_vibecommander(guest, result, verbose, timeout=60.0):
+    """Drive vibecommander through a session: browse, create and delete a
+    directory, quit.
+
+    Like the man pager, the manager owns the terminal until F10, so this
+    is a function, not a SUITE case: the keys are sent here and each step
+    is checked on the console output it leaves in the log."""
+    print("==> vibecommander (interactive)")
+    VC_BAR = (r"1Help.{0,40}3View.{0,40}4Edit.{0,40}5Copy.{0,40}"
+              r"6Move.{0,40}7Mkdir.{0,40}8Delete.{0,40}10Quit")
+    problems = []
+    frm = len(guest.tail(0))
+    try:
+        guest._type("vibecommander /\n")
+        guest.wait(VC_BAR, timeout, frm)
+        # The cursor opens the first entry (/apps on this filesystem).
+        guest._type("<ret>")
+        guest.wait(r"\[/apps\]", timeout, frm)
+        # Left returns to the parent directory (the root panel).
+        guest._type("<left>")
+        guest.wait(r"\[/\]", timeout, frm)
+        # A letter key jumps to a matching entry; bin is such a directory.
+        guest._type("b<ret>")
+        guest.wait(r"\[/bin\]", timeout, frm)
+        guest._type("<left>")
+        guest.wait(r"\[/\]", timeout, frm)
+        # Jump to /tmp with a letter key and enter it.
+        guest._type("t<ret>")
+        guest.wait(r"\[/tmp\]", timeout, frm)
+        # F7 makes a directory; the prompt takes its name.
+        guest._type("<f7>vctest\n")
+        guest.wait(r"Make directory: vctest", timeout, frm)
+        guest.wait(r"created", timeout, frm)
+        # Jump to it and F8 deletes it after a confirmation.
+        guest._type("v")
+        guest._type("<f8>y\n")
+        guest.wait(r"Delete vctest \?", timeout, frm)
+        guest.wait(r"deleted", timeout, frm)
+        # F10 wraps the session up and the shell prompt comes back.
+        fq = len(guest.tail(0))
+        guest._type("<f10>")
+        guest.wait_prompt(timeout, fq)
+    except (TimeoutError, RuntimeError) as exc:
+        problems.append(str(exc))
+
+    if problems:
+        result.failed.append(("vibecommander", "", problems))
+        print("FAIL %-18s %s" % ("vibecommander", "; ".join(problems)))
+        return False
+    result.passed += 1
+    if verbose:
+        print("ok   %-18s" % "vibecommander")
     return True
 
 
@@ -2012,7 +2075,7 @@ def main():
     # that names one of them selects no shell case and still runs.
     interactive = ("console-screen", "man-pager", "ctrl-c",
                    "prefs-wallpaper", "gfx-surface", "gfx-resolution",
-                   "gfx-damage")
+                   "gfx-damage", "vibecommander")
     cases = SUITE
     if args.only:
         cases = [c for c in SUITE
@@ -2054,6 +2117,10 @@ def main():
                                         for sel in args.only):
                     run_gfx_damage(guest, result, args.verbose,
                                    args.timeout)
+                if not args.only or any(sel in "vibecommander"
+                                        for sel in args.only):
+                    run_vibecommander(guest, result, args.verbose,
+                                      args.timeout)
         if args.wizard_only:
             run_install_wizard(args.iso, result, args.verbose,
                                args.timeout, workdir)

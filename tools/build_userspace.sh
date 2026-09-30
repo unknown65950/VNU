@@ -42,6 +42,7 @@ echo "==> userspace"
 "$VCC" "$ROOT/vnu/userspace/examples/ttytest.c" -o "$ROOT/sysroot/bin/ttytest"
 "$VCC" "$ROOT/vnu/userspace/examples/forkdemo.c" -o "$ROOT/sysroot/bin/forkdemo"
 "$VCC" "$ROOT/vnu/userspace/man/man.c" -o "$ROOT/sysroot/bin/man"
+"$VCC" "$ROOT/vnu/userspace/vcommander/vibecommander.c" -o "$ROOT/sysroot/bin/vibecommander"
 "$VCC" "$ROOT/vnu/userspace/gui/play.c" "$ROOT/vnu/userspace/libwav/wav.c" -o "$ROOT/sysroot/bin/play"
 # coreutils: one separate binary per command (no multi-call applet).
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
@@ -87,6 +88,7 @@ embed "$ROOT/sysroot/bin/tlsserver" tlsserver
 embed "$ROOT/sysroot/bin/ttytest" ttytest
 embed "$ROOT/sysroot/bin/forkdemo" forkdemo
 embed "$ROOT/sysroot/bin/man" man
+embed "$ROOT/sysroot/bin/vibecommander" vibecommander
 embed "$ROOT/sysroot/bin/vcc" vcc
 embed "$ROOT/sysroot/bin/vnu" vnu
 # the guest compiler's link inputs (mounted as /lib/crt0.o, /lib/libvlibc.a).

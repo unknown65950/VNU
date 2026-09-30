@@ -35,6 +35,7 @@
 #include "embedded_dirname.h"
 #include "embedded_seq.h"
 #include "embedded_man.h"
+#include "embedded_vibecommander.h"
 #include "embedded_df.h"
 #include "embedded_ping.h"
 #include "embedded_id.h"
@@ -115,6 +116,7 @@ const EmbeddedProg embedded[] = {
     {"/bin/df", embedded_df_elf, embedded_df_elf_size},
     {"/bin/ping", embedded_ping_elf, embedded_ping_elf_size},
     {"/bin/man", embedded_man_elf, embedded_man_elf_size},
+    {"/bin/vibecommander", embedded_vibecommander_elf, embedded_vibecommander_elf_size},
     {"/bin/id", embedded_id_elf, embedded_id_elf_size},
     {"/bin/whoami", embedded_whoami_elf, embedded_whoami_elf_size},
     {"/bin/groups", embedded_groups_elf, embedded_groups_elf_size},

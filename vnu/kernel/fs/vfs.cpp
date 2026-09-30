@@ -816,6 +816,7 @@ void init()
     add("/bin/dirname", false);
     add("/bin/seq", false);
     add("/bin/man", false);
+    add("/bin/vibecommander", false);
     add("/bin/df", false);
     add("/bin/ping", false);
     add("/bin/id", false);
