@@ -243,20 +243,101 @@ struct Shown {
     bool up;   /* the window was on the screen, not minimized */
     /* A text window's pixels are made of its cell grid and the four
      * numbers that say which row is where; a gfx window's are the
-     * canvas the app owns, which the compositor cannot compare (see
-     * the redraw below), so for those only the title is kept. */
+     * canvas the app owns, which is compared by hash instead (see
+     * canvas_hash). */
     int hist_tail, hist_n, scroll_off, cur_row, cur_col;
+    /* The canvas as it was when this window was last composited, and
+     * how many times a window has been drawn. See canvas_hash. */
+    uint64_t canvas;
+    int canvas_w, canvas_h;
     char title[vnu::wintask::TITLE_CAP];
     char cells[CON_ROWS][CON_COLS];
 };
+
+/* A digest of a gfx window's canvas: FNV-1a over the pixels the app
+ * owns, as they are in the display's own depth.
+ *
+ * A pixel window's contents are the app's, written straight into the
+ * pages the compositor reads (see wintask.h), so the compositor has no
+ * cell grid to compare and no way to be told "I drew". Repainting such
+ * a window on every pass is what it used to do, and it is what made the
+ * desktop feel slow: one 480x340 canvas is ~160 000 pixels, and paying
+ * for all of them on every pass - a blit, a damage box and a transfer
+ * to the host - for a window that had not changed a byte is work whose
+ * only result is the frame that is already on the screen.
+ *
+ * So the canvas is read instead, once per pass: a 480x340 canvas is
+ * 160 KiB of indices or 640 KiB of words, which is a linear scan over
+ * memory the next blit is going to read anyway, and it settles the same
+ * question the blit would have answered. Two things follow from it:
+ * an app that is idle costs a scan rather than a repaint, and an app
+ * that animates (the clock) is still repainted, because its canvas
+ * really is different every time.
+ *
+ * A digest rather than a copy of the pixels, because a window-sized
+ * shadow buffer per window is a megabyte of the pool that a six-window
+ * desktop would rather spend on canvases; and a digest rather than a
+ * generation counter from the app, because that would be a new syscall
+ * for something the pixels already answer. Two different canvases that
+ * collide would cost one redundant repaint, never a stale frame. */
+uint64_t canvas_hash(const vnu::wintask::Console& con)
+{
+    if (!con.pixel || con.pix_w <= 0 || con.pix_h <= 0)
+        return 0;
+    const uint32_t bytes = static_cast<uint32_t>(con.pix_w) *
+                           static_cast<uint32_t>(con.pix_h) *
+                           (static_cast<uint32_t>(vnu::vgfx::bpp()) / 8u);
+    const uint8_t* p = con.pixel;
+    uint64_t h = 1469598103934665603ull;   /* FNV-1a 64 offset basis */
+    /* A word at a time, not a byte: the digest is read on every pass of
+     * every pixel window, and a byte loop over 160 KiB of canvas costs
+     * more than the blit it is there to avoid. The canvas is a
+     * page-aligned run of frames, so the words are aligned too, and one
+     * load and one multiply per word is the whole scan - a digest of
+     * every byte, mixed eight bytes to a step.
+     *
+     * Read through the pointer rather than a memcpy() per word: this
+     * runs 20 000 times per pass, and a call is more than the load it
+     * would be making. */
+    const uint64_t* words = reinterpret_cast<const uint64_t*>(p);
+    const uint32_t whole = bytes / 8u;
+    for (uint32_t i = 0; i < whole; ++i)
+        h = (h ^ words[i]) * 1099511628211ull;
+    for (uint32_t w = whole * 8u; w < bytes; ++w) {
+        h ^= p[w];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+/* True when this window's canvas holds something the last composite of
+ * it did not have: different pixels, or a canvas that was reallocated
+ * since (which is what a resize does, and which a digest of the same
+ * size would otherwise be free to miss - the app redrew into fresh
+ * pages that happen to hash the same only if it drew the same picture,
+ * so the size is compared to be sure).
+ *
+ * `digest` is this pass's reading of the canvas, taken once per window
+ * in the pass (see the caller): the same canvas is asked about twice -
+ * once for whether the window needs drawing at all, once when it is
+ * drawn - and a digest is a scan of every pixel of it. */
+bool canvas_changed(const Shown& s, const vnu::wintask::Console& con,
+                    uint64_t digest)
+{
+    if (s.canvas_w != con.pix_w || s.canvas_h != con.pix_h)
+        return true;
+    return digest != s.canvas;
+}
 
 /* True when the frame on the screen already holds what this window
  * would draw: the same rectangle, the same title (the panel and the
  * title bar show it) and, for a text window, the same characters in the
  * same places. The cursor is part of the last two: it is a block in the
  * cell grid and moves with cur_col, so a console whose cursor blinked
- * somewhere else is a different frame. */
-bool same_window(const Shown& s, const Window& w, const vnu::wintask::Console& con)
+ * somewhere else is a different frame. `digest` is this pass's reading
+ * of a gfx window's canvas (see canvas_changed). */
+bool same_window(const Shown& s, const Window& w, const vnu::wintask::Console& con,
+                 uint64_t digest)
 {
     if (!same_rect(s.rect, w))
         return false;
@@ -264,7 +345,7 @@ bool same_window(const Shown& s, const Window& w, const vnu::wintask::Console& c
         if (s.title[i] != con.title[i])
             return false;
     if (con.gfx)
-        return true;   /* the canvas is the app's, and it is always redrawn */
+        return !canvas_changed(s, con, digest);
     if (s.hist_tail != con.hist_tail || s.hist_n != con.hist_n ||
         s.scroll_off != con.scroll_off || s.cur_row != con.cur_row ||
         s.cur_col != con.cur_col)
@@ -470,10 +551,11 @@ void clamp_to_desktop(Window& win)
     if (win.y + win.h > vnu::vgfx::height()) win.y = vnu::vgfx::height() - win.h;
 }
 
-void draw_chrome(const Window& win, bool active)
+void draw_chrome(const Window& win, bool active, bool fill_client = true)
 {
     using namespace vnu::vgfx;
-    fill_rect(win.x, win.y, win.w, win.h, COLOR_LGRAY);
+    if (fill_client)
+        fill_rect(win.x, win.y, win.w, win.h, COLOR_LGRAY);
     rect(win.x, win.y, win.w, win.h, COLOR_BLACK);
     /* Flat chrome: light edge at top/left, dark bottom/right. */
     hline(win.x + 1, win.y + 1, win.w - 2, COLOR_WHITE);
@@ -592,7 +674,12 @@ void draw_console_window(const Window& win, const vnu::wintask::Console& con, bo
 
 void draw_gfx_window(const Window& win, const vnu::wintask::Console& con, bool active)
 {
-    draw_chrome(win, active);
+    /* The client area is left alone: the canvas covers it pixel for
+     * pixel, so filling it first would be paint the blit below writes
+     * over - half a window's worth per open, per raise and per repaint.
+     * What shows through instead is the desktop, which is what a canvas
+     * with transparent pixels is for. */
+    draw_chrome(win, active, /*fill_client=*/false);
     using namespace vnu::vgfx;
     draw_string(win.x + 4, win.y + 2, con.title, active ? COLOR_BLACK : COLOR_WHITE);
     int cw = win.w - 8;
@@ -1209,6 +1296,10 @@ void run(const char* open_app)
     static Shown shown[MAX_TASKS];
     static Rect restore[MAX_TASKS + 3];
     static bool redraw[MAX_TASKS];
+    /* This pass's reading of each gfx window's canvas, so a window that
+     * has to be painted and then checked again is scanned once (see
+     * canvas_hash). */
+    static uint64_t digest_of[MAX_TASKS];
     static int shown_mx, shown_my;
     static TaskHandle shown_focused = NO_TASK;
     static vnu::vgfx::CursorShape shown_cursor =
@@ -1596,7 +1687,20 @@ void run(const char* open_app)
         for (int i = 0; i < MAX_TASKS; ++i)
             redraw[i] = false;
         redraw_icons = false;
-        redraw_panel = window_list_changed;
+        /* Both of these are this pass's, cleared here and set again by
+         * whatever below has something new to say: the focus that moved,
+         * a window that left pixels bare, a canvas that was reallocated.
+         *
+         * The panel is the expensive one - it is a full-width strip of
+         * buttons and icons - so a flag left standing across passes would
+         * repaint it (and hand the host its 1024x34) for the rest of the
+         * session, once per pass, over a panel that has not changed since
+         * the last time. */
+        redraw_panel = false;
+        if (window_list_changed) {
+            redraw_panel = true;
+            window_list_changed = false;
+        }
 
         /* Redraw, as layers, and only where the layer underneath has
          * actually changed (see the damage notes in vga_gfx.h: at 32bpp
@@ -1663,7 +1767,15 @@ void run(const char* open_app)
              * of itself on the screen. */
             const bool up = live && !minimized[h];
             const bool was_up = shown[h].up;
-            if (up == was_up && up && same_window(shown[h], geom[h], *con)) {
+            /* A gfx window's pixels are the app's own, and this is where
+             * they are read: one digest per window per pass, for the two
+             * questions below that need one. A text window has no canvas
+             * and reads nothing. */
+            const uint64_t digest = (up && con->gfx)
+                                        ? canvas_hash(*con)
+                                        : 0;
+            digest_of[h] = digest;
+            if (up == was_up && up && same_window(shown[h], geom[h], *con, digest)) {
                 /* Same window, same place, same pixels: the frame on
                  * the screen already holds it. */
                 continue;
@@ -1720,11 +1832,10 @@ void run(const char* open_app)
         }
 
         /* Layer 3: the windows, in z-order, so one that changed is never
-         * painted under one that did not. A gfx window is redrawn every
-         * pass whatever its state: the app writes its own pixels into
-         * the shared canvas behind the compositor's back, and telling
-         * "it changed" from "it looks the same" is the app's protocol to
-         * grow, not something a memcmp of its canvas can answer. */
+         * painted under one that did not. A gfx window is entered here
+         * when its canvas has new pixels in it: the app writes them
+         * itself, into the pages the compositor reads, so the canvas is
+         * where "something changed" is answered (see canvas_hash). */
         for (int i = 0; i < order_len; ++i) {
             TaskHandle h = order[i];
             if (minimized[h])
@@ -1732,7 +1843,7 @@ void run(const char* open_app)
             vnu::wintask::Console* con = vnu::wintask::console(h);
             if (!con)
                 continue;
-            if (redraw[h] || con->gfx) {
+            if (redraw[h] || (con->gfx && canvas_changed(shown[h], *con, digest_of[h]))) {
                 /* An app that resized its own canvas has moved the
                  * window without touching it, so the chrome is brought
                  * back into agreement before the blit: the two have to
@@ -1755,6 +1866,16 @@ void run(const char* open_app)
                 else
                     draw_console_window(win, *con, h == focused);
                 vnu::vgfx::damage_add(win.x, win.y, win.w, win.h);
+                /* What the frame now holds, so the next pass can tell a
+                 * window that needs painting from one that does not.
+                 * A window that was skipped as fully covered keeps the
+                 * old digest on purpose: nothing of it is on the screen,
+                 * so the next pass must still find it worth drawing. */
+                if (con->gfx) {
+                    shown[h].canvas = digest_of[h];
+                    shown[h].canvas_w = con->pix_w;
+                    shown[h].canvas_h = con->pix_h;
+                }
             }
         }
 
