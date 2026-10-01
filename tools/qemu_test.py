@@ -1659,10 +1659,10 @@ def run_gfx_canvas_resize(guest, result, verbose, timeout=60.0):
             for attempt in range(3):
                 if occl_goto(guest, corner) is None:
                     continue
-                guest.qmp.hmp("mouse_button 1")
+                mouse_button(guest, True)
                 time.sleep(0.3)
                 occl_run(guest, RESIZE_DRAG_X, RESIZE_DRAG_Y)
-                guest.qmp.hmp("mouse_button 0")
+                mouse_button(guest, False)
                 time.sleep(1.5)
                 dragged = shot("dragged%d.ppm" % attempt)
                 grown = window_box(dragged, bare)
@@ -1799,12 +1799,38 @@ def mouse_move(guest, dx, dy):
         time.sleep(MOUSE_STEP)
 
 
+def mouse_button(guest, down):
+    """Set the left button to `down`, as a state and not as a toggle.
+
+    QMP's input-send-event says which state the button is in, where the
+    human-monitor `mouse_button` command only ever presses: a
+    `mouse_button 0` there is not a release, so one click anywhere in
+    the run leaves the host holding the button down for the rest of the
+    boot. Every mouse packet after that carries "button down", the
+    desktop's press-and-release edge never happens again, and the next
+    click of the run does nothing at all.
+
+    That matters most for the click that ends a desktop session (the
+    panel's Exit button): the guest has already turned reporting off by
+    the time the release would be sent, so the host keeps the button
+    down into the next session."""
+    event = {"type": "btn", "data": {"down": down, "button": "left"}}
+    guest.qmp.cmd("input-send-event", events=[event])
+    time.sleep(0.25)
+
+
 def mouse_click(guest):
     """Press and release the left button, then let the desktop settle
-    and the click's effects clear."""
-    guest.qmp.hmp("mouse_button 1")
-    time.sleep(0.25)
-    guest.qmp.hmp("mouse_button 0")
+    and the click's effects clear.
+
+    The release comes first, and not just to be tidy: a click whose
+    press closed the desktop leaves nothing to release it, so the next
+    click in the run would be swallowed by a button that is still down
+    from the last one (see mouse_button). Sending the release while the
+    desktop is up again re-establishes the state the press needs."""
+    mouse_button(guest, False)
+    mouse_button(guest, True)
+    mouse_button(guest, False)
     time.sleep(0.5)
 
 
@@ -2248,16 +2274,13 @@ def occl_goto(guest, target, tries=3):
 
 
 # What the two occlusion sessions are expected to cost, and how far apart
-# their frames may be. The desktop repaints a few strips a session (the
-# panel, the pointer, whatever the terminal is typing), so a control
-# What the two occlusion sessions are expected to cost, and how far apart
 # their frames may be. A session is not free: the terminal repaints itself
 # whenever the shell inside it blinks or prints, and every one of those
 # repaints is charged for as the window's whole rectangle joined to the
 # pointer's box, since a transfer presents one bounding box for all of its
 # damage. A session that walks the pointer off the calculator's tile, parks
-# it on the floor and walks it to the Exit button moves about 130MB that
-# way, so OCCLUSION_CEIL is twice that: a sanity bound saying a session
+# it on the floor and walks it to the Exit button moves about 15MB that
+# way, so OCCLUSION_CEIL is many times over: a sanity bound saying a session
 # costs about what an honest session costs, which is what catches a desktop
 # that has started painting the screen on every pass - a whole frame is 3MB
 # and a session has hundreds of passes.
@@ -2274,8 +2297,13 @@ OCCLUSION_SHOT_TOL = 2000
 # A session with a window behind the terminal costs a little more than one
 # without it - the click that opens it, the button it puts in the panel -
 # but not a fraction of a screen more, which is what painting it on every
-# pass would come to.
-OCCLUSION_EXTRA = 0.05
+# pass would come to. What it costs in practice is under a megabyte of a
+# fifteen-megabyte session, and the ratio only reads that way because the
+# desktop no longer presents a screenful nobody asked for: a compositor
+# that composited the hidden window anyway moved 24MB more than the session
+# without it, fifteen times this bound, so the bound still has the whole
+# regression to catch with room for the noise either side.
+OCCLUSION_EXTRA = 0.10
 
 
 def run_occlusion(guest, result, verbose):
