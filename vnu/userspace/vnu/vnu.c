@@ -50,7 +50,7 @@ static char* find_ch(const char* s, char c)
 
 /* Copy at most cap-1 bytes of `src` (stopping at its end) and
  * NUL-terminate. Blanks at either end are dropped: values cut out of
- * /proc text ("0.5 (vibe) i386" sliced at the paren) are full of them. */
+ * /proc text ("0.7 (Canyon) i386" sliced at the paren) are full of them. */
 static void set_str(char* dst, int cap, const char* src)
 {
     if (cap < 1)
@@ -223,8 +223,8 @@ struct VerInfo {
 };
 
 /* /proc/version is one `key value` fact per line, e.g.
- *   version 0.5 (vibe) i386
- *   kernel 0.5.0
+ *   version 0.7 (Canyon) i386
+ *   kernel 0.7.0
  *   abi 1
  *   built 2026-09-26 11:02:03
  * Reading it (rather than re-declaring the numbers here) is what keeps
@@ -247,7 +247,7 @@ static void read_version(struct VerInfo* vi)
         char* open = find_ch(v, '(');
         char* close = open ? find_ch(open, ')') : 0;
         if (open && close) {
-            /* "0.5 (vibe) i386" -> os "0.5", codename "vibe" */
+            /* "0.7 (Canyon) i386" -> os "0.7", codename "Canyon" */
             int n = (int)(open - v);
             if (n > 0) {
                 char* tmp = v;
