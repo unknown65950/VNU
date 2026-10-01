@@ -2295,15 +2295,26 @@ def occl_goto(guest, target, tries=3):
 OCCLUSION_CEIL = 260 * 1024 * 1024
 OCCLUSION_SHOT_TOL = 2000
 # A session with a window behind the terminal costs a little more than one
-# without it - the click that opens it, the button it puts in the panel -
-# but not a fraction of a screen more, which is what painting it on every
-# pass would come to. What it costs in practice is under a megabyte of a
-# fifteen-megabyte session, and the ratio only reads that way because the
-# desktop no longer presents a screenful nobody asked for: a compositor
-# that composited the hidden window anyway moved 24MB more than the session
-# without it, fifteen times this bound, so the bound still has the whole
-# regression to catch with room for the noise either side.
+# without it, but not a fraction of a screen more, which is what painting
+# it on every pass would come to. Only part of that extra scales with the
+# session: the rest is the window being there at all - the click that
+# opened it, its first composite, the button it puts in the panel - and
+# that is one rectangle of damage however long the session goes on. So the
+# extra is bounded by whichever is larger, a tenth of the control or one
+# whole frame, and it is the tenth that still catches the regression this
+# exists for: a compositor that composited the hidden window anyway moved
+# 24MB more than the session without it, which is eight frames, so the
+# bound keeps the whole of it with room for the noise either side.
+#
+# The frame is in there because the control is not a fixed size, and has
+# just got seven times smaller. It used to move about 15MB, nearly all of
+# it the pointer walking over the calculator's tile and being answered
+# with a repaint of the whole window under it; a desktop that repaints
+# only the pixels the pointer covered moves a seventh of that, and against
+# a seventh the tenth no longer covers the cost of opening the window at
+# all - which is the point of the fix, not a thing to be lenient about.
 OCCLUSION_EXTRA = 0.10
+OCCLUSION_FRAME = 1024 * 768 * 4
 
 
 def run_occlusion(guest, result, verbose):
@@ -2458,11 +2469,13 @@ def run_occlusion(guest, result, verbose):
                             "terminal moved %d bytes, over the %d an "
                             "honest session costs"
                             % (covered, OCCLUSION_CEIL))
-        if bare is not None and covered - bare > int(bare * OCCLUSION_EXTRA):
-            problems.append("the window under the terminal cost %d bytes "
-                            "more than the session without it, over the %d "
-                            "more such a session is allowed"
-                            % (covered - bare, int(bare * OCCLUSION_EXTRA)))
+        if bare is not None:
+            allowed = max(int(bare * OCCLUSION_EXTRA), OCCLUSION_FRAME)
+            if covered - bare > allowed:
+                problems.append("the window under the terminal cost %d bytes "
+                                "more than the session without it, over the %d "
+                                "more such a session is allowed"
+                                % (covered - bare, allowed))
     if bare_shot is not None and covered_shot is not None:
         apart = diff_pixels(bare_shot, covered_shot)
         print("    the two parked frames differ by %d pixels" % apart)
