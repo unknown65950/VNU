@@ -512,6 +512,11 @@ SUITE = [
     ("man-vibecommander-text", "cat /tmp/man-vc.out",
      [r"^NAME$", r"vibecommander - two-panel file manager",
       r"^KEYS$", r"\bF5 copy\b"], []),
+    ("man-sticky", "man sticky > /tmp/man-sticky.out",
+     [], [r"press h for help"]),
+    ("man-sticky-text", "cat /tmp/man-sticky.out",
+     [r"^NAME$", r"sticky - a sticky note for the desktop",
+      r"^KEYS$", r"^FILES$", r"/root/\.sticky-note"], []),
     # -- fork(2) --------------------------------------------------------
     # `forkdemo` prints one line per claim the kernel makes about a
     # forked child: two processes that run at the same time, separate
@@ -1753,6 +1758,7 @@ ICONS = {
     "prefs": (180, 102),
     "clock": (260, 102),
     "play": (20, 150),
+    "sticky": (100, 150),
 }
 
 # QEMU delivers pointer motion to the guest's PS/2 mouse (the model

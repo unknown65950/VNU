@@ -34,6 +34,7 @@ echo "==> userspace"
 "$VCC" "$ROOT/vnu/userspace/gui/prefs.c" -o "$ROOT/sysroot/bin/prefs"
 "$VCC" "$ROOT/vnu/userspace/gui/picview.c" -o "$ROOT/sysroot/bin/picview"
 "$VCC" "$ROOT/vnu/userspace/gui/clock.c" -o "$ROOT/sysroot/bin/clock"
+"$VCC" "$ROOT/vnu/userspace/gui/sticky.c" -o "$ROOT/sysroot/bin/sticky"
 "$VCC" "$ROOT/vnu/userspace/examples/hello/hello.c" -o "$ROOT/sysroot/bin/hello"
 "$VCC" "$ROOT/vnu/userspace/examples/vprobe.c" -o "$ROOT/sysroot/bin/vprobe"
 "$VCC" "$ROOT/vnu/userspace/examples/tlsdemo.c" -o "$ROOT/sysroot/bin/tlsdemo"
@@ -68,6 +69,7 @@ embed "$ROOT/sysroot/bin/prefs" prefs
 embed "$ROOT/sysroot/bin/picview" picview
 embed "$ROOT/sysroot/bin/clock" clock
 embed "$ROOT/sysroot/bin/play" play
+embed "$ROOT/sysroot/bin/sticky" sticky
 embed "$ROOT/vnu/userspace/gui/sounds/chime.wav" wav_chime
 embed "$ROOT/vnu/userspace/gui/sounds/melody.wav" wav_melody
 embed "$ROOT/vnu/userspace/gui/sounds/beep.wav" wav_beep

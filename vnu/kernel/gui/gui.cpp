@@ -80,20 +80,6 @@ Rect both_rects(const Rect& a, const Rect& b)
     return {x0, y0, x1 - x0, y1 - y0};
 }
 
-/* Half-open on both sides, so touching edges are not an overlap. Two
- * shapes, because a window and a region are asked about each other from
- * both directions. */
-bool overlaps(const Rect& a, const Rect& b)
-{
-    return a.w > 0 && a.h > 0 && b.w > 0 && b.h > 0 && a.x < b.x + b.w &&
-           b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-}
-
-bool overlaps(const Rect& r, const Window& w)
-{
-    return overlaps(r, Rect{w.x, w.y, w.w, w.h});
-}
-
 /* The part of `a` that lies inside `b`, empty when there is none.
  * Half-open both ways, like the rest of the rect work here. */
 Rect clip_rect(const Rect& a, const Rect& b)
@@ -408,6 +394,20 @@ void glyph_doc(int x, int y)
     hline(ox + 3, oy + 10, 6, COLOR_BLACK);
 }
 
+void glyph_note(int x, int y)
+{
+    using namespace vnu::vgfx;
+    const int ox = x + 3, oy = y + 3;
+    rect(ox, oy, 18, 18, COLOR_BLACK);                  /* the note */
+    fill_rect(ox + 1, oy + 1, 16, 16, COLOR_WHITE);
+    hline(ox + 3, oy + 5, 11, COLOR_BLACK);             /* what is written */
+    hline(ox + 3, oy + 9, 11, COLOR_BLACK);
+    hline(ox + 3, oy + 13, 7, COLOR_BLACK);
+    /* the corner turned up, which is what makes it a note and not a page */
+    for (int i = 0; i < 6; ++i)
+        fill_rect(ox + 16 - i, oy + 16 - i, i + 1, 1, COLOR_LGRAY);
+}
+
 void glyph_term(int x, int y)
 {
     using namespace vnu::vgfx;
@@ -500,6 +500,7 @@ void draw_app_tile(int x, int y, const vnu::apps::AppEntry& app)
     switch (app.icon_glyph) {
     case vnu::apps::IconGlyph::ICON_SMILE:   glyph_smile(x, y); break;
     case vnu::apps::IconGlyph::ICON_DOC:     glyph_doc(x, y); break;
+    case vnu::apps::IconGlyph::ICON_NOTE:    glyph_note(x, y); break;
     case vnu::apps::IconGlyph::ICON_TERM:    glyph_term(x, y); break;
     case vnu::apps::IconGlyph::ICON_KEYPAD:  glyph_keypad(x, y); break;
     case vnu::apps::IconGlyph::ICON_FOLDER:  glyph_folder(x, y); break;

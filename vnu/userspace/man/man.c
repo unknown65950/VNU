@@ -886,6 +886,47 @@ KEYS\n\
     the last digit, Esc closes the window. Launched from the\n\
     desktop or as /apps/calc/bin; not reachable from the shell.\n"
 
+#define STICKY_PAGE "NAME\n\
+    sticky - a sticky note for the desktop\n\
+\n\
+SYNOPSIS\n\
+    sticky\n\
+\n\
+DESCRIPTION\n\
+    A window holding one note. Type into it and it is kept: the text is\n\
+    written to /root/.sticky-note within a second of the last change, and\n\
+    again when the window is closed, so opening the note again - or\n\
+    restarting the whole desktop - gives back what was last written\n\
+    rather than an empty page.\n\
+\n\
+    The status line names the file the note lives in and says whether it\n\
+    has been written, so a note that is still only in the window cannot\n\
+    be mistaken for one that is on disk.\n\
+\n\
+    The editor is the small one a note needs: printable keys, Enter,\n\
+    Backspace, Delete, the arrows, Home and End. A row that reaches the\n\
+    right margin does not wrap, so a long line is scrolled sideways to\n\
+    keep the caret on screen, and a note longer than the window is\n\
+    scrolled vertically to keep the row being edited in view.\n\
+\n\
+KEYS\n\
+    printable keys  type into the note\n\
+    Enter            start a new line\n\
+    Backspace        delete backwards, joining lines at the start\n\
+    Delete           delete forwards\n\
+    Arrows, Home, End  move the caret\n\
+    a click          put the caret where it landed\n\
+    Esc              save if needed and close the window\n\
+\n\
+    The two buttons under the note save it at once and empty it.\n\
+\n\
+FILES\n\
+    /root/.sticky-note  the note itself, rewritten as it changes\n\
+\n\
+    Like the rest of the RAM filesystem that file is gone at reboot,\n\
+    where the desktop comes back with an empty note.\n\
+"
+
 #define FILES_PAGE "NAME\n\
     files - graphical file manager\n\
 \n\
@@ -1413,6 +1454,8 @@ static const struct Page pages[] = {
      CLOCK_PAGE},
     {"play",     "WAV sound player for the desktop",
      PLAY_PAGE},
+    {"sticky",   "a sticky note for the desktop",
+     STICKY_PAGE},
     {"hello",    "demonstration program",
      HELLO_PAGE},
     {"ttytest",  "POSIX compatibility smoke test",

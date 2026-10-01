@@ -15,6 +15,7 @@
 #include "../proc/embedded_picview.h"
 #include "../proc/embedded_clock.h"
 #include "../proc/embedded_play.h"
+#include "../proc/embedded_sticky.h"
 #include "../proc/embedded_wav_chime.h"
 #include "../proc/embedded_wav_melody.h"
 #include "../proc/embedded_wav_beep.h"
@@ -108,6 +109,7 @@ void install_demo_apps()
     install_one("prefs", vnu::vgfx::COLOR_LBLUE, IconGlyph::ICON_SLIDERS, embedded_prefs_elf, embedded_prefs_elf_size);
     install_one("clock", vnu::vgfx::COLOR_LGREEN, IconGlyph::ICON_CLOCK, embedded_clock_elf, embedded_clock_elf_size);
     install_one("play", vnu::vgfx::COLOR_LBLUE, IconGlyph::ICON_MUSIC, embedded_play_elf, embedded_play_elf_size);
+    install_one("sticky", vnu::vgfx::COLOR_YELLOW, IconGlyph::ICON_NOTE, embedded_sticky_elf, embedded_sticky_elf_size);
 }
 
 /* Mount the demo photograph pack under /etc/vnu/pics so picview has

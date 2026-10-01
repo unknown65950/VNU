@@ -31,6 +31,7 @@ enum IconGlyph {
     ICON_SLIDERS,    // prefs — slider rows
     ICON_CLOCK,      // clock — analogue face
     ICON_MUSIC,      // play — quarter note
+    ICON_NOTE,       // sticky — a note with its corner turned up
 };
 
 struct AppEntry {
