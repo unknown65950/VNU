@@ -71,7 +71,7 @@ bool same_rect(const Window& a, const Window& b)
 /* The smallest box holding both, which is what a moved window leaves
  * behind: where it was and where it is now. Repainting the wallpaper
  * over both is what puts the ground back under it. */
-Rect both_rects(const Window& a, const Window& b)
+Rect both_rects(const Rect& a, const Rect& b)
 {
     const int x0 = a.x < b.x ? a.x : b.x;
     const int y0 = a.y < b.y ? a.y : b.y;
@@ -1296,6 +1296,11 @@ void run(const char* open_app)
     static Shown shown[MAX_TASKS];
     static Rect restore[MAX_TASKS + 3];
     static bool redraw[MAX_TASKS];
+    /* The part of each window that has to be painted because something
+     * under it was put back, as a box: empty (w == 0) for a window that
+     * does not need this, and the whole rectangle for one whose own
+     * pixels changed anyway. See the repair loop in the pass below. */
+    static Rect repair[MAX_TASKS];
     /* This pass's reading of each gfx window's canvas, so a window that
      * has to be painted and then checked again is scanned once (see
      * canvas_hash). */
@@ -1684,8 +1689,10 @@ void run(const char* open_app)
          * to draw again, and the two elements that are a function of
          * the window list rather than of a window. */
         int restore_n = 0;
-        for (int i = 0; i < MAX_TASKS; ++i)
+        for (int i = 0; i < MAX_TASKS; ++i) {
             redraw[i] = false;
+            repair[i] = Rect{0, 0, 0, 0};
+        }
         redraw_icons = false;
         /* Both of these are this pass's, cleared here and set again by
          * whatever below has something new to say: the focus that moved,
@@ -1783,7 +1790,10 @@ void run(const char* open_app)
             if (up) {
                 redraw[h] = true;
                 if (was_up && !same_rect(shown[h].rect, geom[h]))
-                    restore[restore_n++] = both_rects(shown[h].rect, geom[h]);
+                    restore[restore_n++] = both_rects(
+                        Rect{shown[h].rect.x, shown[h].rect.y,
+                             shown[h].rect.w, shown[h].rect.h},
+                        Rect{geom[h].x, geom[h].y, geom[h].w, geom[h].h});
             } else if (was_up) {
                 /* It went away, or was minimized: what it covered
                  * belongs to the desktop again. */
@@ -1806,36 +1816,91 @@ void run(const char* open_app)
 
         /* Anything drawn into a region that has just been put back has
          * to go again on top of the wallpaper, whether it changed or
-         * not. */
+         * not.
+         *
+         * Only the overlap though, not the whole window. The pointer
+         * moves over a window without changing anything about it, and it
+         * leaves a 16x16 box behind - so a full 640x400 window (a blit
+         * of its cell grid and a transfer of every pixel of it) for
+         * sixteen pixels of ground the wallpaper had just put back. That
+         * is the whole cost of moving the mouse, and it is what makes a
+         * pass with nothing in it but a pointer a slow one.
+         *
+         * So each window remembers the part of it that is showing
+         * through a hole: the union of what the restore regions took out
+         * of it, and the whole rectangle when the window's own pixels
+         * changed (redraw), which is drawn whole below either way. */
         for (int i = 0; i < restore_n; ++i)
-            for (int h = 0; h < MAX_TASKS; ++h)
-                if (vnu::wintask::has_window(h) && !minimized[h] &&
-                    overlaps(restore[i], geom[h]))
-                    redraw[h] = true;
+            for (int h = 0; h < MAX_TASKS; ++h) {
+                if (!vnu::wintask::has_window(h) || minimized[h])
+                    continue;
+                const Rect win = {geom[h].x, geom[h].y, geom[h].w, geom[h].h};
+                const Rect part = clip_rect(restore[i], win);
+                if (part.w <= 0 || part.h <= 0)
+                    continue;
+                if (repair[h].w <= 0) {
+                    repair[h] = part;
+                } else {
+                    repair[h] = both_rects(repair[h], part);
+                }
+            }
+        /* The panel and the icons are desktop furniture, painted like a window
+         * and clipped the same way: only the part of them the restore
+         * regions took is repainted. A panel is a full-width strip, so a
+         * pointer crossing it 16 pixels at a time is 34 rows of buttons
+         * and icons repainted per move, each one of them a full-width
+         * damage; the strip is 1024x34 and the pointer's box is 16x16.
+         *
+         * A flag of their own rather than redraw_panel, because the panel
+         * also has to be drawn whole when its contents change (the focus
+         * moved, a window appeared) - that is redraw_panel, set below and
+         * in the pass above. */
+        Rect repair_icons = {0, 0, 0, 0};
+        Rect repair_panel = {0, 0, 0, 0};
         if (restore_n > 0) {
             const Rect icons = icon_area(app_count);
             const Rect panel = {0, 0, vnu::vgfx::width(), PANEL_H};
             for (int i = 0; i < restore_n; ++i) {
-                if (overlaps(restore[i], icons))
-                    redraw_icons = true;
-                if (overlaps(restore[i], panel))
-                    redraw_panel = true;
+                const Rect ip = clip_rect(restore[i], icons);
+                if (ip.w > 0 && ip.h > 0)
+                    repair_icons = repair_icons.w > 0
+                                       ? both_rects(repair_icons, ip) : ip;
+                const Rect pp = clip_rect(restore[i], panel);
+                if (pp.w > 0 && pp.h > 0)
+                    repair_panel = repair_panel.w > 0
+                                       ? both_rects(repair_panel, pp) : pp;
             }
         }
 
         /* Layer 2: the icons, which the desktop never changes after it
          * has listed them. */
-        if (redraw_icons) {
-            draw_icons(apps, app_count);
+        if (redraw_icons || repair_icons.w > 0) {
             const Rect icons = icon_area(app_count);
-            vnu::vgfx::damage_add(icons.x, icons.y, icons.w, icons.h);
+            if (repair_icons.w > 0 && !redraw_icons)
+                vnu::vgfx::clip_set(repair_icons.x, repair_icons.y,
+                                    repair_icons.w, repair_icons.h);
+            draw_icons(apps, app_count);
+            if (repair_icons.w > 0 && !redraw_icons) {
+                vnu::vgfx::clip_pop();
+                vnu::vgfx::damage_add(repair_icons.x, repair_icons.y,
+                                      repair_icons.w, repair_icons.h);
+            } else {
+                vnu::vgfx::damage_add(icons.x, icons.y, icons.w, icons.h);
+            }
         }
 
         /* Layer 3: the windows, in z-order, so one that changed is never
          * painted under one that did not. A gfx window is entered here
          * when its canvas has new pixels in it: the app writes them
          * itself, into the pages the compositor reads, so the canvas is
-         * where "something changed" is answered (see canvas_hash). */
+         * where "something changed" is answered (see canvas_hash).
+         *
+         * A window that is only here because the ground under a piece of
+         * it was put back is drawn clipped to that piece, and only that
+         * piece is damaged: the rest of the frame already holds this
+         * window and this pass has not touched a pixel of it. The
+         * drawing calls all clip (see vga_gfx.h), so this is a smaller
+         * version of the same pass rather than a different one. */
         for (int i = 0; i < order_len; ++i) {
             TaskHandle h = order[i];
             if (minimized[h])
@@ -1843,13 +1908,18 @@ void run(const char* open_app)
             vnu::wintask::Console* con = vnu::wintask::console(h);
             if (!con)
                 continue;
-            if (redraw[h] || (con->gfx && canvas_changed(shown[h], *con, digest_of[h]))) {
+            const bool own_change = redraw[h] ||
+                (con->gfx && canvas_changed(shown[h], *con, digest_of[h]));
+            /* What this window owes the host: itself, or the piece of it
+             * that is showing through a hole. */
+            const bool partial = !own_change && repair[h].w > 0;
+            if (own_change || partial) {
                 /* An app that resized its own canvas has moved the
                  * window without touching it, so the chrome is brought
                  * back into agreement before the blit: the two have to
                  * match or the app's layout is scaled, which is what the
                  * fixed canvas used to do. */
-                if (con->gfx && adopt_canvas(con, geom[h])) {
+                if (own_change && con->gfx && adopt_canvas(con, geom[h])) {
                     vnu::vgfx::damage_add(geom[h].x, geom[h].y, geom[h].w, geom[h].h);
                     redraw_panel = true;
                 }
@@ -1858,20 +1928,33 @@ void run(const char* open_app)
                  * composited: drawing it would be overdraw nothing shows,
                  * and damaging it would charge the host for a screen that
                  * did not change. It stays alive and keeps its canvas -
-                 * as soon as anything above it moves, it is drawn again. */
-                if (fully_covered(i, win, geom, order, order_len, minimized))
+                 * as soon as anything above it moves, it is drawn again.
+                 * A partial repaint is only ever over a hole, which is by
+                 * definition showing, so it goes through either way. */
+                if (own_change && fully_covered(i, win, geom, order, order_len,
+                                                minimized))
                     continue;
+                if (partial) {
+                    vnu::vgfx::clip_set(repair[h].x, repair[h].y,
+                                        repair[h].w, repair[h].h);
+                }
                 if (con->gfx)
                     draw_gfx_window(win, *con, h == focused);
                 else
                     draw_console_window(win, *con, h == focused);
-                vnu::vgfx::damage_add(win.x, win.y, win.w, win.h);
+                if (partial) {
+                    vnu::vgfx::clip_pop();
+                    vnu::vgfx::damage_add(repair[h].x, repair[h].y,
+                                          repair[h].w, repair[h].h);
+                } else {
+                    vnu::vgfx::damage_add(win.x, win.y, win.w, win.h);
+                }
                 /* What the frame now holds, so the next pass can tell a
                  * window that needs painting from one that does not.
                  * A window that was skipped as fully covered keeps the
                  * old digest on purpose: nothing of it is on the screen,
                  * so the next pass must still find it worth drawing. */
-                if (con->gfx) {
+                if (con->gfx && !partial) {
                     shown[h].canvas = digest_of[h];
                     shown[h].canvas_w = con->pix_w;
                     shown[h].canvas_h = con->pix_h;
@@ -1881,11 +1964,22 @@ void run(const char* open_app)
 
         /* Layer 4: the panel, which is a function of the focus, the open
          * windows and the mode - so it changes when any of those do, and
-         * not otherwise. */
-        if (redraw_panel) {
+         * not otherwise. A repair region on its own is the pointer
+         * crossing it, which does not change what it says. */
+        if (redraw_panel || repair_panel.w > 0) {
+            const bool whole = redraw_panel;
+            if (!whole)
+                vnu::vgfx::clip_set(repair_panel.x, repair_panel.y,
+                                    repair_panel.w, repair_panel.h);
             panel_n = layout_panel(panel_btns, focused, apps, app_count);
             draw_panel(panel_btns, panel_n, apps, app_count);
-            vnu::vgfx::damage_add(0, 0, vnu::vgfx::width(), PANEL_H);
+            if (whole) {
+                vnu::vgfx::damage_add(0, 0, vnu::vgfx::width(), PANEL_H);
+            } else {
+                vnu::vgfx::clip_pop();
+                vnu::vgfx::damage_add(repair_panel.x, repair_panel.y,
+                                      repair_panel.w, repair_panel.h);
+            }
         }
 
         if (dnd_active && drag_path[0]) {
