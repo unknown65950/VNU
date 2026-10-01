@@ -983,9 +983,14 @@ void draw_wallpaper()
          * up in the palette first, which is the loop below. */
         const uint8_t* src = vnu::wallpaper::frame();
         const unsigned long n = static_cast<unsigned long>(cx1 - cx0);
+        /* cx0 is a pixel, so the frame pointer steps in pixel_bytes() -
+         * one byte at 8bpp and four on a 32bpp virtio-gpu scanout, where
+         * the region the wallpaper is asked for is a quarter of where a
+         * byte offset puts it. */
+        const long xb = static_cast<long>(cx0) * pixel_bytes();
         for (int y = cy0; y < cy1; ++y) {
             const uint8_t* in = src + static_cast<long>(y) * g_width + cx0;
-            uint8_t* row = row_ptr(y) + static_cast<long>(cx0);
+            uint8_t* row = row_ptr(y) + xb;
             if (g_bpp == 8) {
                 memcpy(row, in, n);
                 continue;
