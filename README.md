@@ -184,7 +184,7 @@ Kernel output and userspace fd1/fd2 are mirrored to COM1, which is the log
 the assertions read.
 
 ```bash
-make test                      # 76 cases: vnu, /proc, uname, hostname, coreutils,
+make test                      # 90 cases: vnu, /proc, uname, hostname, coreutils,
                                #   man, /etc/vnu media and wallpaper, plus the
                                #   interactive man pager and prefs sessions
 make test-gpu                  # the same suite on a virtio-gpu display
@@ -216,7 +216,8 @@ after the table, so `make test` covers both.
 - New syscalls only as an append to both `abi.h` copies + `vnu/abi/ABI.md`.
 
 The full ruleset is in `AGENTS.md`. GUI/window history and known
-limitations are in `vnu/VIBEGRAPHICS_CHANGES.md`.
+limitations are in `vnu/VIBEGRAPHICS_CHANGES.md`. What a given release
+contains is in `RELEASE_NOTES.md`.
 
 ## License
 
