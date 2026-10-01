@@ -28,9 +28,17 @@
  */
 #pragma once
 
-/* 480x340 is a native 8x16 text grid (60 cols x 21 rows), so a gfx
- * app's text lands at the same physical size as every console window —
- * the GUI displays this canvas 1:1. The *size* of a pixel in bytes is
+/* Where a gfx window *opens*: 480x340 is a native 8x16 text grid
+ * (60 cols x 21 rows), so a gfx app's text lands at the same physical
+ * size as every console window and the GUI can display the canvas 1:1.
+ *
+ * It is where the canvas starts, not what it is: it follows the
+ * window's client area, which the user can change by dragging the
+ * window's edge. An app that draws to fill its window asks for the size
+ * it wants with vgfx_canvas(), and on SIGWINCH asks again and redraws.
+ * Every vgfx primitive measures off the size the kernel granted, not
+ * off these two - so drawing past them is not an error, it just is not
+ * where anything will ever show up. The *size of a pixel* in bytes is
  * the display's, not this header's: see the note at the top. */
 #define VGFX_W 480
 #define VGFX_H 340
@@ -65,6 +73,7 @@
 #define VGFX_EV_RELEASE 3
 #define VGFX_EV_DROP    4
 #define VGFX_EV_DRAG_CANCEL 5
+#define VGFX_EV_RESIZE  6
 
 typedef struct {
     int type;     /* VGFX_EV_* */
@@ -125,11 +134,54 @@ void vgfx_put_rgb_dither(int x, int y, unsigned int rgb);
  * it reads well at the end of a draw call. */
 void vgfx_flush(void);
 
+/* Asks for a canvas of w x h (0 on either axis leaves that one alone) and
+ * adopts whatever the kernel grants, which the caller reads back with
+ * vgfx_size(). The request is clamped, so a size too small or too large
+ * comes back granted differently rather than refused: `w` x `h` is a
+ * wish, and the answer is the size to draw at.
+ *
+ * Asking reallocates the canvas (what was drawn in the top-left corner
+ * is carried over) and raises SIGWINCH, so an app that resizes itself
+ * gets one delivery per request and should redraw from its handler.
+ * Returns 0 on success, -1 if there is no canvas to resize - a
+ * program drawing with no window, or an older kernel - in which case the
+ * canvas is unchanged and still drawable.
+ *
+ * This is the app's half of the same negotiation the GUI makes when the
+ * user drags the window: both end at gfx_canvas(2), so both get the
+ * same clamping and both are told. */
+int vgfx_canvas(int w, int h);
+
+/* The canvas this program draws at right now, in pixels - VGFX_W x
+ * VGFX_H until something asks for another size. Layout measured from
+ * here follows the window: a row of buttons at the bottom of a window
+ * is at the bottom because the height is the window's, not because it
+ * was measured off a constant. */
+int vgfx_width(void);
+int vgfx_height(void);
+void vgfx_size(int* w, int* h);
+
+/* Re-reads the size without asking for one. An app that only ever
+ * redraws at whatever size it is given - which is every app that lets
+ * the *user* size the window rather than choosing its own - calls this
+ * from its SIGWINCH handler and redraws; asking for a size it already
+ * has would be a wasted reallocation. Returns 1 if the size changed
+ * since the last call, so the handler can skip the redraw for a SIGWINCH
+ * it did not cause. */
+int vgfx_refresh(void);
+
 /* Blocks until a keyboard or mouse event is ready, then fills `ev`
  * and returns 1.  While blocked it cooperatively yields back to the
  * GUI (windowed tasks have no O_NONBLOCK), so the caller can simply
  * loop on it.  Internally assembles the 6-byte mouse messages
- * incrementally so partial reads never produce garbage. */
+ * incrementally so partial reads never produce garbage.
+ *
+ * Resizes arrive here too, as VGFX_EV_RESIZE, with the canvas size
+ * already re-read: the kernel raises SIGWINCH when the canvas changes
+ * and the blocking read comes back EINTR, which is the POSIX route for
+ * exactly this. An app that lays out from vgfx_size() therefore only
+ * has to handle one more event type and needs no handler of its own;
+ * one that installs a SIGWINCH handler gets that as well. */
 int  vgfx_poll(vgfx_event_t* ev);
 
 /* Announces to the GUI that the item under the current press is a

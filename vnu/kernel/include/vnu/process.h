@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <vnu/abi.h>
 #include <vnu/trapframe.h>
+#include <vnu/wintask.h>
 
 namespace vnu::proc {
 
@@ -169,10 +170,35 @@ bool interrupt_pending();
  *               placed there would land in a caller's locals. */
 int deliver_signal_at(Process& p, uint32_t frame_base, uint32_t stack_anchor,
                       int sig);
+/* The same, for a windowed task: its five signal fields live in the
+ * Console, and this builds the handler frame the same way. */
+int deliver_console_signal(vnu::wintask::Console& c, uint32_t frame_base,
+                           uint32_t stack_anchor, int sig);
 /* The same, for the frame the current process is about to return from
  * a syscall with (the syscall's own pushad frame, which the caller
  * holds). Does nothing for a process the scheduler does not own. */
 int deliver_pending_signal(uint32_t frame_base);
+
+/* --- Signals for windowed tasks (GUI apps) ---
+ *
+ * A windowed task is not a Process: the GUI keeps its own table (see
+ * vnu::wintask), it runs on its own stack with its own cooperative switch
+ * and it is never in the round-robin, so there is no Process entry and
+ * no pid to raise a signal in. Its signal state therefore lives in its
+ * Console, in the same fields a Process has, and these three are the
+ * windowed equivalents of signal_kill() / pending_delivery() /
+ * deliver_pending_signal().
+ *
+ * The actions are the same - a default action on a task closes the
+ * window, SIG_IGN drops it, a handler waits for the next boundary - so
+ * a program cannot tell from the outside which kind it is in except by
+ * what its default action does. */
+int signal_task(vnu::wintask::Console* c, int sig);
+int pending_task_delivery(const vnu::wintask::Console* c);
+int deliver_task_pending_signal(vnu::wintask::Console* c, uint32_t frame_base);
+/* True when the calling task has a deliverable signal waiting, which is
+ * what makes a blocking read report EINTR instead of going on waiting. */
+bool task_interrupt_pending();
 /* User identity. uid 0 (root) bypasses VFS permission checks. setuid/
  * setgid are only allowed for root or to keep your own ids. */
 uint32_t sys_getuid();

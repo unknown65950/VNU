@@ -606,9 +606,18 @@ void draw_gfx_window(const Window& win, const vnu::wintask::Console& con, bool a
     /* The canvas is in the display's depth, so the blit is told which:
      * at 32bpp the source is the frame's own format and its top byte is
      * coverage, which is how a window with a transparent background
-     * lets the desktop through instead of a black rectangle. */
-    blit_scale(con.pixel, vnu::wintask::GFX_W, vnu::wintask::GFX_H,
-               origin_x, origin_y, cw, ch, static_cast<int>(bpp()));
+     * lets the desktop through instead of a black rectangle.
+     *
+     * Drawn at the canvas's own size, not the window's: the canvas
+     * follows the window, so a drag reallocates it and the two agree
+     * again by the time this runs. The stretch only remains as the
+     * clamp for the one case where they cannot - a window too small to
+     * hold its canvas - so a client area is never left showing pixels
+     * from beyond the canvas. */
+    const int src_w = con.pix_w > 0 ? con.pix_w : vnu::wintask::GFX_W;
+    const int src_h = con.pix_h > 0 ? con.pix_h : vnu::wintask::GFX_H;
+    blit_scale(con.pixel, src_w, src_h, origin_x, origin_y, cw, ch,
+               static_cast<int>(bpp()));
     rect(origin_x - 1, origin_y - 1, cw + 2, ch + 2, COLOR_BLACK);
 }
 
@@ -622,8 +631,13 @@ Window size_app_window(int x, int y, const vnu::wintask::Console* con)
     w.y = y;
     bool gfx = con && con->gfx;
     if (gfx) {
-        w.w = vnu::wintask::GFX_W + 8;
-        w.h = TITLE_H + vnu::wintask::GFX_H + 12;
+        /* The canvas, not the constants: an app that asked for another
+         * size gets a window that size, and one that did not gets the
+         * 480x340 its canvas started at. */
+        const int cw = (con && con->pix_w > 0) ? con->pix_w : vnu::wintask::GFX_W;
+        const int ch = (con && con->pix_h > 0) ? con->pix_h : vnu::wintask::GFX_H;
+        w.w = cw + 8;
+        w.h = TITLE_H + ch + 12;
     } else {
         w.w = CON_COLS * CELL_W + 8;
         w.h = TITLE_H + CON_ROWS * CELL_H + 12;
@@ -634,6 +648,70 @@ Window size_app_window(int x, int y, const vnu::wintask::Console* con)
 bool hit_test_titlebar(const Window& win, int mx, int my)
 {
     return mx >= win.x && mx < win.x + win.w && my >= win.y && my < win.y + TITLE_H;
+}
+
+/* Moves a gfx window's chrome to fit a canvas the app resized itself.
+ *
+ * follow_canvas() is the other direction: there the user moved the edge
+ * and the canvas had to follow. Here the app called gfx_canvas(2) and
+ * the window has to follow, or the canvas is composited into a client
+ * area of a different size and the app's layout is stretched - which is
+ * exactly what this milestone exists to stop. Nothing is asked for: the
+ * canvas already has the size, so this only computes the chrome around
+ * it and re-clamps.
+ *
+ * Returns true when the window moved, so the caller knows the geometry
+ * changed underneath it and the redraw has to cover the whole window. */
+bool adopt_canvas(vnu::wintask::Console* con, Window& win)
+{
+    if (!con->gfx || con->pix_w <= 0 || con->pix_h <= 0)
+        return false;
+    const int want_w = con->pix_w + 8;
+    const int want_h = TITLE_H + con->pix_h + 12;
+    if (want_w == win.w && want_h == win.h)
+        return false;
+    win.w = want_w;
+    win.h = want_h;
+    clamp_to_desktop(win);
+    return true;
+}
+
+/* Makes a gfx window's canvas the size the user just dragged it to, so
+ * the window is not scaling a smaller canvas up (which is what a fixed
+ * 480x340 canvas was doing at every mode, 1024x768 included). The client
+ * area is the window minus its chrome; asking for it is what raises
+ * SIGWINCH, and the app redraws at the new size.
+ *
+ * Returns false when the canvas could not be backed at the size asked
+ * for, in which case the window is pulled back to the size the canvas
+ * still has - the window follows the canvas and never the other way
+ * round, so a resize that failed cannot leave a stretched window. */
+bool follow_canvas(vnu::wintask::Console* con, Window& win)
+{
+    const int want_w = win.w - 8;
+    const int want_h = win.h - (TITLE_H + 12);
+    if (want_w < VNU_GFX_CANVAS_MIN_W || want_h < VNU_GFX_CANVAS_MIN_H)
+        return false;
+    if (want_w == con->pix_w && want_h == con->pix_h)
+        return true;
+
+    vnu_gfx_canvas req{};
+    req.want_w = static_cast<uint32_t>(want_w);
+    req.want_h = static_cast<uint32_t>(want_h);
+    vnu_gfx_canvas got{};
+    /* Asked on the GUI's own stack rather than through the syscall
+     * entry, because no task is executing to make the call about - but
+     * it is the same canvas_resize() the app drives itself, so the
+     * clamping and the SIGWINCH are the same either way. */
+    if (vnu::wintask::canvas_resize(*con, vnu::wintask::pgdir_of(*con), &req, &got) < 0) {
+        /* Out of memory, most likely: leave the window where it was
+         * and let the next redraw stretch the canvas it has. */
+        return false;
+    }
+    win.w = static_cast<int>(got.width) + 8;
+    win.h = TITLE_H + static_cast<int>(got.height) + 12;
+    clamp_to_desktop(win);
+    return true;
 }
 
 DragOp hit_test_resize(const Window& win, int mx, int my)
@@ -1214,6 +1292,17 @@ void run(const char* open_app)
             vnu::wintask::heartbeat_gfx_tasks();
         }
 
+        /* Hand any pending SIGWINCH to the task it belongs to.
+         *
+         * Every pass, not once a second: the flag is raised by the
+         * resize itself, which is this same loop (a drag) or a syscall
+         * from the app (which came through between two passes), and the
+         * notice has to arrive at the next boundary rather than up to a
+         * second later. A task parked in a read is woken here, so it
+         * comes back, is interrupted and redraws at the new size before
+         * the next composite. */
+        vnu::wintask::raise_winch_signals();
+
         int key = vnu::kbd::poll_char();
         if (key == vnu::kbd::K_F12) {
             /* Step to the next resolution in the ladder. A desktop key
@@ -1303,71 +1392,80 @@ void run(const char* open_app)
                     }
                 } else if (my >= PANEL_H) {
                     int hit = hit_test_icon(apps, app_count, mx, my);
-                    if (hit >= 0) {
+                    if (hit >= 0)
                         spawn_from_icon(hit);
-                        /* Click in a window: topmost first. */
-                        for (int i = order_len - 1; i >= 0; --i) {
-                            TaskHandle h = order[i];
-                            if (!window_exists(h) || minimized[h])
-                                continue;
-                            const Window& win = geom[h];
-                            vnu::wintask::Console* con = vnu::wintask::console(h);
-                            if (!win.w || !win.h)
-                                continue;
-                            int o0 = mx >= win.x && mx < win.x + win.w;
-                            if (!o0 || my < win.y || my >= win.y + win.h)
-                                continue;
-                            raise_window(h);
-                            DragOp op = hit_test_resize(win, mx, my);
-                            if (op != DragOp::None) {
-                                drag_op = op;
-                                drag_h = h;
-                                rs_orig_x = win.x;
-                                rs_orig_y = win.y;
-                                rs_orig_w = win.w;
-                                rs_orig_h = win.h;
-                                rs_mx = mx;
-                                rs_my = my;
-                            } else if (con && con->gfx && mx >= win.x + 2 &&
-                                       mx < win.x + 2 + (win.w - 8) &&
-                                       my >= win.y + TITLE_H + 2 &&
-                                       my < win.y + TITLE_H + 2 + (win.h - TITLE_H - 12)) {
-                                int cw = win.w - 8;
-                                int ch = win.h - TITLE_H - 12;
-                                if (cw < 1)
-                                    cw = 1;
-                                if (ch < 1)
-                                    ch = 1;
-                                int px = (mx - (win.x + 2)) * vnu::wintask::GFX_W / cw;
-                                int py = (my - (win.y + TITLE_H + 2)) * vnu::wintask::GFX_H / ch;
-                                vnu::wintask::feed_mouse(h, 1, px, py);
-                                gfx_press_h = h;
-                                gfx_press_px = px;
-                                gfx_press_py = py;
-                                have_gfx_press = true;
-                                press_gx = mx;
-                                press_gy = my;
-                            } else if (hit_test_scrollbar(win, mx, my)) {
-                                if (con && !con->gfx && con->hist_n > 0) {
-                                    int top = win.y + TITLE_H + 2;
-                                    int bh = win.h - (TITLE_H + 4);
-                                    int maxoff = con->hist_n;
-                                    int off = ((my - top) * maxoff) / bh;
-                                    if (off > maxoff)
-                                        off = maxoff;
-                                    con->scroll_off = off;
-                                }
-                            } else if (hit_test_titlebar(win, mx, my)) {
-                                drag_op = DragOp::Move;
-                                drag_h = h;
-                                drag_off_x = mx - win.x;
-                                drag_off_y = my - win.y;
+                    /* Click in a window: topmost first. An icon click
+                     * falls through to here as well, and that is what
+                     * puts the new window under the one the click was
+                     * really on: the app is spawned, then the window
+                     * under the pointer is raised over it. */
+                    for (int i = order_len - 1; i >= 0; --i) {
+                        TaskHandle h = order[i];
+                        if (!window_exists(h) || minimized[h])
+                            continue;
+                        const Window& win = geom[h];
+                        vnu::wintask::Console* con = vnu::wintask::console(h);
+                        if (!win.w || !win.h)
+                            continue;
+                        int o0 = mx >= win.x && mx < win.x + win.w;
+                        if (!o0 || my < win.y || my >= win.y + win.h)
+                            continue;
+                        raise_window(h);
+                        DragOp op = hit_test_resize(win, mx, my);
+                        if (op != DragOp::None) {
+                            drag_op = op;
+                            drag_h = h;
+                            rs_orig_x = win.x;
+                            rs_orig_y = win.y;
+                            rs_orig_w = win.w;
+                            rs_orig_h = win.h;
+                            rs_mx = mx;
+                            rs_my = my;
+                        } else if (con && con->gfx && mx >= win.x + 2 &&
+                                   mx < win.x + 2 + (win.w - 8) &&
+                                   my >= win.y + TITLE_H + 2 &&
+                                   my < win.y + TITLE_H + 2 + (win.h - TITLE_H - 12)) {
+                            int cw = win.w - 8;
+                            int ch = win.h - TITLE_H - 12;
+                            if (cw < 1)
+                                cw = 1;
+                            if (ch < 1)
+                                ch = 1;
+                            /* Canvas pixels, so a click lands where
+                             * the app drew it: the canvas is the
+                             * window's size, so this is the same
+                             * mapping the blit used. */
+                            const int src_w = con->pix_w > 0 ? con->pix_w : vnu::wintask::GFX_W;
+                            const int src_h = con->pix_h > 0 ? con->pix_h : vnu::wintask::GFX_H;
+                            int px = (mx - (win.x + 2)) * src_w / cw;
+                            int py = (my - (win.y + TITLE_H + 2)) * src_h / ch;
+                            vnu::wintask::feed_mouse(h, 1, px, py);
+                            gfx_press_h = h;
+                            gfx_press_px = px;
+                            gfx_press_py = py;
+                            have_gfx_press = true;
+                            press_gx = mx;
+                            press_gy = my;
+                        } else if (hit_test_scrollbar(win, mx, my)) {
+                            if (con && !con->gfx && con->hist_n > 0) {
+                                int top = win.y + TITLE_H + 2;
+                                int bh = win.h - (TITLE_H + 4);
+                                int maxoff = con->hist_n;
+                                int off = ((my - top) * maxoff) / bh;
+                                if (off > maxoff)
+                                    off = maxoff;
+                                con->scroll_off = off;
                             }
-                            break;
+                        } else if (hit_test_titlebar(win, mx, my)) {
+                            drag_op = DragOp::Move;
+                            drag_h = h;
+                            drag_off_x = mx - win.x;
+                            drag_off_y = my - win.y;
                         }
+                        break;
+                    }
                     }
                 }
-            }
 
             /* A press armed a draggable item and the pointer wanders
              * at least ~8px with the button held: that press is now a
@@ -1469,6 +1567,8 @@ void run(const char* open_app)
                     break;
                 }
                 clamp_to_desktop(win);
+                if (g && con->pixel)
+                    follow_canvas(con, win);
             }
 
             /* Mouse-wheel: scroll the focused text window. */
@@ -1633,6 +1733,15 @@ void run(const char* open_app)
             if (!con)
                 continue;
             if (redraw[h] || con->gfx) {
+                /* An app that resized its own canvas has moved the
+                 * window without touching it, so the chrome is brought
+                 * back into agreement before the blit: the two have to
+                 * match or the app's layout is scaled, which is what the
+                 * fixed canvas used to do. */
+                if (con->gfx && adopt_canvas(con, geom[h])) {
+                    vnu::vgfx::damage_add(geom[h].x, geom[h].y, geom[h].w, geom[h].h);
+                    redraw_panel = true;
+                }
                 const Window& win = geom[h];
                 /* A window with only occluded pixels on screen is not
                  * composited: drawing it would be overdraw nothing shows,

@@ -29,6 +29,9 @@ extern "C" {
 #define SIGTERM 15
 #define SIGCHLD 17 /* reserved: a child that changes state is not a
                   * signal yet, waitpid() is how you hear about it */
+#define SIGWINCH 28 /* the window's pixel canvas changed size: a gfx
+                   * app catches this, asks vgfx_canvas() again and
+                   * redraws at the size it was given */
 
 #define NSIG 32 /* the signals are 1..NSIG-1; 0 is never a signal */
 

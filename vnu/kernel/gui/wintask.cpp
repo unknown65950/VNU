@@ -7,6 +7,7 @@
 #include <vnu/pmm.h>
 #include <vnu/vfs.h>
 
+extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
 extern "C" void vnu_swtch_pd(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_wintask_trampoline();
 extern "C" uint32_t vnu_wintask_pending_entry, vnu_wintask_pending_stack;
@@ -364,6 +365,48 @@ int current_handle()
     return g_active ? g_active_index : -1;
 }
 
+int handle_of(Console* c)
+{
+    if (!c || !g_tasks)
+        return NO_TASK;
+    for (int i = 0; i < MAX_TASKS; ++i)
+        if (&g_tasks[i].con == c && g_tasks[i].state != State::Unused)
+            return i;
+    return NO_TASK;
+}
+
+void wake_task_of(Console* c)
+{
+    const int h = handle_of(c);
+    if (h == NO_TASK)
+        return;
+    /* Runnable, not run: a signal does not get a task a slice of its
+     * own, it just means the task that comes back next is also the one
+     * with something to deliver. The blocking read it is parked in is
+     * what has to end, so that the boundary it delivers at is soon. */
+    if (g_tasks[h].state == State::Blocked) {
+        g_tasks[h].state = State::Runnable;
+        g_tasks[h].saved_esp = g_tasks[h].saved_esp; /* parked where it was */
+    }
+}
+
+void close_task_of(Console* c)
+{
+    const int h = handle_of(c);
+    if (h == NO_TASK)
+        return;
+    /* The one thing close_task() will not do is free a task that is
+     * executing: it hands its pages away while the CPU is still walking
+     * them. A default signal raised from inside a syscall is therefore
+     * recorded as "finished" and left to the GUI's own sweep, which
+     * closes the window from its own stack - the same shape exit() has. */
+    if (h == g_active_index) {
+        g_tasks[h].state = State::Done;
+        return;
+    }
+    close_task(h);
+}
+
 void close_task(TaskHandle h)
 {
     if (h < 0 || h >= MAX_TASKS || !g_tasks)
@@ -462,6 +505,44 @@ void heartbeat_gfx_tasks()
     }
 }
 
+/* Hands a pending SIGWINCH to the tasks whose canvas changed size.
+ *
+ * The flag is raised where the resize happened (canvas_resize) and
+ * converted here into a signal, because the two callers cannot both do
+ * it: the app's own request is a syscall, and a signal raised from
+ * inside one would want to be delivered before the syscall even returns
+ * - while the GUI's, from a window drag, has no process context at all
+ * and the task is usually parked in a read.
+ *
+ * So the GUI's pass over the tasks is where it happens: it runs whether
+ * or not any task is runnable (a shell waiting for a key is the state a
+ * window is in most of the time), it is the one place that knows the
+ * current_idx of no particular task, and signal_kill() wakes a task that
+ * was blocked so the handler runs on its very next boundary. The flag is
+ * cleared either way: a signal whose action is SIG_IGN must not be
+ * raised again next pass, and neither must one an app has not had a
+ * chance to install a handler for yet - the next resize is what should
+ * raise it again, and it will.
+ *
+ * The flag means "the size changed since the app last looked", which is
+ * exactly what a coalesced signal can carry: a drag that crosses three
+ * canvas sizes between two passes is still one SIGWINCH and one redraw
+ * at the size that ended up granted. */
+void raise_winch_signals()
+{
+    if (!g_tasks)
+        return;
+    for (int i = 0; i < MAX_TASKS; ++i) {
+        Task& t = g_tasks[i];
+        if (!(t.state == State::Runnable || t.state == State::Blocked))
+            continue;
+        if (!t.con.winch)
+            continue;
+        t.con.winch = false;
+        vnu::proc::signal_task(&t.con, VNU_SIGWINCH);
+    }
+}
+
 void feed_input(TaskHandle h, char ch)
 {
     if (!is_running(h))
@@ -522,6 +603,74 @@ void feed_drop(TaskHandle h, const char* path)
 
 /* --- Gfx surface: pages the app and the compositor share --- */
 
+namespace {
+
+/* Pages a canvas of w x h occupies: rounded up to a whole granule, so
+ * a window dragged a few pixels either way keeps the pages it has. */
+uint32_t canvas_pages(int w, int h, int bpp)
+{
+    const int gw = ((w + GFX_CANVAS_GRANULE - 1) / GFX_CANVAS_GRANULE) * GFX_CANVAS_GRANULE;
+    const int gh = ((h + GFX_CANVAS_GRANULE - 1) / GFX_CANVAS_GRANULE) * GFX_CANVAS_GRANULE;
+    return GFX_SURFACE_PAGES(gw, gh, bpp);
+}
+
+/* Takes `pages` frames from the pool as one contiguous run.
+ *
+ * Contiguous *physically*, because both sides index the canvas as a
+ * single flat buffer - the app through its virtual address, the
+ * compositor through the frame address - and the pool is first-fit, so
+ * asking it for a page at a time would only look contiguous on a fresh
+ * pool. 0 when there is not a run that long left. */
+uint32_t alloc_canvas_frames(uint32_t pages)
+{
+    return pages ? vnu::pmm::alloc_contig(pages) : 0;
+}
+
+/* Points `c` at `pages` frames starting at `phys`, mapped into `pgdir`
+ * where the app expects to find its canvas. */
+void install_canvas(Console& c, uint32_t pgdir, int w, int h, uint32_t pages, uint32_t phys)
+{
+    c.pix_w = w;
+    c.pix_h = h;
+    c.pix_pages = static_cast<int>(pages);
+    c.pixel = reinterpret_cast<uint8_t*>(phys);
+}
+
+/* Backs `c` with a fresh canvas of w x h, replacing whatever it had.
+ *
+ * `c` is named rather than taken from cur_task() because the GUI calls
+ * this for a task that is not the one running - the compositor resizes a
+ * window while the task is parked in a read - and cur_task() there is the
+ * GUI's own console, which would give the wrong task the pixels. */
+bool alloc_canvas(Console& c, uint32_t pgdir, int w, int h)
+{
+    const uint32_t pages = canvas_pages(w, h, vnu::vgfx::bpp());
+    const uint32_t phys = alloc_canvas_frames(pages);
+    if (!phys)
+        return false;
+    if (!vnu::paging::map_frames(pgdir, GFX_SURFACE_VA, pages, phys)) {
+        vnu::pmm::free_contig(phys, pages);
+        return false;
+    }
+    install_canvas(c, pgdir, w, h, pages, phys);
+    return true;
+}
+
+/* Hands the canvas's frames back and forgets them, so a fresh
+ * alloc_canvas() can take whatever the pool has now. The pixels go with
+ * them: a canvas that has to change size has to be able to grow, and
+ * that is the app's cue to redraw. */
+void free_canvas(Console& c, uint32_t pgdir)
+{
+    if (!c.pixel || c.pix_pages <= 0)
+        return;
+    vnu::paging::unmap_frames(pgdir, GFX_SURFACE_VA, static_cast<uint32_t>(c.pix_pages));
+    c.pixel = nullptr;
+    c.pix_pages = 0;
+}
+
+} // namespace
+
 uint32_t task_gfx_surface()
 {
     if (!g_active)
@@ -534,13 +683,11 @@ uint32_t task_gfx_surface()
      * editor's console) never asks and so never spends the 40 frames a
      * 8bpp canvas takes - or the 160 a 32bpp one does, which is the
      * other reason the canvas follows the display rather than being
-     * fixed at the deep one. extend_address_space() is the same
-     * private-frame path create_address_space() used for the app image,
-     * and the frames it hands out are freed with the rest of the
-     * address space. */
+     * fixed at the deep one. map_frames() is the same private-frame path
+     * create_address_space() used for the app image, and the frames it
+     * maps are freed with the rest of the address space. */
     const uint32_t pgdir = cur_task().pgdir;
-    const uint32_t pages = GFX_SURFACE_PAGES_AT(vnu::vgfx::bpp());
-    if (!vnu::paging::extend_address_space(pgdir, GFX_SURFACE_VA, pages))
+    if (!alloc_canvas(c, pgdir, GFX_W, GFX_H))
         return 0;
 
     /* One address, two views: the task draws at GFX_SURFACE_VA, and
@@ -553,6 +700,127 @@ uint32_t task_gfx_surface()
     c.pixel = reinterpret_cast<uint8_t*>(phys);
     c.gfx = true; /* asking is what makes this a pixel window */
     return GFX_SURFACE_VA;
+}
+
+Console* console_of_current()
+{
+    return g_active ? &cur_task().con : nullptr;
+}
+
+uint32_t pgdir_of(Console& target)
+{
+    if (!g_tasks)
+        return 0;
+    for (int i = 0; i < MAX_TASKS; ++i)
+        if (&g_tasks[i].con == &target && g_tasks[i].state != State::Unused)
+            return g_tasks[i].pgdir;
+    return 0;
+}
+
+int canvas_resize(Console& c, uint32_t pgdir, const struct vnu_gfx_canvas* req,
+                  struct vnu_gfx_canvas* out)
+{
+    (void)0;
+    if (!c.gfx || !c.pixel || !pgdir)
+        return -VNU_ENOSYS; /* a text window has no canvas to resize */
+    int w = c.pix_w;
+    int h = c.pix_h;
+    bool asked = false;
+    if (req) {
+        /* A request is a request: the window's own minimum, the mode and
+         * what the pool can back all bound it, and the size that comes
+         * back is the one to draw at. Clamping here rather than refusing
+         * is what lets an app ask for "as big as you allow" and get a
+         * window instead of an error. */
+        if (req->want_w > 0) {
+            w = req->want_w;
+            asked = true;
+        }
+        if (req->want_h > 0) {
+            h = req->want_h;
+            asked = true;
+        }
+        const int depth = vnu::vgfx::bpp();
+        const int max_w = vnu::vgfx::width();
+        const int max_h = vnu::vgfx::height();
+        if (w < VNU_GFX_CANVAS_MIN_W || w > max_w)
+            w = w < VNU_GFX_CANVAS_MIN_W ? VNU_GFX_CANVAS_MIN_W : max_w;
+        if (h < VNU_GFX_CANVAS_MIN_H || h > max_h)
+            h = h < VNU_GFX_CANVAS_MIN_H ? VNU_GFX_CANVAS_MIN_H : max_h;
+    }
+
+    /* Only reallocate when the granule-rounded size actually differs:
+     * the point of the granule is that a drag inside it costs nothing
+     * and keeps the pixels. */
+    if (asked && (w != c.pix_w || h != c.pix_h)) {
+        /* Grow into the old pages when the new size fits them, so a
+         * resize is not a blank window: the app is told, but what it
+         * already drew is still there underneath. */
+        const int depth = vnu::vgfx::bpp();
+        const uint32_t need = canvas_pages(w, h, depth);
+        if (need <= static_cast<uint32_t>(c.pix_pages)) {
+            c.pix_w = w;
+            c.pix_h = h;
+            c.winch = true;
+        } else {
+            /* Reserve first, copy second, release last.
+             *
+             * The obvious order - free the old frames, then allocate -
+             * hands the canvas away before knowing there is a new one to
+             * take, and the copy that follows would then be reading a run
+             * the pool has already handed to someone else. So the new
+             * frames are taken while the old ones are still intact, the
+             * pixels are moved across while both exist, and only then
+             * does the old run go back to the pool. If the pool has
+             * nothing that long left, the window keeps the size and the
+             * pixels it has, which is a resize that did not happen
+             * rather than a blank one. */
+            const uint8_t* old = c.pixel;
+            const int old_w = c.pix_w;
+            const int old_h = c.pix_h;
+            const uint32_t old_pages = static_cast<uint32_t>(c.pix_pages);
+            const uint32_t old_phys = reinterpret_cast<uint32_t>(old);
+            const int bytes = depth / 8;
+            const uint32_t fresh = alloc_canvas_frames(need);
+            if (!fresh)
+                return -VNU_ENOMEM;
+            /* Carry the top-left corner over: a canvas that grew keeps
+             * what was drawn in the part both sizes share, which is the
+             * part the app is not about to redraw. Row by row, because
+             * the pitch changed with the width. Both buffers are pool
+             * frames under the kernel's identity map, so these are
+             * plain pointers, and both are live right now. */
+            uint8_t* dst = reinterpret_cast<uint8_t*>(fresh);
+            const size_t copy_w = static_cast<size_t>((old_w < w ? old_w : w) * bytes);
+            const int copy_h = old_h < h ? old_h : h;
+            for (int row = 0; row < copy_h; ++row)
+                memcpy(dst + static_cast<size_t>(row) * w * bytes,
+                       old + static_cast<size_t>(row) * old_w * bytes, copy_w);
+            /* Only now is the old run expendable. The unmapping comes
+             * before the mapping so the window is never mapped twice. */
+            vnu::paging::unmap_frames(pgdir, GFX_SURFACE_VA, old_pages);
+            vnu::pmm::free_contig(old_phys, old_pages);
+            if (!vnu::paging::map_frames(pgdir, GFX_SURFACE_VA, need, fresh)) {
+                /* Nothing to point the app at, and the pages it had are
+                 * gone: give the window back the size it last drew at
+                 * rather than leave a surface that faults on first touch. */
+                vnu::pmm::free_contig(fresh, need);
+                c.pixel = nullptr;
+                c.pix_pages = 0;
+                return -VNU_ENOMEM;
+            }
+            install_canvas(c, pgdir, w, h, need, fresh);
+            c.winch = true;
+        }
+    }
+
+    if (out) {
+        out->width = static_cast<uint32_t>(c.pix_w);
+        out->height = static_cast<uint32_t>(c.pix_h);
+        out->bpp = static_cast<uint32_t>(vnu::vgfx::bpp());
+        out->granted = (out->width == w && out->height == h) ? 1u : 0u;
+    }
+    return 0;
 }
 
 uint32_t task_brk(uint32_t req)
@@ -606,6 +874,8 @@ char task_getch_blocking()
         vnu_wintask_new_pd = g_base_pgdir;
         vnu_swtch_pd(&t.saved_esp, t.gui_saved_esp);
         t.state = State::Runnable;
+        if (t.con.sig_pending)
+            return 0; /* interrupted: do not consume a byte that isn't there */
     }
 }
 

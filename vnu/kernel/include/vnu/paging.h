@@ -47,6 +47,22 @@ uint32_t create_address_space(const MapRange* ranges, int count);
  * are left untouched. */
 bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages);
 
+/* Maps frames the caller already owns rather than fresh ones from the
+ * pool: `phys_start` and the `num_pages` above it go to `vaddr_start` on
+ * up. That is for a region whose *physical* contiguity matters, like a
+ * gfx canvas that both sides walk as one flat buffer - the pool hands
+ * out first-fit frames, so extend_address_space()'s page-at-a-time
+ * allocation only looks contiguous on a fresh pool and stops doing so
+ * once anything has been freed. Returns false on out-of-memory;
+ * already-present pages are left untouched. */
+bool map_frames(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages, uint32_t phys_start);
+
+/* Takes `num_pages` back out of `pgdir_phys` at `vaddr_start` and frees
+ * the private frames behind them, which is what makes a canvas able to
+ * change size. Fails without freeing anything from the point it hits a
+ * page that is not present or not private. */
+bool unmap_frames(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages);
+
 // Frees every private frame `create_address_space` allocated for
 // `pgdir_phys` (the ranges it was built with), plus the directory and
 // any private page tables themselves. Never frees shared/identity

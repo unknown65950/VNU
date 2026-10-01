@@ -266,6 +266,39 @@ bool copy_pages(uint32_t dst_pgdir, uint32_t src_pgdir, uint32_t vaddr_start, ui
     return true;
 }
 
+/* Returns the space's *private* page table for `pde_idx`, allocating and
+ * seeding one if the PDE is still a shared identity entry. Null if the
+ * space has no meta record or has run out of tables. */
+static uint32_t* private_page_table(AddrSpaceMeta* meta, uint32_t* pgdir, uint32_t pde_idx)
+{
+    const uint32_t pde_val = pgdir[pde_idx];
+    bool is_private = false;
+    for (int k = 0; k < meta->pt_frame_count; ++k) {
+        if ((meta->pt_frames[k] & ~0xFFFu) == (pde_val & ~0xFFFu)) {
+            is_private = true;
+            break;
+        }
+    }
+    if (!is_private) {
+        if (meta->pt_frame_count >= MAX_PRIVATE_PDES_PER_SPACE)
+            return nullptr;
+        const uint32_t pt_phys = vnu::pmm::alloc_frame();
+        if (!pt_phys)
+            return nullptr;
+        meta->pt_frames[meta->pt_frame_count++] = pt_phys;
+        pgdir[pde_idx] = pt_phys | PDE_PRESENT | PDE_RW;
+        uint32_t* seed_pt = reinterpret_cast<uint32_t*>(pt_phys);
+        if (pde_idx < NUM_IDENTITY_PDES) {
+            for (int k = 0; k < 1024; ++k)
+                seed_pt[k] = g_identity_pt[pde_idx][k];
+        } else {
+            for (int k = 0; k < 1024; ++k)
+                seed_pt[k] = 0;
+        }
+    }
+    return reinterpret_cast<uint32_t*>(pgdir[pde_idx] & ~0xFFFu);
+}
+
 bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages)
 {
     AddrSpaceMeta* meta = find_meta(pgdir_phys);
@@ -278,33 +311,9 @@ bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t nu
         uint32_t pde_idx = vaddr >> 22;
         uint32_t pte_idx = (vaddr >> 12) & 0x3FF;
 
-        uint32_t* pt;
-        uint32_t pde_val = pgdir[pde_idx];
-        bool is_private = false;
-        for (int k = 0; k < meta->pt_frame_count; ++k) {
-            if ((meta->pt_frames[k] & ~0xFFFu) == (pde_val & ~0xFFFu)) {
-                is_private = true;
-                break;
-            }
-        }
-        if (!is_private) {
-            if (meta->pt_frame_count >= MAX_PRIVATE_PDES_PER_SPACE)
-                return false;
-            uint32_t pt_phys = vnu::pmm::alloc_frame();
-            if (!pt_phys)
-                return false;
-            meta->pt_frames[meta->pt_frame_count++] = pt_phys;
-            pgdir[pde_idx] = pt_phys | PDE_PRESENT | PDE_RW;
-            uint32_t* seed_pt = reinterpret_cast<uint32_t*>(pt_phys);
-            if (pde_idx < NUM_IDENTITY_PDES) {
-                for (int k = 0; k < 1024; ++k)
-                    seed_pt[k] = g_identity_pt[pde_idx][k];
-            } else {
-                for (int k = 0; k < 1024; ++k)
-                    seed_pt[k] = 0;
-            }
-        }
-        pt = reinterpret_cast<uint32_t*>(pgdir[pde_idx] & ~0xFFFu);
+        uint32_t* pt = private_page_table(meta, pgdir, pde_idx);
+        if (!pt)
+            return false;
 
         uint32_t pte = pt[pte_idx];
         if ((pte & PTE_PRESENT) && owns_frame(meta, pte & ~0xFFFu))
@@ -316,6 +325,78 @@ bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t nu
             return false;
         meta->data_frames[meta->data_frame_count++] = frame;
         pt[pte_idx] = frame | PTE_PRESENT | PTE_RW;
+    }
+    return true;
+}
+
+bool map_frames(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages, uint32_t phys_start)
+{
+    AddrSpaceMeta* meta = find_meta(pgdir_phys);
+    if (!meta)
+        return false;
+
+    uint32_t* pgdir = reinterpret_cast<uint32_t*>(pgdir_phys);
+    for (uint32_t p = 0; p < num_pages; ++p) {
+        uint32_t vaddr = vaddr_start + p * PAGE_SIZE;
+        uint32_t frame = phys_start + p * PAGE_SIZE;
+        uint32_t pde_idx = vaddr >> 22;
+        uint32_t pte_idx = (vaddr >> 12) & 0x3FF;
+
+        uint32_t* pt = private_page_table(meta, pgdir, pde_idx);
+        if (!pt)
+            return false;
+        if (meta->data_frame_count >= MAX_FRAMES_PER_SPACE)
+            return false;
+        /* One frame per address, listed once: the same frame mapped at
+         * two addresses is still one frame to free. */
+        if (!owns_frame(meta, frame))
+            meta->data_frames[meta->data_frame_count++] = frame;
+        pt[pte_idx] = frame | PTE_PRESENT | PTE_RW;
+    }
+    return true;
+}
+
+bool unmap_frames(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages)
+{
+    AddrSpaceMeta* meta = find_meta(pgdir_phys);
+    if (!meta)
+        return false;
+
+    uint32_t* pgdir = reinterpret_cast<uint32_t*>(pgdir_phys);
+    for (uint32_t p = 0; p < num_pages; ++p) {
+        uint32_t vaddr = vaddr_start + p * PAGE_SIZE;
+        uint32_t pde_idx = vaddr >> 22;
+        uint32_t pte_idx = (vaddr >> 12) & 0x3FF;
+
+        /* Only a private table is ours to tear pages out of: an identity
+         * PDE is shared with the kernel and with every other space. */
+        const uint32_t pde_val = pgdir[pde_idx];
+        bool is_private = false;
+        for (int k = 0; k < meta->pt_frame_count; ++k) {
+            if ((meta->pt_frames[k] & ~0xFFFu) == (pde_val & ~0xFFFu)) {
+                is_private = true;
+                break;
+            }
+        }
+        if (!is_private)
+            return false;
+
+        uint32_t* pt = reinterpret_cast<uint32_t*>(pde_val & ~0xFFFu);
+        const uint32_t pte = pt[pte_idx];
+        if (!(pte & PTE_PRESENT))
+            return false;
+        const uint32_t frame = pte & ~0xFFFu;
+        pt[pte_idx] = 0;
+        /* Drop it from the space's own list as well: leaving it listed
+         * would have destroy_address_space() free it a second time. */
+        for (int i = 0; i < meta->data_frame_count; ++i) {
+            if ((meta->data_frames[i] & ~0xFFFu) == frame) {
+                meta->data_frames[i] = meta->data_frames[meta->data_frame_count - 1];
+                --meta->data_frame_count;
+                break;
+            }
+        }
+        vnu::pmm::free_frame(frame);
     }
     return true;
 }

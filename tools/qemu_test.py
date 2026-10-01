@@ -367,20 +367,20 @@ def check(name, output, expects, forbids, result, verbose):
 SUITE = [
     # -- the system information command ---------------------------------
     ("vnu-fetch", "vnu fetch",
-     [r"VNU system information", r"^OS +: +VNU 0\.5 \(vibe\)$",
-      r"^Kernel +: +0\.5\.0$", r"^Host +: +vnu$", r"^Uptime +: +\d+ s$",
+     [r"VNU system information", r"^OS +: +VNU 0\.7 \(Canyon\)$",
+      r"^Kernel +: +0\.7\.0$", r"^Host +: +vnu$", r"^Uptime +: +\d+ s$",
       r"^Shell +: +vash$",
       r"^Graphics +: +\w[\w-]* \d+x\d+ \d+bpp$", r"^VCC +: +0\.5$",
       r"^Build +: +\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"], []),
     ("vnu-version", "vnu version",
-     [r"VNU version information", r"^OS +: +VNU 0\.5$",
-      r"^Kernel +: +0\.5\.0$", r"^ABI +: +1$", r"^Arch +: +i386$"], []),
+     [r"VNU version information", r"^OS +: +VNU 0\.7$",
+      r"^Kernel +: +0\.7\.0$", r"^ABI +: +1$", r"^Arch +: +i386$"], []),
     ("vnu-size", "vnu size",
      [r"VNU image size", r"^kernel +: .*\(1 object\)$",
       r"^userspace: .*\(4[0-9] objects\)$", r"^libraries: .*\(2 objects\)$",
       r"^fonts +: .*\(1 object\)$", r"^resources: .*\(1[0-9] objects\)$",
       r"^total +: "], []),
-    ("vnu-version-flag", "vnu --version", [r"^vnu \(VNU\) 0\.5$"], []),
+    ("vnu-version-flag", "vnu --version", [r"^vnu \(VNU\) 0\.7$"], []),
     ("vnu-help", "vnu --help",
      [r"Usage: vnu \[COMMAND\]\.\.\.", r"fetch", r"version", r"size",
       r"install +install VNU onto a disk"], []),
@@ -389,7 +389,7 @@ SUITE = [
 
     # -- the facts behind it --------------------------------------------
     ("proc-version", "cat /proc/version",
-     [r"^version 0\.5 \(vibe\) i386$", r"^kernel 0\.5\.0$", r"^abi 1$",
+     [r"^version 0\.7 \(Canyon\) i386$", r"^kernel 0\.7\.0$", r"^abi 1$",
       r"^built \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"], []),
     ("proc-meminfo", "cat /proc/meminfo",
      [r"^MemTotal: +\d+ kB$", r"^PoolTotal: +\d+ kB$",
@@ -411,7 +411,7 @@ SUITE = [
     ("proc-cpuinfo", "cat /proc/cpuinfo",
      [r"^processor\t: 0$", r"^vendor_id\t: "], []),
     ("uname-all", "uname -a",
-     [r"^VNU vnu 0\.5\.0 vibe \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} i386 "],
+     [r"^VNU vnu 0\.7\.0 Canyon \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} i386 "],
      []),
     ("uname-plain", "uname", [r"^VNU$"], []),
     ("uname-node", "uname -n", [r"^vnu$"], []),
@@ -537,9 +537,9 @@ SUITE = [
     ("echo", "echo hello world", [r"^hello world$"], []),
     ("seq", "seq 3", [r"^1\n2\n3$"], []),
     ("wc", "wc -l /proc/version", [r"^4 "], []),
-    ("head", "head -1 /proc/version", [r"^version 0\.5"], []),
+    ("head", "head -1 /proc/version", [r"^version 0\.7"], []),
     ("tail", "tail -1 /proc/version", [r"^built "], []),
-    ("grep", "grep kernel /proc/version", [r"^kernel 0\.5\.0$"], []),
+    ("grep", "grep kernel /proc/version", [r"^kernel 0\.7\.0$"], []),
     ("basename", "basename /a/b/c", [r"^c$"], []),
     ("dirname", "dirname /a/b/c", [r"^/a/b$"], []),
     ("whoami", "whoami", [r"^root$"], []),
@@ -1506,6 +1506,226 @@ def run_gfx_damage(guest, result, verbose, timeout=60.0):
     else:
         result.passed += 1
         print("ok   %-18s" % "gfx-damage")
+
+
+# The geometry the calculator's own layout implies, in gui.cpp's terms:
+# a window is the canvas plus 8 across (2px border either side), and
+# TITLE_H + the canvas + 12 down (20px title bar, 2px top and bottom
+# border, 8px padding under the bar).
+CALC_CHROME_W = 8
+CALC_TITLE_H = 20
+CALC_CHROME_H = CALC_TITLE_H + 12
+# The size calc asks for, and the slack allowed on what comes back.
+CALC_WANT_W, CALC_WANT_H = 220, 220
+CALC_GRANT_SLACK = 8
+# How much the window has to grow by to count as resized. The desktop
+# rounds the canvas up to a 64x64 granule, so a resize inside one
+# granule costs nothing and changes no pixels; the drag below is several
+# granules wide precisely so that this cannot be mistaken for one.
+RESIZE_DRAG_X = 180
+RESIZE_DRAG_Y = 140
+RESIZE_MIN_GROW = 96
+
+
+def window_box(frame, bare, min_px=30):
+    """The window's bounding box, from `frame` against the bare desktop.
+
+    The mouse pointer is drawn on top of whatever it is over and is part
+    of the diff too, so a plain bounding box would grow to include it
+    wherever it stands - and after a drag it stands at the corner the
+    drag was aimed at, which is exactly the measurement this wants to
+    make. A window is hundreds of pixels wide on every row it owns while
+    the pointer is about a dozen, so counting a row's changed pixels and
+    dropping the sparse ones leaves the window and only the window."""
+    w, h = frame[0], frame[1]
+    a, b = frame[2], bare[2]
+    xs0 = ys0 = None
+    x1 = y1 = -1
+    for y in range(PANEL_H, h):
+        base = y * w * 3
+        n = sum(1 for x in range(w)
+                if a[base + x * 3:base + x * 3 + 3]
+                != b[base + x * 3:base + x * 3 + 3])
+        if n < min_px:
+            continue
+        if ys0 is None:
+            ys0 = y
+        y1 = y
+        for x in range(w):
+            if a[base + x * 3:base + x * 3 + 3] != \
+               b[base + x * 3:base + x * 3 + 3]:
+                if xs0 is None:
+                    xs0 = x
+                x1 = x
+    if xs0 is None:
+        return None
+    return xs0, ys0, x1, y1
+
+
+def run_gfx_canvas_resize(guest, result, verbose, timeout=60.0):
+    """Check that a window's canvas follows the window, in both directions.
+
+    Milestone E's whole claim is that a gfx window is drawn at the size
+    its client area is instead of scaling a fixed 480x340 into it, and
+    neither half of that is visible in the serial log: the app's pixels
+    never go through a console. So this looks at the screen.
+
+    Two directions are checked, because the canvas can be moved from two
+    sides and each has its own way of going wrong:
+
+      1. The app asks. `calc` asks for a 220x220 canvas before it draws
+         anything, so the window it opens in must be 220 wide and 220
+         tall (plus chrome) rather than the 480x340 the canvas used to
+         be. A canvas that ignored the request still opens at 480x340,
+         and the calculator's keys are laid out from whatever size it is
+         given, so the window on screen is the measurement of the
+         negotiation.
+
+      2. The user drags. The window's bottom-right corner is pulled out
+         by a few granules and the window has to grow by about that much,
+         with the calculator's rows inside it redistributing to fill the
+         new height - which is what "the layout is computed from the
+         canvas" means on screen. A canvas pinned at its old size either
+         leaves the window alone or shows the old picture stretched.
+
+    The drag needs the mouse, which reaches the guest only because the
+    pointer navigation below verifies every leg against a frame - a
+    packet can be dropped, and a drag that lost one is a resize to the
+    wrong size rather than a failed test. So the corner is parked by
+    reading where the pointer actually is, and the drag's outcome is
+    checked against the window, not against the packets that were sent.
+    """
+    print("==> gfx canvas follows the window (screendump)")
+    problems = []
+    shotdir = tempfile.mkdtemp(prefix="vnu-canvas-")
+    try:
+        def shot(name):
+            return settled_shot(guest, os.path.join(shotdir, name))
+
+        guest._type("gui\n")
+        time.sleep(3.0)
+        bare = shot("bare.ppm")
+        if not frame_is_desktop(bare):
+            problems.append("the bare desktop is not a drawn desktop")
+        if not esc_to_shell(guest, timeout):
+            problems.append("the desktop did not give the console back")
+
+        # 1. The app asks for a size and gets it.
+        guest._type("gui calc\n")
+        time.sleep(5.0)
+        asked = shot("asked.ppm")
+        box = window_box(asked, bare)
+        if box is None:
+            problems.append("no window on screen after gui calc")
+        else:
+            x0, y0, x1, y1 = box
+            win_w, win_h = x1 - x0 + 1, y1 - y0 + 1
+            if verbose:
+                print("   window %dx%d at %d,%d (asked for %dx%d)"
+                      % (win_w, win_h, x0, y0, CALC_WANT_W, CALC_WANT_H))
+            want_w = CALC_WANT_W + CALC_CHROME_W
+            want_h = CALC_WANT_H + CALC_CHROME_H
+            if abs(win_w - want_w) > CALC_GRANT_SLACK or \
+                    abs(win_h - want_h) > CALC_GRANT_SLACK:
+                problems.append(
+                    "the window is %dx%d, not the %dx%d its %dx%d canvas "
+                    "needs: gfx_canvas(2) did not size the window"
+                    % (win_w, win_h, want_w, want_h,
+                       CALC_WANT_W, CALC_WANT_H))
+            # The canvas itself has to be full of the app's own drawing,
+            # not a blank rectangle: a window the right size with nothing
+            # in it would pass the geometry above and mean nothing.
+            rows = changed_rows(bare[2], asked[2], bare[0], bare[1])
+            top, bottom = longest_run(rows, min_changed=1)
+            if bottom - top < CALC_WANT_H - 2 * CALC_GRANT_SLACK:
+                problems.append("the window changed %d rows, too few for a "
+                                "%d-tall canvas: the app's pixels did not "
+                                "reach the screen" % (bottom - top,
+                                                      CALC_WANT_H))
+
+        # 2. The user drags the window's corner.
+        #
+        # The pointer is brought to the corner with the verified
+        # navigation the occlusion sessions use, because the corner is on
+        # top of a window and the arrow cannot be read there; the run is
+        # checked by taking it out and back, and the drag's outcome is
+        # checked against the window, not against the packets that were
+        # sent.
+        if box is not None:
+            x0, y0, x1, y1 = box
+            corner = (x1 - 3, y1 - 3)
+            dragged = None
+            grown = None
+            for attempt in range(3):
+                if occl_goto(guest, corner) is None:
+                    continue
+                guest.qmp.hmp("mouse_button 1")
+                time.sleep(0.3)
+                occl_run(guest, RESIZE_DRAG_X, RESIZE_DRAG_Y)
+                guest.qmp.hmp("mouse_button 0")
+                time.sleep(1.5)
+                dragged = shot("dragged%d.ppm" % attempt)
+                grown = window_box(dragged, bare)
+                if grown is not None and \
+                        (grown[2] - grown[0]) - (x1 - x0) >= RESIZE_MIN_GROW:
+                    break
+                # Nothing (or too little) happened: the pointer was not on
+                # the corner. Walk the drag back and try the approach again.
+                occl_run(guest, -RESIZE_DRAG_X, -RESIZE_DRAG_Y)
+            if grown is None:
+                problems.append("the window vanished during the drag")
+            else:
+                gx0, gy0, gx1, gy1 = grown
+                grow_w = (gx1 - gx0 + 1) - (x1 - x0 + 1)
+                grow_h = (gy1 - gy0 + 1) - (y1 - y0 + 1)
+                if verbose:
+                    print("   after the drag: %dx%d at %d,%d "
+                          "(grew %d x %d, attempts %d)"
+                          % (gx1 - gx0 + 1, gy1 - gy0 + 1, gx0, gy0,
+                             grow_w, grow_h, attempt + 1))
+                if grow_w < RESIZE_MIN_GROW:
+                    problems.append(
+                        "dragging the corner out by %d px left the "
+                        "window %d px wider: the canvas did not follow "
+                        "the drag" % (RESIZE_DRAG_X, grow_w))
+                if grow_h < RESIZE_MIN_GROW:
+                    problems.append(
+                        "dragging the corner out by %d px left the "
+                        "window %d px taller: the canvas did not follow "
+                        "the drag" % (RESIZE_DRAG_Y, grow_h))
+                # The rows the window grew into are the app's own drawing
+                # at a size it computed: the keys are laid out from the
+                # canvas, so the old last row is no longer the last row.
+                # A canvas that did not follow shows the old picture
+                # stretched instead, which leaves those rows as bare
+                # desktop or as stretched old content.
+                fresh = changed_rows(asked[2], dragged[2], bare[0],
+                                     bare[1])
+                below = sum(1 for y in range(y1 + 1, gy1 + 1)
+                            if fresh[y] > 2)
+                if below < RESIZE_MIN_GROW // 2:
+                    problems.append(
+                        "only %d of the %d rows the window grew into "
+                        "changed: the canvas is still %d tall and the "
+                        "new area is not the app's drawing"
+                        % (below, gy1 - y1, y1 - y0))
+
+        if not esc_to_shell(guest, timeout):
+            problems.append("the desktop did not give the console back")
+    except TimeoutError as exc:
+        problems.append("the desktop session timed out: %s" % exc)
+    finally:
+        if result.failed or verbose:
+            keep_frames(shotdir, "gfx-canvas-resize")
+        else:
+            shutil.rmtree(shotdir, ignore_errors=True)
+
+    if problems:
+        result.failed.append(("gfx-canvas-resize", "", problems))
+        print("FAIL %-18s %s" % ("gfx-canvas-resize", "; ".join(problems)))
+    else:
+        result.passed += 1
+        print("ok   %-18s" % "gfx-canvas-resize")
 
 
 def present_total(proc_gfx):
@@ -2789,6 +3009,8 @@ def main():
                             "gui + F12 mode steps (screendump)"))
         print("%-18s %s" % ("gfx-damage",
                             "typing in a window (screendump + /proc/gfx)"))
+        print("%-18s %s" % ("gfx-canvas-resize",
+                            "gui calc (app request + corner drag)"))
         print("%-18s %s" % ("install-write", "vnu install 0 vnu-test"))
         print("%-18s %s" % ("install-wizard", "vnu install (keys)"))
         return 0
@@ -2806,7 +3028,8 @@ def main():
     # that names one of them selects no shell case and still runs.
     interactive = ("console-screen", "man-pager", "ctrl-c",
                    "prefs-wallpaper", "gfx-surface", "gfx-resolution",
-                   "gfx-damage", "occlusion", "vibecommander")
+                   "gfx-damage", "gfx-canvas-resize", "occlusion",
+                   "vibecommander")
     cases = SUITE
     if args.only:
         cases = [c for c in SUITE
@@ -2848,6 +3071,10 @@ def main():
                                         for sel in args.only):
                     run_gfx_damage(guest, result, args.verbose,
                                    args.timeout)
+                if not args.only or any(sel in "gfx-canvas-resize"
+                                        for sel in args.only):
+                    run_gfx_canvas_resize(guest, result, args.verbose,
+                                          args.timeout)
                 if not args.only or any(sel in "occlusion"
                                         for sel in args.only):
                     run_occlusion(guest, result, args.verbose)

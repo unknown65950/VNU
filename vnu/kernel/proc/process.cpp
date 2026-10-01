@@ -942,16 +942,26 @@ bool interrupt_pending()
     return pending_delivery(&table[current_idx]) != 0;
 }
 
-int deliver_signal_at(Process& p, uint32_t frame_base, uint32_t stack_anchor, int sig)
+/* The part of delivery that touches the user's stack, written against
+ * the five signal fields rather than a Process: a windowed task's Console
+ * has exactly the same five, and the part that builds a frame on the
+ * interrupted process's stack and sets the one-shot return flag must not
+ * exist twice. Returns the signal delivered, or 0. */
+static int deliver_common(uint32_t* act, uint32_t& pending, uint32_t& mask,
+                          uint32_t& saved_mask, uint32_t& frame_out,
+                          uint32_t frame_base, uint32_t stack_anchor, int sig)
 {
     if (sig == 0)
         return 0;
-    const struct vnu_sigaction& act = p.sig_action[sig];
     /* A default or ignored action never gets this far: both are carried
      * out where the signal is raised (see signal_kill() and the alarm
      * deadline in vnu_timer_tick()). What is left is a real handler,
-     * whose address is where the process was told to go. */
-    if (act.handler <= VNU_SIG_IGN || !act.restorer)
+     * whose address is where the process was told to go. `act` is the
+     * base of the VNU_NSIG-entry table, and a struct vnu_sigaction is
+     * four words, so the entry this signal owns is the sig-th one. */
+    const struct vnu_sigaction a =
+        *reinterpret_cast<const struct vnu_sigaction*>(&act[sig * 4]);
+    if (a.handler <= VNU_SIG_IGN || !a.restorer)
         return 0;
     /* The block goes at the very bottom of what the kernel is using of
      * this process's stack, so that nothing that is still live - a
@@ -965,11 +975,11 @@ int deliver_signal_at(Process& p, uint32_t frame_base, uint32_t stack_anchor, in
     uint32_t low = stack_anchor ? stack_anchor : reinterpret_cast<uint32_t>(&here);
     uint32_t block = (low - SIG_BLOCK_WORDS * 4) & ~0xFu;
     uint32_t* w = reinterpret_cast<uint32_t*>(block);
-    w[0] = act.restorer; /* where the handler's `return` lands */
+    w[0] = a.restorer; /* where the handler's `return` lands */
     w[1] = static_cast<uint32_t>(sig);
     /* The iret pops its three words in increasing address order, and it
      * runs with esp = &w[-3]: eip, cs, eflags. */
-    w[-3] = act.handler;
+    w[-3] = a.handler;
     w[-2] = *reinterpret_cast<uint32_t*>(frame_base + FRAME_CS);
     /* Same flags the context had, except that the handler runs with
      * interrupts on (the syscall path saved eflags with IF cleared by
@@ -977,20 +987,20 @@ int deliver_signal_at(Process& p, uint32_t frame_base, uint32_t stack_anchor, in
      * fire a single-step interrupt out of the first instruction. */
     w[-1] = (*reinterpret_cast<uint32_t*>(frame_base + FRAME_EFLAGS) | 0x200u) & ~0x100u;
 
-    p.sig_pending &= ~(1u << sig);
-    p.sig_saved_mask = p.sig_mask;
+    pending &= ~(1u << sig);
+    saved_mask = mask;
     /* Block the signal itself (unless the action says not to) plus the
      * signals it asked for, so a handler cannot be interrupted by the
      * signal it is handling unless it asked for that. */
-    uint32_t block_now = act.mask;
-    if (!(act.flags & VNU_SA_NODEFER))
+    uint32_t block_now = a.mask;
+    if (!(a.flags & VNU_SA_NODEFER))
         block_now |= 1u << sig;
-    p.sig_mask |= block_now;
-    if (act.flags & VNU_SA_RESETHAND) {
-        p.sig_action[sig].handler = VNU_SIG_DFL;
-        p.sig_action[sig].restorer = 0;
+    mask |= block_now;
+    if (a.flags & VNU_SA_RESETHAND) {
+        act[sig * 4 + 0] = VNU_SIG_DFL;
+        act[sig * 4 + 3] = 0;
     }
-    p.sig_frame = frame_base;
+    frame_out = frame_base;
 
     /* Tell the assembly return path to switch stacks instead of popping
      * the frame it is looking at. The flag is a single slot on purpose:
@@ -1000,6 +1010,19 @@ int deliver_signal_at(Process& p, uint32_t frame_base, uint32_t stack_anchor, in
     vnu_pending_user_esp = block - SIG_IRET_WORDS * 4;
     vnu_pending_user_esp_flag = 1;
     return sig;
+}
+
+int deliver_signal_at(Process& p, uint32_t frame_base, uint32_t stack_anchor, int sig)
+{
+    return deliver_common(reinterpret_cast<uint32_t*>(p.sig_action), p.sig_pending, p.sig_mask,
+                          p.sig_saved_mask, p.sig_frame, frame_base, stack_anchor, sig);
+}
+
+int deliver_console_signal(vnu::wintask::Console& c, uint32_t frame_base,
+                           uint32_t stack_anchor, int sig)
+{
+    return deliver_common(reinterpret_cast<uint32_t*>(c.sig_action), c.sig_pending, c.sig_mask,
+                          c.sig_saved_mask, c.sig_frame, frame_base, stack_anchor, sig);
 }
 
 int deliver_pending_signal(uint32_t frame_base)
@@ -1013,14 +1036,87 @@ int deliver_pending_signal(uint32_t frame_base)
     return deliver_signal_at(p, frame_base, 0, pending_delivery(&p));
 }
 
+/* --- Signals for windowed tasks ---
+ *
+ * A windowed task has no Process and no pid: the GUI's own task table is
+ * where it lives, and that is also where its signal state has to be, or
+ * a SIGWINCH the GUI raises would have nowhere to land. So these three
+ * mirror signal_kill() / pending_delivery() / deliver_pending_signal()
+ * against a Console's signal fields instead of a Process's.
+ *
+ * The duplication is deliberate and small: the delivery machinery below
+ * is factored out of deliver_signal_at() and both call it, so the part
+ * that touches the user's stack - the only part where being subtly
+ * different would be a bug - exists once. What differs is the answer to
+ * "what does the default action mean", which is a window's business and
+ * not a process's: closing the window is what terminate means here. */
+
+int pending_task_delivery(const vnu::wintask::Console* c)
+{
+    uint32_t ready = c->sig_pending & ~c->sig_mask;
+    for (int sig = 1; sig < VNU_NSIG; ++sig)
+        if (ready & (1u << sig))
+            return sig;
+    return 0;
+}
+
+bool task_interrupt_pending()
+{
+    vnu::wintask::Console* c = vnu::wintask::console_of_current();
+    return c ? pending_task_delivery(c) != 0 : false;
+}
+
+int signal_task(vnu::wintask::Console* c, int sig)
+{
+    if (!c || sig <= 0 || sig >= VNU_NSIG)
+        return -VNU_EINVAL;
+    if (sig == VNU_SIGKILL) {
+        /* The one signal with no answer to give: a task that gets it is
+         * simply gone, no handler and no block. */
+        vnu::wintask::close_task_of(c);
+        return 0;
+    }
+    const uint32_t handler = c->sig_action[sig].handler;
+    if (handler == VNU_SIG_IGN)
+        return 0; /* ignore means ignore, bit included */
+    if (handler == VNU_SIG_DFL) {
+        /* SIGWINCH is the one signal whose default is *ignore*, and that
+         * is POSIX rather than a VNU choice: the window changed size,
+         * which is news rather than an emergency, and a program that has
+         * not asked to hear it must not be killed for the window being
+         * dragged. Every other signal's default here terminates, and for
+         * a task that is closing its window - the pages and the slot go
+         * back the way exit() would have taken them. */
+        if (sig == VNU_SIGWINCH)
+            return 0;
+        vnu::wintask::close_task_of(c);
+        return 0;
+    }
+    c->sig_pending |= 1u << sig;
+    /* A task asleep in a read has to come back to be told: without this
+     * the signal would sit pending until the next thing it waits for,
+     * which for an idle gfx app could be the once-a-second tick. */
+    vnu::wintask::wake_task_of(c);
+    return 0;
+}
+
+int deliver_task_pending_signal(vnu::wintask::Console* c, uint32_t frame_base)
+{
+    if (!c || vnu_pending_user_esp_flag)
+        return 0;
+    return deliver_console_signal(*c, frame_base, 0, pending_task_delivery(c));
+}
+
 int sys_rt_sigaction(int sig, const uint32_t* act_in, uint32_t* old_out)
 {
     if (sig <= 0 || sig >= VNU_NSIG)
         return -VNU_EINVAL;
     if (sig == VNU_SIGKILL) /* not even root may catch or block this one */
         return -VNU_EINVAL;
-    Process& p = table[current_idx];
-    struct vnu_sigaction* slot = &p.sig_action[sig];
+    /* A windowed task's actions live in its Console; a process's, in its
+     * own entry in the table. Same struct, same rules, different home. */
+    vnu::wintask::Console* wcon = vnu::wintask::console_of_current();
+    struct vnu_sigaction* slot = wcon ? &wcon->sig_action[sig] : &table[current_idx].sig_action[sig];
     if (old_out) {
         old_out[0] = slot->handler;
         old_out[1] = slot->mask;
@@ -1048,30 +1144,39 @@ int sys_rt_sigprocmask(int how, const uint32_t* set, uint32_t* old_out)
 {
     if (how != VNU_SIG_BLOCK && how != VNU_SIG_UNBLOCK && how != VNU_SIG_SETMASK)
         return -VNU_EINVAL;
-    Process& p = table[current_idx];
+    /* A windowed task's mask lives in its Console; a process's, in its
+     * own entry in the table. Same field, same rules, different home. */
+    vnu::wintask::Console* wcon = vnu::wintask::console_of_current();
+    uint32_t* mask = wcon ? &wcon->sig_mask : &table[current_idx].sig_mask;
     if (old_out)
-        *old_out = p.sig_mask;
+        *old_out = *mask;
     if (!set)
         return 0;
     uint32_t add = *set & ~(1u << VNU_SIGKILL); /* never blockable */
     if (how == VNU_SIG_BLOCK)
-        p.sig_mask |= add;
+        *mask |= add;
     else if (how == VNU_SIG_UNBLOCK)
-        p.sig_mask &= ~add;
+        *mask &= ~add;
     else
-        p.sig_mask = add;
+        *mask = add;
     return 0;
 }
 
 uint32_t sys_rt_sigreturn(TrapFrame* cur)
 {
-    Process& p = table[current_idx];
-    if (!p.sig_frame)
+    /* Same five fields, either home; the restoration below is identical
+     * and must be: the interrupted frame is the same kind of thing
+     * whether the kernel got here for a process or for a windowed task. */
+    vnu::wintask::Console* wcon = vnu::wintask::console_of_current();
+    uint32_t& saved = wcon ? wcon->sig_saved_mask : table[current_idx].sig_saved_mask;
+    uint32_t& frame = wcon ? wcon->sig_frame : table[current_idx].sig_frame;
+    uint32_t& mask = wcon ? wcon->sig_mask : table[current_idx].sig_mask;
+    if (!frame)
         return 0; /* not from a handler: nothing to go back to */
-    p.sig_mask = p.sig_saved_mask;
-    p.sig_saved_mask = 0;
-    TrapFrame* interrupted = reinterpret_cast<TrapFrame*>(p.sig_frame);
-    p.sig_frame = 0;
+    mask = saved;
+    saved = 0;
+    TrapFrame* interrupted = reinterpret_cast<TrapFrame*>(frame);
+    frame = 0;
     *cur = *interrupted;
     /* popad restores the eight registers but *discards* the ESP the frame
      * saved, so a copy alone resumes the process with esp = tf + 32, in
@@ -1093,9 +1198,20 @@ int sys_sigraise(int sig)
         sys_exit(128 + sig);
         return 0; /* not reached */
     }
+    vnu::wintask::Console* wcon = vnu::wintask::console_of_current();
     /* raise() on a signal whose action is to terminate dies here and now,
      * the same as kill(getpid(), sig): there is nothing to defer it to,
-     * the caller is the one that stops. */
+     * the caller is the one that stops. For a windowed task that means
+     * its window closes, from the same place exit() would have. */
+    if (wcon) {
+        if (wcon->sig_action[sig].handler == VNU_SIG_DFL) {
+            vnu::wintask::close_task_of(wcon);
+            return 0;
+        }
+        wcon->sig_pending |= 1u << sig;
+        vnu::wintask::wake_task_of(wcon);
+        return 0;
+    }
     if (table[current_idx].sig_action[sig].handler == VNU_SIG_DFL) {
         sys_exit(128 + sig);
         return 0; /* not reached */
@@ -1106,8 +1222,10 @@ int sys_sigraise(int sig)
 
 int sys_sigpending(uint32_t* set)
 {
-    if (set)
-        *set = table[current_idx].sig_pending;
+    if (!set)
+        return 0;
+    vnu::wintask::Console* wcon = vnu::wintask::console_of_current();
+    *set = wcon ? wcon->sig_pending : table[current_idx].sig_pending;
     return 0;
 }
 
@@ -1153,7 +1271,13 @@ int signal_kill(int pid, int sig)
             /* A blocked signal still gets its default action in
              * VNU: there is no "terminate" action to defer, and a
              * program that blocks a signal and then never unblocks it
-             * has asked for a process it cannot leave anyway. */
+             * has asked for a process it cannot leave anyway.
+             *
+             * SIGWINCH is the exception, in the POSIX sense: its default
+             * action is ignore, so a program that never asked to hear
+             * about a resize is not killed by one. */
+            if (sig == VNU_SIGWINCH)
+                return 0;
             if (i != current_idx) {
                 /* Another process: the death is its own to have, so
                  * leave it as a zombie for its parent to reap, the same

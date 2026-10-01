@@ -14,6 +14,8 @@
  */
 #include <vlibc/vgfx.h>
 #include <vlibc/stdlib.h>
+#include <vlibc/string.h>
+#include <vlibc/signal.h>
 #include <vlibc/vgfx_font.h>
 #include <vlibc/unistd.h>
 #include <vlibc/sys/syscall.h>
@@ -71,7 +73,148 @@ static void resolve_state(void)
     }
 }
 
+/* The size of the canvas this program draws at.
+ *
+ * It starts at VGFX_W x VGFX_H - the size a window opens at - but it is
+ * not fixed: gfx_canvas(2) hands back whatever the window's client area
+ * is, which the user can change by dragging the window's edge, and the
+ * app is told about that with SIGWINCH. So an app that wants to fill its
+ * window asks for the size it wants, and on SIGWINCH asks again and
+ * redraws at whatever it got.
+ *
+ * Every primitive below measures off these rather than the constants:
+ * that is the whole difference between a canvas that follows the window
+ * and a fixed 480x340 that gets scaled up into it. */
+static int cur_w = VGFX_W;
+static int cur_h = VGFX_H;
+
 static int state_resolved;
+
+static unsigned char* pixels(void);
+static void realloc_private(int old_w, int old_h);
+
+/* The SIGWINCH handler, and why vgfx installs it itself.
+ *
+ * A resize has to interrupt the read the app is parked in, and only a
+ * signal can do that - so a program that wants to be told has to have a
+ * handler, and a program that has no handler is not told at all. Left
+ * to the app that means every gfx program has to install one to see
+ * resizes it cannot do without, which is a way of saying the library
+ * does not do it. So vgfx installs it here, once, when it first maps a
+ * canvas: the handler's whole job is to exist, because the work happens
+ * around the interrupted read rather than in the handler - EINTR comes
+ * back to vgfx_poll(), which asks for the new size and hands the app a
+ * VGFX_EV_RESIZE.
+ *
+ * The handler itself therefore does nothing at all, which is also what
+ * makes it safe to be running one: there is no state to touch, so there
+ * is no window in which a resize arriving at an awkward moment could
+ * leave something half done.
+ *
+ * An app that installs its own SIGWINCH handler afterwards replaces
+ * this one and can do whatever it wants; the canvas size it reads is the
+ * same either way, through vgfx_width()/vgfx_height()/vgfx_refresh(). */
+static void on_winch(int sig)
+{
+    (void)sig;
+}
+
+static int winch_armed;
+
+static void arm_winch(void)
+{
+    if (winch_armed)
+        return;
+    winch_armed = 1;
+    struct sigaction act;
+    act.sa_handler = on_winch;
+    act.sa_mask = 0;
+    act.sa_flags = 0;
+    act.sa_restorer = 0; /* sigaction() fills this one */
+    (void)sigaction(SIGWINCH, &act, 0);
+}
+
+/* Reads the granted canvas size, leaving it unchanged if the kernel has
+ * no answer (a program drawing with no window, or an older kernel). */
+static int refresh_canvas(void)
+{
+    struct vnu_gfx_canvas c;
+    c.want_w = 0;
+    c.want_h = 0;
+    c.width = 0;
+    c.height = 0;
+    c.bpp = 0;
+    c.granted = 0;
+    if (syscall(VNU_SYS_gfx_canvas, (long)&c, (long)&c) != 0)
+        return 0;
+    if (c.width < VNU_GFX_CANVAS_MIN_W || c.height < VNU_GFX_CANVAS_MIN_H)
+        return 0;   /* no canvas, or a kernel too old to answer */
+    const int old_w = cur_w;
+    const int old_h = cur_h;
+    const int changed = (c.width != (unsigned int)cur_w || c.height != (unsigned int)cur_h);
+    cur_w = (int)c.width;
+    cur_h = (int)c.height;
+    if (changed)
+        realloc_private(old_w, old_h);
+    return changed;
+}
+
+int vgfx_refresh(void)
+{
+    return refresh_canvas();
+}
+
+int vgfx_width(void)
+{
+    return cur_w;
+}
+
+int vgfx_height(void)
+{
+    return cur_h;
+}
+
+void vgfx_size(int* w, int* h)
+{
+    if (w)
+        *w = cur_w;
+    if (h)
+        *h = cur_h;
+}
+
+/* Asks the kernel for a canvas of w x h and adopts whatever it grants.
+ * Returns 0 on success, -1 if the request could not be made at all (no
+ * window, or nothing left in the pool) - in which case the canvas is
+ * still usable, just not the size asked for. Asking reallocates the
+ * canvas and raises SIGWINCH, so an app that resizes itself should
+ * expect one delivery per request and redraw from its handler. */
+int vgfx_canvas(int w, int h)
+{
+    /* The surface has to exist before the kernel can size it: gfx_canvas
+     * sizes the canvas that gfx_surface mapped, so a program that asks
+     * before it has ever drawn (which is the natural order - decide the
+     * layout, then draw it) would be told ENOSYS for a canvas it has not
+     * asked to have yet. */
+    if (!pixels())
+        return -1;
+    struct vnu_gfx_canvas c;
+    c.want_w = (unsigned int)(w > 0 ? w : 0);
+    c.want_h = (unsigned int)(h > 0 ? h : 0);
+    c.width = 0;
+    c.height = 0;
+    c.bpp = 0;
+    c.granted = 0;
+    if (syscall(VNU_SYS_gfx_canvas, (long)&c, (long)&c) != 0)
+        return -1;
+    if (c.width >= VNU_GFX_CANVAS_MIN_W && c.height >= VNU_GFX_CANVAS_MIN_H) {
+        const int old_w = cur_w;
+        const int old_h = cur_h;
+        cur_w = (int)c.width;
+        cur_h = (int)c.height;
+        realloc_private(old_w, old_h);
+    }
+    return 0;
+}
 
 static unsigned char* pixels(void)
 {
@@ -83,6 +226,10 @@ static unsigned char* pixels(void)
         long va = syscall(SYS_gfx_surface, 0UL);
         if (va) {
             fb = (unsigned char*)va;
+            /* A window that can be resized is a window whose read can be
+             * interrupted, so arm the signal before anything parks in
+             * one. */
+            arm_winch();
         } else {
             /* A windowless program still has to draw into something, and
              * the buffer has to be as deep as the display is: at 32bpp
@@ -90,11 +237,42 @@ static unsigned char* pixels(void)
              * rather than left as a quarter-megabyte of .bss in every
              * app that links this. */
             fb_private = (unsigned char*)malloc((unsigned long)
-                                                VGFX_W * VGFX_H * (bpp / 8));
+                                                cur_w * cur_h * (bpp / 8));
             fb = fb_private ? fb_private : (unsigned char*)0;
         }
     }
     return fb;
+}
+
+/* Resizes the windowless fallback buffer to match the canvas, keeping the
+ * pixels already in it.
+ *
+ * The shared surface needs none of this - it is mapped at a fixed VA and
+ * the kernel remaps whatever is behind it when the canvas resizes - but
+ * the private buffer is ordinary heap, so a bigger canvas needs more
+ * room. The copy is row by row because the stride is the width: once the
+ * width changes, the old row N is no longer at N * width. */
+static void realloc_private(int old_w, int old_h)
+{
+    if (!fb_private || old_w <= 0 || old_h <= 0)
+        return;
+    const unsigned long row_new = (unsigned long)cur_w * (bpp / 8);
+    const unsigned long row_old = (unsigned long)old_w * (bpp / 8);
+    if (row_new == 0)
+        return;
+    const unsigned long need = row_new * (unsigned long)cur_h;
+    unsigned char* grown = (unsigned char*)malloc(need);
+    if (!grown)
+        return;   /* out of memory: keep the old buffer, and its size */
+    const int rows = old_h < cur_h ? old_h : cur_h;
+    const int wide = old_w < cur_w ? old_w : cur_w;
+    for (int y = 0; y < rows; ++y)
+        memcpy(grown + (unsigned long)y * row_new,
+               fb_private + (unsigned long)y * row_old,
+               (unsigned long)wide * (bpp / 8));
+    free(fb_private);
+    fb_private = grown;
+    fb = grown;
 }
 
 /* One colour as the *bytes* of a pixel in the current depth, and how
@@ -124,7 +302,7 @@ void vgfx_clear(int color)
     int n = pixel_of(color, px);
     if (!p)
         return;
-    for (int i = 0; i < VGFX_W * VGFX_H; ++i)
+    for (int i = 0; i < cur_w * cur_h; ++i)
         for (int c = 0; c < n; ++c)
             p[i * n + c] = (unsigned char)px[c];
 }
@@ -134,14 +312,14 @@ void vgfx_put_pixel(int x, int y, int color)
     unsigned char* p;
     unsigned int px[4];
     int n;
-    if (x < 0 || y < 0 || x >= VGFX_W || y >= VGFX_H)
+    if (x < 0 || y < 0 || x >= cur_w || y >= cur_h)
         return;
     p = pixels();
     n = pixel_of(color, px);
     if (!p)
         return;
     for (int c = 0; c < n; ++c)
-        p[(y * VGFX_W + x) * n + c] = (unsigned char)px[c];
+        p[(y * cur_w + x) * n + c] = (unsigned char)px[c];
 }
 
 /* The 8bpp answer to a colour that is not one of the sixteen: the
@@ -157,13 +335,13 @@ static void quantize(int x, int y, unsigned int rgb, int dither);
 void vgfx_put_rgb(int x, int y, unsigned int rgb)
 {
     unsigned char* p;
-    if (x < 0 || y < 0 || x >= VGFX_W || y >= VGFX_H)
+    if (x < 0 || y < 0 || x >= cur_w || y >= cur_h)
         return;
     p = pixels();
     if (!p)
         return;
     if (bpp == 32) {
-        unsigned int* q = (unsigned int*)p + y * VGFX_W + x;
+        unsigned int* q = (unsigned int*)p + y * cur_w + x;
         *q = (rgb & 0x00FFFFFFu) | 0xFF000000u;
         return;
     }
@@ -221,7 +399,7 @@ void vgfx_put_rgba(int x, int y, unsigned int rgb, unsigned int a)
 {
     unsigned char* p;
     unsigned int* q;
-    if (x < 0 || y < 0 || x >= VGFX_W || y >= VGFX_H)
+    if (x < 0 || y < 0 || x >= cur_w || y >= cur_h)
         return;
     p = pixels();
     if (!p)
@@ -236,7 +414,7 @@ void vgfx_put_rgba(int x, int y, unsigned int rgb, unsigned int a)
     }
     if (a > 255)
         a = 255;
-    q = (unsigned int*)p + y * VGFX_W + x;
+    q = (unsigned int*)p + y * cur_w + x;
     *q = (rgb & 0x00FFFFFFu) | (a << 24);
 }
 
@@ -400,6 +578,21 @@ int vgfx_poll(vgfx_event_t* ev)
     for (;;) {
         char b;
         long n = read(0, &b, 1); /* blocks until a byte is ready */
+        if (n < 0) {
+            /* Interrupted, and the only thing that interrupts a window's
+             * input is the window changing size: the kernel raises
+             * SIGWINCH on the task and the read comes back EINTR, which
+             * is exactly the POSIX way for this to arrive. The canvas
+             * size is picked up here so the app gets it as an event
+             * rather than having to install a signal handler of its own,
+             * and a partially parsed mouse message is dropped: its
+             * coordinates were in the old canvas's units. */
+            if (vgfx_refresh()) {
+                ev->type = VGFX_EV_RESIZE;
+                return 1;
+            }
+            continue;
+        }
         if (n != 1)
             continue;
         switch (state) {

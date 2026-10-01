@@ -16,19 +16,34 @@
 #include <vlibc/unistd.h>
 #include <vlibc/string.h>
 
-/* --- Geometry (client area is VGFX_W x VGFX_H) --- */
+/* --- Geometry ---
+ *
+ * The keypad is laid out from the canvas size, not from the 480x340 the
+ * window opens at: vgfx_canvas() asks for the window's size, the user
+ * can drag the window's edge to change it, and SIGWINCH says so. So the
+ * margin, the button width and the gap between rows are computed from
+ * what the canvas is right now, and the bottom row lands on the bottom
+ * edge - the calculator fills whatever window it is given instead of
+ * being a fixed-size picture scaled up into it.
+ *
+ * The one thing that stays fixed is the minimum, which is what the
+ * canvas is never allowed to go below: this layout has to fit inside it
+ * with room for every button. */
 #define M 6                 /* window margin around chrome */
 #define DISP_X M
 #define DISP_Y 6
-#define DISP_W (VGFX_W - 2 * M)
 #define DISP_H 24
 #define BTN_Y 38            /* first button row top edge */
-#define BTN_H 18            /* button height */
 #define BTN_GAP 4
 #define BTN_COLS 4
-#define BTN_W ((VGFX_W - 2 * M - (BTN_COLS - 1) * BTN_GAP) / BTN_COLS)
+#define BTN_H 18            /* button height */
 #define NROWS_DIGIT 5
 #define NROWS 6             /* 5 key rows + one wide "=" row */
+
+/* The smallest canvas this layout fits in, and the size asked for when
+ * none was requested: the keypad drawn as tightly as it can be. */
+#define CALC_MIN_W 220
+#define CALC_MIN_H 220
 
 /* One extra pseudo-code per button so the keypad maps straight onto
  * the engine's key handler. 'B' = BS, 'E' = CE, 'R' = C (reset),
@@ -350,6 +365,35 @@ static void handle_key(char k)
 }
 
 /* --- Drawing --- */
+/* The layout, recomputed from the canvas size by layout(). Keeping it
+ * in globals rather than passing it around is what lets draw() and
+ * hit_button() agree about where a button is without measuring twice -
+ * and they are measured from the same numbers, which is what keeps a
+ * click landing on the key under the cursor after a resize. */
+static int disp_w;      /* LCD field width */
+static int btn_y;       /* first button row's top edge */
+static int btn_w;       /* one key's width */
+static int row_h;       /* one row's height, gap included */
+
+static void layout(void)
+{
+    const int w = vgfx_width();
+    const int h = vgfx_height();
+    /* The six rows share whatever is left below the display, so a taller
+     * window gives taller keys rather than a taller gap above them. */
+    int rows_h = h - (BTN_Y + BTN_GAP);
+    if (rows_h < NROWS * BTN_H + (NROWS - 1) * BTN_GAP)
+        rows_h = NROWS * BTN_H + (NROWS - 1) * BTN_GAP;
+    row_h = (rows_h - (NROWS - 1) * BTN_GAP) / NROWS;
+    if (row_h < BTN_H)
+        row_h = BTN_H;
+    disp_w = w - 2 * M;
+    btn_y = BTN_Y;
+    btn_w = (w - 2 * M - (BTN_COLS - 1) * BTN_GAP) / BTN_COLS;
+    if (btn_w < 24)
+        btn_w = 24;
+}
+
 static void draw_button(int x, int y, int w, int h, const char* label, int pressed)
 {
     vgfx_fill_rect(x, y, w, h, pressed ? VGFX_DGRAY : VGFX_LGRAY);
@@ -362,47 +406,48 @@ static void draw_button(int x, int y, int w, int h, const char* label, int press
 
 static void draw(void)
 {
+    layout();
     vgfx_clear(VGFX_LGRAY);
 
     /* Display: black LCD field, right-aligned white value, pending-op
      * indicator in the corner. */
-    vgfx_fill_rect(DISP_X, DISP_Y, DISP_W, DISP_H, VGFX_BLACK);
-    vgfx_rect(DISP_X, DISP_Y, DISP_W, DISP_H, VGFX_LGRAY);
+    vgfx_fill_rect(DISP_X, DISP_Y, disp_w, DISP_H, VGFX_BLACK);
+    vgfx_rect(DISP_X, DISP_Y, disp_w, DISP_H, VGFX_LGRAY);
     if (pending) {
         char pstr[2] = {pending, 0};
         vgfx_str(DISP_X + 4, DISP_Y + (DISP_H - 16) / 2, pstr, VGFX_WHITE);
     }
     int tw = vgfx_text_width(disp);
-    vgfx_str(DISP_X + DISP_W - 4 - tw, DISP_Y + (DISP_H - 16) / 2, disp, VGFX_WHITE);
+    vgfx_str(DISP_X + disp_w - 4 - tw, DISP_Y + (DISP_H - 16) / 2, disp, VGFX_WHITE);
 
     /* Buttons. Row 5 is the wide "=". */
     int id = 0;
     for (int r = 0; r < NROWS_DIGIT; ++r) {
         for (int c = 0; c < BTN_COLS; ++c, ++id) {
-            int x = M + c * (BTN_W + BTN_GAP);
-            int y = BTN_Y + r * (BTN_H + BTN_GAP);
-            draw_button(x, y, BTN_W, BTN_H, labels[r][c], hover == id);
+            int x = M + c * (btn_w + BTN_GAP);
+            int y = btn_y + r * row_h;
+            draw_button(x, y, btn_w, row_h - BTN_GAP, labels[r][c], hover == id);
         }
     }
-    int eq_y = BTN_Y + NROWS_DIGIT * (BTN_H + BTN_GAP);
-    int eq_w = BTN_COLS * BTN_W + (BTN_COLS - 1) * BTN_GAP;
-    draw_button(M, eq_y, eq_w, BTN_H, "=", hover == id);
+    int eq_y = btn_y + NROWS_DIGIT * row_h;
+    int eq_w = BTN_COLS * btn_w + (BTN_COLS - 1) * BTN_GAP;
+    draw_button(M, eq_y, eq_w, row_h - BTN_GAP, "=", hover == id);
 }
 
 /* Map client-area pixel coords to a button id, -1 if none. */
 static int hit_button(int px, int py)
 {
-    if (px < M || px >= VGFX_W - M)
+    if (px < M || px >= vgfx_width() - M)
         return -1;
-    int eq_y = BTN_Y + NROWS_DIGIT * (BTN_H + BTN_GAP);
+    int eq_y = btn_y + NROWS_DIGIT * row_h;
     if (py >= eq_y && py < eq_y + BTN_H)
         return NROWS_DIGIT * BTN_COLS; /* the wide = */
-    if (py < BTN_Y)
+    if (py < btn_y)
         return -1;
-    int r = (py - BTN_Y) / (BTN_H + BTN_GAP);
+    int r = (py - btn_y) / row_h;
     if (r >= NROWS_DIGIT)
         return -1;
-    int c = (px - M) / (BTN_W + BTN_GAP);
+    int c = (px - M) / (btn_w + BTN_GAP);
     if (c >= BTN_COLS)
         return -1;
     return r * BTN_COLS + c;
@@ -439,13 +484,23 @@ static void release_at(int px, int py)
 int main(void)
 {
     reset_all();
+    /* Ask for a canvas that fits this layout, so the window opens big
+     * enough to not look crammed. The kernel grants what it can of it,
+     * and a resize afterwards comes back as VGFX_EV_RESIZE. */
+    (void)vgfx_canvas(CALC_MIN_W, CALC_MIN_H);
     draw();
     vgfx_flush();
 
     for (;;) {
         vgfx_event_t ev;
         vgfx_poll(&ev);
-        if (ev.type == VGFX_EV_KEY) {
+        if (ev.type == VGFX_EV_RESIZE) {
+            /* The canvas is already the new size: draw() measures off
+             * vgfx_size(), so laying the keypad out again is all it
+             * takes for the window to be filled instead of scaled. */
+            draw();
+            vgfx_flush();
+        } else if (ev.type == VGFX_EV_KEY) {
             if (ev.key == 0x1B) {
                 exit(0); /* Esc closes the calculator window */
             }

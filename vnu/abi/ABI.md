@@ -84,6 +84,7 @@ must never be renumbered.
 | 69 | alarm |
 | 70 | sigraise |
 | 71 | sigpending |
+| 72 | gfx_canvas |
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
@@ -180,6 +181,29 @@ with `-1` leaves a field unchanged; only root may chown.
   the caller has no window — a plain process drawing with vgfx gets a
   private buffer it can draw into but that is never displayed. There
   is no unmap: the frames go back with the task's address space.
+- `gfx_canvas(ebx=req, ecx=out)` — sizes the canvas that `gfx_surface`
+  (61) mapped, and reports the size to draw at. Both arguments point at
+  the same `struct vnu_gfx_canvas` (`want_w`, `want_h` in, `width`,
+  `height`, `bpp`, `granted` out); either may be null to only report or
+  only ask. `want_w`/`want_h` of 0 leave that axis alone. A request is
+  clamped rather than refused — `VNU_GFX_CANVAS_MIN_W` (160) and
+  `VNU_GFX_CANVAS_MIN_H` (112) at the bottom, the display mode at the
+  top — so "as big as you allow" is a wish the kernel answers with a
+  size rather than an error; `granted` is 0 when the clamp changed it.
+  `out->bpp` is the canvas depth, the same value `gfx_getinfo` reports.
+  Returns 0, or `-VNU_ENOSYS` when the caller has no canvas (a text
+  window, or a program that never asked for a surface — the call needs
+  `gfx_surface` first), `-VNU_ENOMEM` when the pool has no contiguous
+  run long enough to back the new size.
+  Resizing reallocates, carries the drawn top-left corner across (row by
+  row, since the pitch changes with the width) and raises `SIGWINCH` for
+  the task: the new frames are taken before the old ones are released, so
+  a pool that cannot back the size leaves the window as it was rather
+  than blank. Sizes are rounded up to a 64x64 granule when the frames are
+  taken, so a drag inside one granule costs no reallocation and keeps the
+  pixels. Both directions end here — the app asking for a size and the
+  user dragging a window edge — so both are clamped the same way, and the
+  GUI moves the window's chrome to match a canvas the app resized itself.
 - `gfx_setmode(ebx=w, ecx=h)` — put the display into `w` x `h`. Only the
   sizes in the ladder are accepted; the kernel's list is `640x480`,
   `800x600`, `1024x768` (the default) and `1280x1024`, and `/proc/gfx`
@@ -367,6 +391,23 @@ with `-1` leaves a field unchanged; only root may chown.
 - `sigpending(ebx)` — stores the set of signals raised but not yet
   delivered in the 32-bit word at `ebx`. Returns 0.
 
+`SIGWINCH` (28) is raised for a windowed task whose pixel canvas changed
+size, whether the app asked for the new size through `gfx_canvas` (72) or
+the user dragged the window edge (the GUI makes the same call). A task
+that is parked in `read()` for input is woken and the read fails with
+`EINTR`, so the resize arrives on the way out of that call, exactly as for
+any other signal.
+
+A windowed task is not in the process table: it has no pid and is never
+round-robined, so there is no `kill`-by-pid for it and its signal state
+is not a `Process`'s. The five fields a signal needs — the actions, the
+pending set, the mask, the saved mask and the interrupted frame — live in
+its `Console` instead, and `rt_sigaction`, `rt_sigprocmask`, `sigraise`
+and `sigpending` operate on those when the caller is a task. Everything
+else is shared: delivery builds the same handler frame on the same stack,
+and a signal whose action is to terminate ends a task by closing its
+window, which is what "terminate" means for something that is a window.
+
 Signals are raised and delivered at two different moments, which is what
 POSIX means and what the console depends on. Raising records the signal
 against the process (`kill`, `sigraise`, `SIGALRM` firing); it is not a
@@ -378,9 +419,8 @@ for a blocked console `read()` is that very call's return — and the
 handler is built on the interrupt frame of the call being left behind.
 The call then fails with `EINTR` *and* the handler has run, in that
 order, which is the POSIX meaning of "the system call fails with
-`EINTR`". A windowed task is not a boundary: it must let its slice end
-instead (see the `gfx_surface` note), so a signal raised for one waits
-for the next boundary. `SIGINT` from the console is the everyday case:
+`EINTR`". A windowed task's boundary is its return from a
+syscall, as for any other caller. `SIGINT` from the console is the everyday case:
 Ctrl+C is a signal, never a byte, so a program reading the keyboard
 never sees character 3 from the real console (a windowed console, whose
 keys come from the GUI rather than the controller, still delivers the

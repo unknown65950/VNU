@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <vnu/abi.h>
 
 // Lets MULTIPLE launched apps run *inside VibeGraphics windows*,
 // concurrently with the GUI's own event loop and with each other.
@@ -37,10 +38,14 @@ constexpr TaskHandle NO_TASK = -1;
  * the character grid, and mouse clicks over the client area get
  * delivered to the app as escape-sequence events on stdin.
  *
- * The canvas is a native 8x16 two-column pitch: 480x340 = 60 cols x 21
- * rows of the VGA text face, so a gfx app's text renders at the same
- * physical size as every console window. The GUI stretches it to the
- * window's client area, so a gfx window behaves like any other one. */
+ * The canvas is a native 8x16 two-column pitch at its starting size, so
+ * a gfx app's text renders at the same physical size as every console
+ * window. That start is not a fixed size: the canvas follows the window
+ * (see task_gfx_canvas), which is why the size is per-task state and
+ * these two are only where a window *begins*. The GUI blits it into the
+ * client area at the same scale, so a gfx window behaves like any other
+ * one - and resizing the window now really does resize the drawing,
+ * instead of scaling a 480x340 bitmap up. */
 constexpr int GFX_W = 480;
 constexpr int GFX_H = 340;
 
@@ -57,14 +62,23 @@ constexpr int GFX_H = 340;
  * both the image and the per-task heap (0x700000). */
 constexpr uint32_t GFX_SURFACE_VA = 0x00500000;
 
-/* Pages the canvas takes at a given depth: GFX_W x GFX_H is 40 at 8bpp
- * and 160 at 32bpp. The canvas is in the depth of the display the app
- * is drawing on (vgfx::bpp()), so a program writes the same pixels into
- * it that the frame itself holds - which is what lets a true-colour
- * pixel, and its alpha, reach the screen without a palette in the way.
+/* Pages a canvas of w x h takes at a given depth: the starting
+ * 480x340 is 40 at 8bpp and 160 at 32bpp, and a canvas follows its
+ * window, so this is asked with the size in hand rather than the
+ * constants. The canvas is in the depth of the display the app is
+ * drawing on (vgfx::bpp()), so a program writes the same pixels into it
+ * that the frame itself holds - which is what lets a true-colour pixel,
+ * and its alpha, reach the screen without a palette in the way.
  * A macro, not a function: this header is read by C too. */
-#define GFX_SURFACE_PAGES_AT(bpp) \
-    ((uint32_t)(GFX_W * GFX_H * ((bpp) / 8) + 0xFFFu) / 0x1000u)
+#define GFX_SURFACE_PAGES(w, h, bpp) \
+    ((uint32_t)((w) * (h) * ((bpp) / 8) + 0xFFFu) / 0x1000u)
+
+/* The canvas is allocated in whole pages and mapped at GFX_SURFACE_VA,
+ * so growing it means unmapping, reallocating and mapping again - which
+ * would drop whatever was drawn. Instead the grant is rounded up to
+ * this granularity: a resize inside one granule reuses the same pages
+ * and costs nothing, and the app keeps its pixels across the drag. */
+constexpr int GFX_CANVAS_GRANULE = 64;
 
 /* VNU mouse protocol (delivered over the stdin escape stream, one event
  * per message so a partially-queued press can't corrupt the next):
@@ -100,9 +114,31 @@ struct Console {
      * this task to a pixel framebuffer window. `pixel` is then the
      * identity-mapped view of the pages the app writes at
      * GFX_SURFACE_VA - the compositor blits straight out of them, and
-     * stays null for a text window, which never asks. */
+     * stays null for a text window, which never asks.
+     *
+     * `pix_w`/`pix_h` are the canvas the app draws *at*, and they are
+     * per-task because the canvas follows the window: the window starts
+     * at GFX_W x GFX_H and the app asks for something else with
+     * task_gfx_canvas. `pix_pages` is what the canvas actually occupies
+     * in the page pool, rounded up to GFX_CANVAS_GRANULE, so the window
+     * can be dragged a little either way without a reallocation.
+     * `winch` is set when the size changed under the app, which is what
+     * raises SIGWINCH. */
     uint8_t* pixel;
     bool gfx;
+    int pix_w;
+    int pix_h;
+    int pix_pages;
+    bool winch;
+    /* Signals pending for this windowed task: bitmask by signal number.
+     * SIGWINCH is raised when the canvas changes size. The delivery
+     * path is different from classic processes, but the handler and mask
+     * are the same struct shape. */
+    uint32_t sig_pending;
+    uint32_t sig_mask;
+    struct vnu_sigaction sig_action[VNU_NSIG];
+    uint32_t sig_saved_mask;
+    uint32_t sig_frame;
 };
 
 // (Re)initialises the multi-slot task table. Must be called once from
@@ -134,6 +170,19 @@ int current_handle();
 // currently executing (the GUI never does — it only closes windows in
 // its own event loop).
 void close_task(TaskHandle h);
+
+/* The same operations addressed by console rather than by handle, for
+ * the signal path: raising SIGWINCH knows which window changed, not which
+ * slot number it happens to live in.
+ *
+ * close_task_of() is the careful one - a task killed by a signal may be
+ * the one executing right now, and its pages cannot be freed under its
+ * own feet, so in that case it is only marked finished and the GUI's own
+ * sweep closes the window from the GUI's stack. That is the same shape
+ * exit() has. */
+int handle_of(Console* c);
+void wake_task_of(Console* c);
+void close_task_of(Console* c);
 
 bool is_running(TaskHandle h);
 bool has_window(TaskHandle h); // true while there's content worth showing
@@ -179,6 +228,43 @@ void feed_mouse(TaskHandle h, int button, int px, int py);
 // to do with it (picview loads the file; files refreshes its listing).
 void feed_drop(TaskHandle h, const char* path);
 
+// --- Canvas negotiation, on any task's console ---
+
+/* Resizes the canvas belonging to `target` to what `req` asks for (0 on
+// either axis leaves that one alone) and writes the granted size and
+// depth to `out`. Either pointer may be null to only request, resp. only
+// ask. Changing the size reallocates the canvas, carries the drawn
+// top-left corner over and sets the task's `winch`, which is what raises
+// SIGWINCH - the resize and the notice of it are one event.
+//
+// Addressed by console rather than by "the current task" because a
+// window can be resized from two sides: the app, through the syscall,
+// while it is executing; and the GUI, which owns the geometry and is
+// doing it because the user dragged the window's edge. Both end up here,
+// so both get the same clamping and the same signal. */
+int canvas_resize(Console& target, uint32_t pgdir, const struct vnu_gfx_canvas* req,
+                  struct vnu_gfx_canvas* out);
+
+/* The page directory a console's pages live in, or 0 if no task holds
+ * it. The canvas is mapped into the owning task's address space, so
+ * whoever resizes it needs that task's `pgdir` - and the GUI resizing
+ * another task's window is exactly the case the task's own
+ * current_is_task() would refuse. */
+uint32_t pgdir_of(Console& target);
+
+/* Raises SIGWINCH for every task whose canvas changed size and has not
+ * been told yet.
+ *
+ * canvas_resize() only sets a flag: the app's own request is a syscall,
+ * where a signal raised on the spot would want to be delivered before
+ * the syscall even returns, while the GUI's (from a window drag) has no
+ * task executing at all and the task is usually parked in a read. So the
+ * GUI's pass over its tasks is where the flag becomes a signal, every
+ * pass, which is the one place that needs no task to be running and
+ * reaches a task asleep in its input read - the signal wakes it, the
+ * read comes back EINTR and the handler runs on the way out. */
+void raise_winch_signals();
+
 // --- Gfx surface (operates on the currently executing task, see
 // current_is_task()) ---
 
@@ -188,9 +274,14 @@ void feed_drop(TaskHandle h, const char* path);
  * not a windowed task, or when the pages could not be mapped. */
 uint32_t task_gfx_surface();
 
-// Per-task heap break. The task's heap is pre-mapped (BRK_MIN..BRK_MAX),
-// so this is just bookkeeping for vlibc's malloc(). Called from the
-// SYS_brk handler while a windowed task is executing.
+/* The calling task's console, valid only while current_is_task(). The
+ * other half of every windowed syscall hook: this is *which* window the
+ * request is about, where the other hooks answer on its behalf. */
+Console* console_of_current();
+
+/* Per-task heap break. The task's heap is pre-mapped (BRK_MIN..BRK_MAX),
+ * so this is just bookkeeping for vlibc's malloc(). Called from the
+ * SYS_brk handler while a windowed task is executing. */
 uint32_t task_brk(uint32_t req);
 
 // --- Syscall-facing hooks (called only from syscall.cpp's write/read/

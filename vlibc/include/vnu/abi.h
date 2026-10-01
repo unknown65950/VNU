@@ -79,6 +79,7 @@
 #define VNU_SYS_alarm        69
 #define VNU_SYS_sigraise     70
 #define VNU_SYS_sigpending   71
+#define VNU_SYS_gfx_canvas   72
 
 /* Which display driver is in use, as vnu_gfx_info::driver. */
 #define VNU_GFX_DRIVER_VGA        0 /* Bochs VBE, 8bpp indexed */
@@ -92,6 +93,36 @@ struct vnu_gfx_info {
     uint32_t height;
     uint32_t bpp;    /* bits per pixel a program draws in: 8 or 32 */
     uint32_t driver; /* VNU_GFX_DRIVER_* */
+};
+
+/* Bounds a gfx app may ask its canvas to be. The low end is the window's
+ * own minimum client area (gui.cpp); the high end is the mode, applied
+ * by the kernel when a request is granted. */
+#define VNU_GFX_CANVAS_MIN_W 160
+#define VNU_GFX_CANVAS_MIN_H 112
+
+/* In-parameter and result of VNU_SYS_gfx_canvas: one struct for "let me
+ * have this size" and "here is the size you actually got", so the whole
+ * negotiation is a single read-modify-write and a program learns the
+ * granted size without a second syscall.
+ *
+ * want_w/want_h are the size the app would like its canvas to be, in
+ * pixels; 0 in either means "leave that axis alone". The kernel clamps
+ * to the window's minimum, the mode and what the page pool can back, so
+ * a request is a request, not a command - and the size that comes back
+ * is the one to draw at, which may be smaller than asked for.
+ *
+ * width/height/bpp are the granted canvas, always written. The pages
+ * are shared with the compositor at the same VA gfx_surface() returns,
+ * so nothing moves when the size changes: the app clears and redraws
+ * the new rectangle at the same address. */
+struct vnu_gfx_canvas {
+    uint32_t want_w;  /* in:  desired width, 0 = keep */
+    uint32_t want_h;  /* in:  desired height, 0 = keep */
+    uint32_t width;   /* out: granted width in pixels */
+    uint32_t height;  /* out: granted height in pixels */
+    uint32_t bpp;     /* out: bits per pixel of the canvas now */
+    uint32_t granted; /* out: 1 = want_w/want_h met, 0 = clamped */
 };
 
 /* How many slots VNU_SYS_gfx_palette answers, and how many bytes a
@@ -129,6 +160,9 @@ struct vnu_gfx_info {
 #define VNU_SIGALRM 14 /* alarm() ran out */
 #define VNU_SIGTERM 15
 #define VNU_SIGCHLD 17 /* a child changed state */
+#define VNU_SIGWINCH 28 /* the window's pixel canvas changed size: a
+                           * gfx app catches this, asks gfx_canvas()
+                           * again and redraws at the new size */
 
 /* The two handler values that are not addresses. */
 #define VNU_SIG_DFL 0u /* do the default thing: terminate */

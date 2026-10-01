@@ -101,6 +101,13 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
                 char ch = 0;
                 if (windowed) {
                     ch = vnu::wintask::task_getch_blocking();
+                    if (ch == 0 && vnu::proc::task_interrupt_pending()) {
+                        /* Woken by a signal rather than by a key: the
+                         * read is interrupted the way POSIX says, so the
+                         * app sees the EINTR instead of a phantom byte
+                         * and the handler runs on the way out. */
+                        return static_cast<std::uint32_t>(-VNU_EINTR);
+                    }
                 } else if (vnu::proc::can_yield()) {
                     /* Coro-scheduled process: don't spin the whole
                      * machine waiting for a key — yield to the scheduler
@@ -186,6 +193,18 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
          * from the text grid to that canvas. 0 when the caller has no
          * window (see wintask::task_gfx_surface). */
         return vnu::wintask::task_gfx_surface();
+    case VNU_SYS_gfx_canvas: {
+        /* ebx asks (0 on either axis = leave it), ecx gets the answer.
+         * The canvas belongs to the calling task, so this is the case
+         * current_is_task() already covers. */
+        vnu::wintask::Console* con = vnu::wintask::console_of_current();
+        if (!con)
+            return static_cast<std::uint32_t>(-VNU_ENOSYS);
+        return static_cast<std::uint32_t>(vnu::wintask::canvas_resize(
+            *con, vnu::wintask::pgdir_of(*con),
+            reinterpret_cast<const vnu_gfx_canvas*>(tf->ebx),
+            reinterpret_cast<vnu_gfx_canvas*>(tf->ecx)));
+    }
     case VNU_SYS_stat:
         return static_cast<std::uint32_t>(vnu::vfs::stat(
             reinterpret_cast<const char*>(tf->ebx),
@@ -772,9 +791,17 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
 extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
 {
     std::uint32_t rc = dispatch_syscall(tf);
-    if (!vnu_pending_jump_flag && !vnu::wintask::current_is_task() &&
-        vnu::proc::deliver_pending_signal(reinterpret_cast<std::uint32_t>(tf)) != 0)
+    vnu::wintask::Console* task = vnu::wintask::console_of_current();
+    if (task) {
+        /* A windowed task's signals live in its Console, not in the
+         * process table, so delivery goes through that door. */
+        if (!vnu_pending_jump_flag &&
+            vnu::proc::deliver_task_pending_signal(task, reinterpret_cast<std::uint32_t>(tf)) != 0)
+            rc = static_cast<std::uint32_t>(-VNU_EINTR);
+    } else if (!vnu_pending_jump_flag &&
+               vnu::proc::deliver_pending_signal(reinterpret_cast<std::uint32_t>(tf)) != 0) {
         rc = static_cast<std::uint32_t>(-VNU_EINTR);
+    }
     return rc;
 }
 
