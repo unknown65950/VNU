@@ -1897,14 +1897,11 @@ void present_with(const uint8_t (&pal)[16][3])
                         static_cast<uint32_t>(dmg.x0) * 4u;
         uint32_t seg = 0;
         vnu::virtio_gpu::ScanoutSegment s = vnu::virtio_gpu::scanout_segment(0);
-        uint32_t room = 0;
         /* Positioned at the first damaged pixel. */
         while (seg < nsegs) {
             s = vnu::virtio_gpu::scanout_segment(seg);
-            if (lead < s.bytes) {
-                room = s.bytes - lead;
+            if (lead < s.bytes)
                 break;
-            }
             lead -= s.bytes;
             ++seg;
         }
@@ -1912,7 +1909,6 @@ void present_with(const uint8_t (&pal)[16][3])
             put_damage(dmg);   /* the list ran out: the host is still owed it */
             return;
         }
-        uint8_t* dst = reinterpret_cast<uint8_t*>(s.phys + lead);
         const uint32_t row_bytes = static_cast<uint32_t>(dmg.x1 - dmg.x0) * 4u;
         for (int y = dmg.y0; y < dmg.y1; ++y) {
             /* A 32bpp frame is already B8G8R8X8 - the desktop composited
@@ -1924,16 +1920,21 @@ void present_with(const uint8_t (&pal)[16][3])
             const uint8_t* src = pixel_ptr(dmg.x0, y);
             uint32_t left = row_bytes;
             while (left > 0) {
-                if (room == 0) {
+                /* Into the run holding this byte. Done here rather than
+                 * after the copy above, because the copy of the last
+                 * byte of the last row lands on the end of the list and
+                 * there is nothing left to walk into. */
+                while (lead >= s.bytes) {
+                    lead -= s.bytes;
                     if (++seg == nsegs) {
                         put_damage(dmg);
                         return;   /* the list ran out: still owed */
                     }
                     s = vnu::virtio_gpu::scanout_segment(seg);
-                    dst = reinterpret_cast<uint8_t*>(s.phys);
-                    room = s.bytes;
                 }
+                const uint32_t room = s.bytes - lead;
                 const uint32_t chunk = (left < room) ? left : room;
+                uint8_t* dst = reinterpret_cast<uint8_t*>(s.phys + lead);
                 if (g_bpp == 32) {
                     memcpy(dst, src, chunk);
                     src += chunk;
@@ -1950,10 +1951,19 @@ void present_with(const uint8_t (&pal)[16][3])
                     }
                     src += chunk / 4u;
                 }
-                room -= chunk;
                 left -= chunk;
-                dst += chunk;
+                lead += chunk;
             }
+            /* A row of the scanout is full_row bytes wide even when only
+             * part of it is being copied, so the next row starts a whole
+             * frame row further on and back at the box's leftmost column.
+             * Stepping on by the width that was written instead would run
+             * the rows together: a box narrower than the screen would land
+             * as a band of squashed rows at the top of the frame. The
+             * full-width box the first pass presents hides that, being
+             * the one case where the two steps are the same. */
+            if (y + 1 < dmg.y1)
+                lead += full_row - row_bytes;
         }
         g_present_bytes = dmg.pixels() * 4u;
         g_present_total += g_present_bytes;
