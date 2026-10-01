@@ -50,6 +50,21 @@ uint8_t read_ack()
     return inb(PORT_DATA);
 }
 
+/* Empty the controller's output buffer, and only mouse bytes: the
+ * keyboard's own reader checks the aux bit before it takes anything (a
+ * pending mouse packet must not be read out from under poll()), which
+ * is right while the desktop is up and polling this device and is
+ * exactly what strands the keyboard when nobody is polling it any
+ * more. */
+void drain_pending()
+{
+    for (int i = 0; i < 32; ++i) {
+        if ((inb(PORT_STATUS) & 0x21) != 0x21)
+            break;
+        (void)inb(PORT_DATA);
+    }
+}
+
 int8_t g_packet[4];
 int g_packet_idx = 0;
 bool g_wheel = false;
@@ -60,6 +75,17 @@ namespace vnu::mouse {
 
 void init()
 {
+    /* Whatever the event loop that has just ended left in the output
+     * buffer goes first: the release of the click that closed it, or a
+     * move that arrived after it. Every handshake below reads exactly
+     * one byte and takes it for an ack, so a stale packet byte here
+     * shifts the whole conversation - including the identify reply
+     * that decides whether this is a 3-byte or a 4-byte packet stream,
+     * and a wrong answer there garbles every packet that follows: a
+     * data byte read as a flags byte leaves the button looking stuck
+     * down, and no click the user makes ever registers again. */
+    drain_pending();
+
     wait_input_clear();
     outb(PORT_CMD, 0xA8); /* enable auxiliary device */
 
@@ -100,6 +126,12 @@ void init()
     send_to_aux(0xF4); /* enable data reporting (stream mode) */
     (void)read_ack();
 
+    /* One more drain, now that reporting is on: the packets that came
+     * in between the drain at the top and here are the tail of the
+     * event loop before, and the stream the caller is about to read has
+     * to start on a packet boundary, not in the middle of one. */
+    drain_pending();
+
     g_packet_idx = 0;
 }
 
@@ -110,17 +142,8 @@ void shutdown()
     send_to_aux(0xF5);
     (void)read_ack();
 
-    /* Then whatever the last move already left there, and only mouse
-     * bytes: the keyboard's own reader checks the aux bit before it
-     * takes anything (a pending mouse packet must not be read out from
-     * under poll()), which is right while the desktop is up and polling
-     * this device and is exactly what strands the keyboard when nobody
-     * is polling it any more. */
-    for (int i = 0; i < 32; ++i) {
-        if ((inb(PORT_STATUS) & 0x21) != 0x21)
-            break;
-        (void)inb(PORT_DATA);
-    }
+    /* Then whatever the last move already left there. */
+    drain_pending();
     g_packet_idx = 0;
 }
 
