@@ -424,6 +424,50 @@ bool clipped_out(int x, int y)
     return x < g_clip_x0 || y < g_clip_y0 || x >= g_clip_x1 || y >= g_clip_y1;
 }
 
+/* The same question as clipped_out(), asked about a whole rectangle: the
+ * part of it that is on the display and inside the clip box, as a
+ * half-open box. False when nothing of it is visible.
+ *
+ * The rectangle routines clip once through this and write the run they
+ * are left with, instead of asking clipped_out() per pixel. A fill is
+ * put_pixel() per pixel by construction, and put_pixel() is a call from
+ * another translation unit: the test, the row offset and the store add
+ * up to three calls' worth of work per pixel, which is what made a
+ * window's chrome repaint cost more than the blit that lands on top of
+ * it. */
+bool clip_box(int x, int y, int w, int h, int* bx0, int* by0, int* bx1, int* by1)
+{
+    int x0 = x;
+    int y0 = y;
+    int x1 = x + w;
+    int y1 = y + h;
+    if (g_clip_x1 > g_clip_x0) {
+        if (x0 < g_clip_x0)
+            x0 = g_clip_x0;
+        if (y0 < g_clip_y0)
+            y0 = g_clip_y0;
+        if (x1 > g_clip_x1)
+            x1 = g_clip_x1;
+        if (y1 > g_clip_y1)
+            y1 = g_clip_y1;
+    }
+    if (x0 < 0)
+        x0 = 0;
+    if (y0 < 0)
+        y0 = 0;
+    if (x1 > g_width)
+        x1 = g_width;
+    if (y1 > g_height)
+        y1 = g_height;
+    if (x0 >= x1 || y0 >= y1)
+        return false;
+    *bx0 = x0;
+    *by0 = y0;
+    *bx1 = x1;
+    *by1 = y1;
+    return true;
+}
+
 /* What has been written since the last present() went to the host, as a
  * half-open box (x0,y0)-(x1,y1) with x0 >= x1 meaning nothing pending.
  * The host's copy of the frame is the reference this is measured
@@ -930,16 +974,27 @@ void draw_wallpaper()
         /* A decoded wallpaper is held as one byte per pixel (it is
          * quantized to a palette at startup), so a 32bpp frame is fed
          * from it the way a scanout is: index by index through the same
-         * palette the rest of the desktop draws in. */
+         * palette the rest of the desktop draws in.
+         *
+         * At 8bpp it is the frame's own format, index for index: a full
+         * screen is 786 432 pixels and the region repaint under a window
+         * that has just closed is most of them, so the band is copied
+         * straight into the frame. At 32bpp each index has to be looked
+         * up in the palette first, which is the loop below. */
         const uint8_t* src = vnu::wallpaper::frame();
+        const unsigned long n = static_cast<unsigned long>(cx1 - cx0);
         for (int y = cy0; y < cy1; ++y) {
-            const uint8_t* in = src + static_cast<long>(y) * g_width;
-            uint8_t* row = row_ptr(y);
-            for (int x = cx0; x < cx1; ++x) {
+            const uint8_t* in = src + static_cast<long>(y) * g_width + cx0;
+            uint8_t* row = row_ptr(y) + static_cast<long>(cx0);
+            if (g_bpp == 8) {
+                memcpy(row, in, n);
+                continue;
+            }
+            for (unsigned long i = 0; i < n; ++i) {
                 uint8_t px[4];
-                const uint32_t n = pixel_of(in[x], CATT_PAL, px);
-                for (uint32_t i = 0; i < n; ++i)
-                    row[x * n + i] = px[i];
+                const uint32_t got = pixel_of(in[i], CATT_PAL, px);
+                for (uint32_t b = 0; b < got; ++b)
+                    row[i * got + b] = px[b];
             }
         }
         return;
@@ -1053,21 +1108,52 @@ void put_pixel(int x, int y, uint8_t color)
 
 void fill_rect(int x, int y, int w, int h, uint8_t color)
 {
-    for (int j = 0; j < h; ++j)
-        for (int i = 0; i < w; ++i)
-            put_pixel(x + i, y + j, color);
+    int x0, y0, x1, y1;
+    if (!clip_box(x, y, w, h, &x0, &y0, &x1, &y1))
+        return;
+    const int n = x1 - x0;
+    uint8_t px[4];
+    const int bytes = static_cast<int>(pixel_of(color, CATT_PAL, px));
+    for (int j = y0; j < y1; ++j) {
+        uint8_t* row = row_ptr(j) + static_cast<long>(x0) * bytes;
+        if (bytes == 1) {
+            /* At 8bpp the run is one byte over and over: the palette
+             * index is the pixel, so this is a memset and not a loop. */
+            for (int i = 0; i < n; ++i)
+                row[i] = px[0];
+        } else {
+            for (int i = 0; i < n; ++i)
+                for (int b = 0; b < bytes; ++b)
+                    row[static_cast<long>(i) * bytes + b] = px[b];
+        }
+    }
 }
 
 void hline(int x, int y, int w, uint8_t color)
 {
-    for (int i = 0; i < w; ++i)
-        put_pixel(x + i, y, color);
+    int x0, y0, x1, y1;
+    if (!clip_box(x, y, w, 1, &x0, &y0, &x1, &y1))
+        return;
+    uint8_t px[4];
+    const int bytes = static_cast<int>(pixel_of(color, CATT_PAL, px));
+    uint8_t* row = row_ptr(y0) + static_cast<long>(x0) * bytes;
+    for (int i = x0; i < x1; ++i)
+        for (int b = 0; b < bytes; ++b)
+            row[static_cast<long>(i - x0) * bytes + b] = px[b];
 }
 
 void vline(int x, int y, int h, uint8_t color)
 {
-    for (int j = 0; j < h; ++j)
-        put_pixel(x, y + j, color);
+    int x0, y0, x1, y1;
+    if (!clip_box(x, y, 1, h, &x0, &y0, &x1, &y1))
+        return;
+    uint8_t px[4];
+    const int bytes = static_cast<int>(pixel_of(color, CATT_PAL, px));
+    for (int j = y0; j < y1; ++j) {
+        uint8_t* p = row_ptr(j) + static_cast<long>(x0) * bytes;
+        for (int b = 0; b < bytes; ++b)
+            p[b] = px[b];
+    }
 }
 
 void rect(int x, int y, int w, int h, uint8_t color)
@@ -1143,36 +1229,86 @@ void blit_scale(const uint8_t* src, int sw, int sh, int dx, int dy, int dw,
 {
     if (!src || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0)
         return;
+
+    /* What is actually written, once: the destination rectangle cut
+     * against the screen and against the clip, so the loops below walk
+     * real pixels instead of testing every one of them. The tests they
+     * replace were the per-pixel bounds check of a scaled blit - two
+     * comparisons and a skip for each of a window canvas's ~160 000
+     * pixels, every frame, which is most of what compositing a window
+     * used to cost. */
+    const int cx0 = g_clip_x1 > g_clip_x0 ? g_clip_x0 : 0;
+    const int cx1 = g_clip_x1 > g_clip_x0 ? g_clip_x1 : g_width;
+    const int cy0 = g_clip_y1 > g_clip_y0 ? g_clip_y0 : 0;
+    const int cy1 = g_clip_y1 > g_clip_y0 ? g_clip_y1 : g_height;
+    int x0 = dx < cx0 ? cx0 : dx;
+    int x1 = dx + dw < cx1 ? dx + dw : cx1;
+    int j0 = dy < cy0 ? cy0 - dy : 0;
+    int j1 = dh < cy1 - dy ? dh : cy1 - dy;
+    if (x1 <= x0 || j1 <= j0)
+        return;
+
+    /* 1:1 at 8bpp - the normal case, and the one worth a memcpy.
+     *
+     * A canvas follows its window (see wintask.h), so a window that has
+     * settled has a canvas exactly the size of its client area and every
+     * row of the blit is a straight copy: a palette index is a palette
+     * index, and the row below is at the same place in the frame. The
+     * scaled loop below is for the window too small to hold its canvas,
+     * which is one frame of a drag and nothing else. A 480x340 window is
+     * 163 000 pixels, and paying per pixel for a copy that memcpy does
+     * in a few hundred is what a compositor cannot afford either. */
+    if (sw == dw && sh == dh && g_bpp == 8) {
+        for (int j = j0; j < j1; ++j) {
+            const int y = dy + j;
+            memcpy(row_ptr(y) + static_cast<long>(x0),
+                   src + static_cast<long>(j) * sw + (x0 - dx),
+                   static_cast<unsigned long>(x1 - x0));
+        }
+        return;
+    }
+    /* The source column each destination column takes, as a 16.16 step
+     * added along the row instead of a division per pixel: nearest-
+     * neighbour sampling of a window canvas is a repeat of this loop
+     * hundreds of thousands of times per frame, and an idiv per pixel
+     * is what a compositor cannot afford. Same sample points as
+     * (i * sw) / dw - the step is exact to a 1/65536th of a pixel and
+     * the row is short enough that the error never reaches a pixel. */
+    const uint32_t x_step = (static_cast<uint32_t>(sw) << 16) / static_cast<uint32_t>(dw);
+    /* The same for the row, once per row rather than once per pixel. */
+    const uint32_t y_step = (static_cast<uint32_t>(sh) << 16) / static_cast<uint32_t>(dh);
+
     /* A 32bpp source is a window's own canvas in the display's format,
      * and it can carry alpha in the byte the scanout has no use for: a
      * pixel whose top byte is not opaque is blended into what it covers
      * instead of replacing it. That is the whole reason the canvas
      * follows the display - a PNG with an alpha channel survives the
      * trip from px_decode to the screen instead of being quantized to
-     * the nearest of sixteen palette entries on the way. */
+     * the nearest of sixteen palette entries on the way.
+     *
+     * src_bpp == 32 with an 8bpp frame has no case: a canvas is in the
+     * depth of the display it is drawn on, and the display's depth is
+     * what it is presenting in. */
     if (src_bpp == 32 && g_bpp == 32) {
         const uint32_t* s32 = reinterpret_cast<const uint32_t*>(src);
-        for (int j = 0; j < dh; ++j) {
+        for (int j = j0; j < j1; ++j) {
             const int y = dy + j;
-            if (y < 0 || y >= g_height)
-                continue;
-            int sy = (j * sh) / dh;
+            int sy = static_cast<int>((static_cast<uint32_t>(j) * y_step) >> 16);
             if (sy < 0)
                 sy = 0;
             if (sy >= sh)
                 sy = sh - 1;
             const uint32_t* srow = s32 + static_cast<long>(sy) * sw;
-            for (int i = 0; i < dw; ++i) {
-                const int x = dx + i;
-                if (x < 0 || x >= g_width)
-                    continue;
-                int sx = (i * sw) / dw;
+            uint32_t sx_fp = static_cast<uint32_t>(x0 - dx) * x_step;
+            uint8_t* row = row_ptr(y);
+            for (int x = x0; x < x1; ++x, sx_fp += x_step) {
+                int sx = static_cast<int>(sx_fp >> 16);
                 if (sx < 0)
                     sx = 0;
                 if (sx >= sw)
                     sx = sw - 1;
-                uint32_t src_px = srow[sx];
-                uint8_t* p = pixel_ptr(x, y);
+                const uint32_t src_px = srow[sx];
+                uint8_t* p = row + static_cast<long>(x) * pixel_bytes();
                 const uint32_t a = src_px >> 24;
                 if (a == 0xFF) {
                     p[0] = static_cast<uint8_t>(src_px);
@@ -1199,26 +1335,27 @@ void blit_scale(const uint8_t* src, int sw, int sh, int dx, int dy, int dw,
         }
         return;
     }
-    for (int j = 0; j < dh; ++j) {
-        int y = dy + j;
-        if (y < 0 || y >= g_height)
-            continue;
-        int sy = (j * sh) / dh;
+    for (int j = j0; j < j1; ++j) {
+        const int y = dy + j;
+        int sy = static_cast<int>((static_cast<uint32_t>(j) * y_step) >> 16);
         if (sy < 0)
             sy = 0;
         if (sy >= sh)
             sy = sh - 1;
-        const uint8_t* row = src + sy * sw;
-        for (int i = 0; i < dw; ++i) {
-            int x = dx + i;
-            if (x < 0 || x >= g_width)
-                continue;
-            int sx = (i * sw) / dw;
+        const uint8_t* srow = src + static_cast<long>(sy) * sw;
+        uint32_t sx_fp = static_cast<uint32_t>(x0 - dx) * x_step;
+        /* One row of the frame, written through directly: the pixels go
+         * through the same store as put_pixel() (a palette index at
+         * 8bpp, the palette looked up at 32bpp), but with the bounds
+         * and clip tests already settled above. */
+        uint8_t* row = row_ptr(y);
+        for (int x = x0; x < x1; ++x, sx_fp += x_step) {
+            int sx = static_cast<int>(sx_fp >> 16);
             if (sx < 0)
                 sx = 0;
             if (sx >= sw)
                 sx = sw - 1;
-            put_pixel(x, y, row[sx]);
+            store(row + static_cast<long>(x) * pixel_bytes(), srow[sx]);
         }
     }
 }
