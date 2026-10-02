@@ -5,6 +5,14 @@ if [ -z "${BASH_VERSION:-}" ]; then exec env bash "$0" "$@"; fi
 # vcc — VNU C compiler frontend (wraps host gcc -m32 + vlibc)
 set -euo pipefail
 
+# The compiler's diagnostics follow the locale of whoever ran it, so a
+# user with LANG=ru_RU reads the errors in Russian and one with LANG=de_DE
+# in German. Everything this project prints is English, and a build whose
+# output changes with the user's environment is not reproducible, so the
+# locale is pinned here rather than left to whoever invoked the build.
+export LC_ALL=C
+export LANG=C
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VLIBC_DIR="${VLIBC_DIR:-$ROOT/vlibc}"
