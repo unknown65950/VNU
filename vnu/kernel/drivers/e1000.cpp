@@ -98,6 +98,15 @@ uint32_t g_rx_tail = 0;
 /* ARP cache: one entry (the peer we last talked to). */
 uint32_t g_arp_ip = 0;    /* resolved peer, big-endian */
 uint8_t g_arp_mac[6];
+
+/* Wire counters for /proc/net/dev (see include/vnu/net.h). Counted at
+ * the two points where a frame actually changes hands with the NIC —
+ * rx_drain() taking one off the ring, tx_send_current() giving one to
+ * it — so nothing is counted twice and nothing is missed. */
+uint32_t g_rx_bytes = 0;
+uint32_t g_rx_packets = 0;
+uint32_t g_tx_bytes = 0;
+uint32_t g_tx_packets = 0;
 uint32_t g_arp_resolve = 0; /* address of an in-flight request (0 = none) */
 
 /* Pending ICMP echo state. */
@@ -256,6 +265,11 @@ bool tx_send_current(uint16_t len)
     d.css = 0;
     d.special = 0;
     wr(REG_TDT, (tdt + 1u) % TX_N);
+    /* The NIC owns the frame now. This is the only way out of the NIC,
+     * so every caller — ARP, ICMP and TCP alike — is counted here once
+     * and the counters cannot disagree with the wire. */
+    ++g_tx_packets;
+    g_tx_bytes += len;
     return true;
 }
 
@@ -607,6 +621,11 @@ void rx_drain()
         RxDesc& d = g_rx_ring[n];
         if (!(d.status & DESC_STATUS_DD))
             return;
+        /* A frame arrived. Counted before handle_frame() sees it, so a
+         * frame the stack drops (a broadcast it does not want, a
+         * malformed one) is still traffic that crossed the wire. */
+        ++g_rx_packets;
+        g_rx_bytes += d.length;
         handle_frame(reinterpret_cast<const uint8_t*>(g_rx_bufs[n]), d.length);
         d.status = 0;
         d.length = 0;
@@ -994,6 +1013,16 @@ void get_info(Info* out)
     out->gw = GW_IP;
     for (int i = 0; i < 6; ++i)
         out->mac[i] = g_mac[i];
+}
+
+void get_stats(Stats* out)
+{
+    if (!out)
+        return;
+    out->rx_bytes = g_rx_bytes;
+    out->rx_packets = g_rx_packets;
+    out->tx_bytes = g_tx_bytes;
+    out->tx_packets = g_tx_packets;
 }
 
 } // namespace vnu::net

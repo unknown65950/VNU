@@ -19,6 +19,22 @@ struct Info {
     uint8_t up;     /* 1 when the NIC is initialized */
 };
 
+/* What has crossed the wire since boot, for /proc/net/dev.
+ *
+ * Counted at the driver, where every frame is accounted exactly once:
+ * a receive when the ring hands one over, a transmit when the TX tail
+ * is handed to the NIC. Bytes are frame lengths off the wire, headers
+ * and FCS included, and they include the ARP and ICMP traffic the stack
+ * produces on its own — this is the interface's traffic, not any one
+ * program's. A monitor reads it twice and divides, which is why these
+ * are monotonic counters and not a rate. */
+struct Stats {
+    uint32_t rx_bytes;
+    uint32_t rx_packets;
+    uint32_t tx_bytes;
+    uint32_t tx_packets;
+};
+
 // Probes the PCI bus for an Intel 82540EM e1000 (QEMU's default NIC),
 // maps its MMIO BAR, sets up DMA descriptor rings and brings the link
 // up. Call once during kernel init. Returns 0 or -VNU_EIO.
@@ -45,5 +61,10 @@ long dns_query(uint32_t server, const char* name, uint32_t* out,
 long resolve_host(const char* name, uint32_t* out);
 
 void get_info(Info* out);
+
+/* Fills `out` with the interface counters. Zeroes it and returns when
+ * there is no NIC, so a reader never sees stale numbers from a machine
+ * whose driver did not come up. */
+void get_stats(Stats* out);
 
 } // namespace vnu::net

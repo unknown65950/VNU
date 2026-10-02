@@ -392,6 +392,17 @@ char g_spawn_path[96];
 int g_last_slot = -1;       /* slot the most recent spawn() used */
 uint32_t g_jiffies = 0;     /* 100 Hz tick counter (advanced by PIT IRQ0) */
 
+/* Accounting for /proc/stat (see include/vnu/process.h). The idle count
+ * needs the flag as well as the counter: a tick that arrives while the
+ * scheduler is parked in hlt() found nothing runnable, and that is the
+ * only moment this kernel is provably not doing anyone's work. Without
+ * it, every tick would be busy and the monitor would read 100% on a
+ * machine doing nothing at all. */
+uint32_t g_idle_jiffies = 0;
+uint32_t g_ctxt = 0;        /* process switches (run_slice entries) */
+uint32_t g_procs = 0;       /* processes ever created */
+bool g_cpu_parked = false;  /* scheduler is in the hlt() window */
+
 /* Wait channels of the waitpid() blocking: a parent parks on either the
  * broadcast "any child exited" channel (pid == -1 waits) or the channel
  * keyed by the specific awaited child's pid. sys_exit() wakes both. */
@@ -600,6 +611,7 @@ int sys_fork(Registers* trap)
     Process& child = table[slot];
     child = {};
     child.pid = next_pid++;
+    ++g_procs;
     child.ppid = parent.pid;
     child.state = State::Runnable;
     child.uid = parent.uid;
@@ -1542,6 +1554,7 @@ int run_program_from_memory(const char* argv0_path, const uint8_t* data, uint32_
     Process& p = table[slot];
     p = {};
     p.pid = next_pid++;
+    ++g_procs;
     p.ppid = 0;
     p.state = State::Running;
     p.uid = table[current_idx].uid;
@@ -1715,6 +1728,7 @@ int sys_spawn(const char* path)
     p.app_pages = app_pages;
     set_proc_name(p, g_spawn_path);
     g_last_slot = slot;
+    ++g_procs;
     return p.pid;
 }
 
@@ -1739,6 +1753,32 @@ void yield_current()
 uint32_t now_jiffies()
 {
     return g_jiffies;
+}
+
+CpuStats cpu_stats()
+{
+    CpuStats s{};
+    s.total = g_jiffies;
+    /* Idle can only be counted up to the last tick that was seen
+     * arriving, never ahead of it: g_cpu_parked is set before hlt() and
+     * cleared after, so a reader that arrives in that window must not
+     * claim an idle jiffy that has not happened yet. */
+    s.idle = g_idle_jiffies;
+    s.ctxt = g_ctxt;
+    s.procs = g_procs;
+    /* The process table is walked here rather than by the reader because
+     * it is the only thing that knows what the states mean. Slot 0 is
+     * the scheduler/console process: it is the kernel's own bookkeeping
+     * coroutine and never a workload, so it counts as neither. */
+    for (int i = 1; i < MAX_PROCS; ++i) {
+        if (!table[i].coro)
+            continue;
+        if (table[i].state == State::Runnable)
+            ++s.running;
+        else if (table[i].state == State::Blocked)
+            ++s.blocked;
+    }
+    return s;
 }
 
 void sleep_on(uint32_t chan, uint32_t until_jiffies)
@@ -1805,6 +1845,11 @@ extern "C" uint32_t vnu_timer_tick(uint32_t frame_esp)
     /* The scheduler clock: every IRQ0 advances jiffies, whether or not
      * this tick preempts anyone (it is what wakes timed sleepers). */
     ++g_jiffies;
+    /* A tick that lands while the scheduler sits in its hlt() window is
+     * an idle jiffy: that window is only ever entered to wait for this
+     * very tick, so the tick has found the CPU with nothing to run. */
+    if (g_cpu_parked)
+        ++g_idle_jiffies;
     if (current_idx == 0)
         return 0;
     Process& cur = table[current_idx];
@@ -1886,6 +1931,11 @@ void run_slice(int i)
     if (!p.coro || p.state != State::Runnable)
         return;
 
+    /* The one place a process takes the CPU, so the one place a context
+     * switch is counted (both branches below resume it: preempted or
+     * cooperative). */
+    ++g_ctxt;
+
     current_idx = i;
     if (!p.started) {
         /* First switch into this process: prime the trampoline's globals
@@ -1952,8 +2002,14 @@ int run_scheduler(const char* primary, const char* fallback)
          * off, so without this window the tick is rarely ever taken
          * and a sleeping process can wait forever while the machine
          * spins. hlt() returns immediately when the tick is already
-         * pending, so a busy pass costs nothing. */
+         * pending, so a busy pass costs nothing.
+         *
+         * g_cpu_parked brackets exactly this window: a tick taken while
+         * the flag is set found nothing runnable and is counted as idle
+         * for /proc/stat (see g_idle_jiffies). */
+        g_cpu_parked = true;
         asm volatile("sti; hlt; cli");
+        g_cpu_parked = false;
 
         /* Wake timed sleepers whose deadline has passed (the 100 Hz
          * jiffies clock advanced while they were parked). Signed

@@ -238,6 +238,30 @@ void sleep_on(uint32_t chan, uint32_t until_jiffies);
 void wakeup(uint32_t chan);
 void wakeup_one(uint32_t chan);
 inline void sleep_ms(uint32_t ms) { sleep_on(0, now_jiffies() + ms_to_jiffies(ms)); }
+
+/* What the CPU has been doing, in the units /proc/stat reports them.
+ *
+ * Everything is counted in jiffies of the 100 Hz PIT tick that drives
+ * the scheduler, which is the only clock the kernel has: `total` is
+ * every tick since boot, and `idle` the ones that found the CPU parked
+ * with nothing runnable. Their difference is the busy time, which is
+ * all VNU can honestly divide out — unlike Linux there is no separate
+ * user and system accounting, because nothing here samples which
+ * privilege level the interrupted code was running at. A monitor that
+ * wants a percentage takes busy/total over two readings, exactly as it
+ * would with Linux's own /proc/stat.
+ *
+ * `running` and `blocked` are counts, not rates, and are what a load
+ * average is built from by whoever reads them. */
+struct CpuStats {
+    uint32_t total;      /* jiffies since boot */
+    uint32_t idle;       /* of those, the ones spent parked */
+    uint32_t ctxt;       /* process switches into a runnable process */
+    uint32_t procs;      /* processes ever created (spawn + fork) */
+    uint32_t running;    /* runnable right now */
+    uint32_t blocked;    /* blocked on a sleep, a wait or a mutex */
+};
+CpuStats cpu_stats();
 /* Cooperative scheduler + init respawn loop. Enters the scheduler
  * coroutine (never returns on success): lazily spawns `primary` (or
  * `fallback` if that path isn't embedded), then round-robins one slice

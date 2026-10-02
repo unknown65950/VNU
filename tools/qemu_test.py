@@ -426,6 +426,28 @@ SUITE = [
      [r"^Name:\tvash$", r"^Pid:\t\d+$", r"^PPid:\t\d+$"], []),
     ("proc-cpuinfo", "cat /proc/cpuinfo",
      [r"^processor\t: 0$", r"^vendor_id\t: "], []),
+    # /proc/stat exists for the same reason /proc/meminfo does: a monitor
+    # has to be able to read the machine. The `cpu` line carries the ten
+    # Linux fields so a parser written for Linux reads it unchanged, but
+    # only the two VNU measures are filled in - the third (system) is the
+    # busy jiffies and the fourth is idle, the rest are honest zeros. The
+    # rest of the file is the counters a load average is built from.
+    ("proc-stat", "cat /proc/stat",
+     [r"^cpu \d+ \d+ \d+ \d+ 0 0 0 0 0 0$",
+      r"^cpu0 \d+ \d+ \d+ \d+ 0 0 0 0 0 0$",
+      r"^ctxt \d+$", r"^processes \d+$",
+      r"^procs_running \d+$", r"^procs_blocked \d+$"], []),
+    ("proc-net-dev", "cat /proc/net/dev",
+     [r"^Inter-\|\s+Receive", r"^ face \|bytes\s+packets"], []),
+    # Both directions must already be counting: the boot sequence itself
+    # resolves the gateway over ARP, so a zero here would mean the driver
+    # hooked the counters to the wrong place rather than that the NIC is
+    # idle. No arithmetic is available in the shell to compare readings,
+    # so this is as far as a case can assert on its own - what the
+    # numbers *mean* is checked by the vtop module against them.
+    ("proc-net-dev-counts", "cat /proc/net/dev | grep eth0",
+     [r"^\s*eth0:[1-9]\d* [1-9]\d* 0 0 0 0 0 0 [1-9]\d* [1-9]\d* 0 0 0 0 0 0$"],
+     []),
     ("uname-all", "uname -a",
      [r"^VNU vnu 0\.7\.0 Canyon \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} i386 "],
      []),

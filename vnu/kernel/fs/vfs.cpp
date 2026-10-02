@@ -11,6 +11,7 @@
 #include <vnu/mboot.h>
 #include <vnu/process.h>
 #include <vnu/ata.h>
+#include <vnu/net.h>
 #include "../proc/embedded_lib_crt0.h"
 #include "../proc/embedded_lib_vlibc.h"
 
@@ -33,7 +34,7 @@ constexpr int PATH_CAP = 64;
  * on every open() rather than stored, so a reader always sees current
  * values; the generated text lands in the node's normal data buffer so
  * read()/lseek() work on it unchanged. */
-enum class SynthKind : uint8_t { None = 0, Version, CpuInfo, MemInfo, SelfStatus, Mounts, Uptime, Disks, DfStat, Images, Gfx, Boot };
+enum class SynthKind : uint8_t { None = 0, Version, CpuInfo, MemInfo, SelfStatus, Mounts, Uptime, Disks, DfStat, Images, Gfx, Boot, Stat, NetDev };
 
 struct Node {
     bool used;
@@ -572,6 +573,77 @@ void regen_synth(Node& n)
         a.str(".00\n");
         break;
     }
+    case SynthKind::Stat: {
+        /* CPU accounting, in the shape a monitor expects from
+         * /proc/stat: the `cpu` line's fields are the Linux ones, but
+         * VNU can only fill in the two it can measure truthfully —
+         * total and idle jiffies of the scheduler's 100 Hz clock —
+         * so busy is reported as system time and the rest are zeros
+         * rather than a split that this kernel does not take. Read
+         * `cat /proc/cpuinfo` for what the CPU is; there is no per-core
+         * list because there is one core. */
+        vnu::proc::CpuStats s = vnu::proc::cpu_stats();
+        uint32_t busy = s.total > s.idle ? s.total - s.idle : 0;
+        /* The full field list, so a parser written for the Linux line
+         * reads it without complaint: user nice system idle iowait irq
+         * softirq steal guest guest_nice. */
+        const uint32_t cpu_line[] = { 0, 0, busy, s.idle, 0, 0, 0, 0, 0, 0 };
+        a.str("cpu ");
+        for (int i = 0; i < 10; ++i) {
+            if (i)
+                a.str(' ');
+            a.num(cpu_line[i]);
+        }
+        a.str("\ncpu0 ");
+        for (int i = 0; i < 10; ++i) {
+            if (i)
+                a.str(' ');
+            a.num(cpu_line[i]);
+        }
+        a.str("\nctxt ");
+        a.num(s.ctxt);
+        /* Processes ever created. The boot process has no ancestor to
+         * count a fork() from, so this is one more than the number of
+         * spawn/fork calls a reader can see in the shell. */
+        a.str("\nprocesses ");
+        a.num(s.procs);
+        a.str("\nprocs_running ");
+        a.num(s.running);
+        a.str("\nprocs_blocked ");
+        a.num(s.blocked);
+        a.str("\n");
+        break;
+    }
+    case SynthKind::NetDev: {
+        /* Per-interface counters in the layout /proc/net/dev has:
+         * receive bytes packets errs drop fifo frame compressed
+         * multicast, then the same for transmit. VNU has one interface
+         * and no error accounting in it, so the four error-ish columns
+         * stay zero — the driver drops a frame only by giving up on it
+         * and that is not worth pretending to be a number. */
+        vnu::net::Stats st{};
+        vnu::net::Info info{};
+        vnu::net::get_info(&info);
+        if (info.up)
+            vnu::net::get_stats(&st);
+        else {
+            st = {};
+        }
+        /*         bytes packets errs drop fifo frame compressed multicast */
+        a.str("Inter-|   Receive                                                |  Transmit\n");
+        a.str(" face |bytes    packets errs drop fifo frame compressed multicast|"
+              "bytes    packets errs drop fifo colls carrier compressed\n");
+        a.str("  eth0:");
+        a.num(st.rx_bytes);
+        a.str(" ");
+        a.num(st.rx_packets);
+        a.str(" 0 0 0 0 0 0 ");
+        a.num(st.tx_bytes);
+        a.str(" ");
+        a.num(st.tx_packets);
+        a.str(" 0 0 0 0 0 0\n");
+        break;
+    }
     case SynthKind::Images: {
         /* Byte accounting of the running image: the kernel as the boot
          * loader handed it over, plus every embedded blob grouped by
@@ -919,6 +991,9 @@ void init()
     add_synth("/proc/images", SynthKind::Images);
     add_synth("/proc/gfx", SynthKind::Gfx);
     add_synth("/proc/boot", SynthKind::Boot);
+    add_synth("/proc/stat", SynthKind::Stat);
+    add("/proc/net", true);
+    add_synth("/proc/net/dev", SynthKind::NetDev);
     add("/proc/self", true);
     add_synth("/proc/self/status", SynthKind::SelfStatus);
 
