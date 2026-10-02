@@ -1,4 +1,5 @@
 #include <vnu/apps.h>
+#include <vnu/thams.h>
 #include <vnu/media.h>
 #include <vnu/vfs.h>
 #include <vnu/posix.h>
@@ -61,6 +62,17 @@ void join(char* out, int cap, const char* a, const char* b)
     str_copy(out + n, b, cap - n);
 }
 
+/* Whether a path opens for reading. The VFS has no access(2), and
+ * opening is the question this file actually needs answered. */
+bool exists(const char* path)
+{
+    int fd = vnu::vfs::open(path, O_RDONLY);
+    if (fd < 0)
+        return false;
+    vnu::vfs::close(fd);
+    return true;
+}
+
 void install_one(const char* name, uint8_t color, uint8_t glyph,
                  const uint8_t* data, uint32_t size)
 {
@@ -83,6 +95,58 @@ void install_one(const char* name, uint8_t color, uint8_t glyph,
     if (fd >= 0) {
         vnu::vfs::write(fd, data, size);
         vnu::vfs::close(fd);
+    }
+}
+
+/* A module from thams/ (see include/vnu/thams.h). It is a command
+ * either way, so /bin/<name> already runs it; what /apps adds is a
+ * home for its manual page, and for its icon when it is a program of
+ * the desktop's own kind:
+ *
+ *   /apps/<name>/man/<name>   the page `man <name>` prints
+ *   /apps/<name>/icon         GUI modules only
+ *   /apps/<name>/bin          the program, as the launcher reads it
+ *
+ * A command-only module keeps its page and gets no icon, which is what
+ * keeps it off the desktop: list() hands out a tile only for a
+ * directory that has both files, so a terminal tool like `tree` is on
+ * the machine and in the manual index without appearing on screen. */
+void install_module(const vnu::thams::Module& m)
+{
+    char dir[64];
+    join(dir, sizeof(dir), "/apps", m.name);
+    vnu::vfs::mkdir(dir);
+
+    if (m.gui) {
+        char icon_path[80];
+        join(icon_path, sizeof(icon_path), dir, "icon");
+        int fd = vnu::vfs::open(icon_path, O_WRONLY | O_CREAT | O_TRUNC);
+        if (fd >= 0) {
+            const uint8_t icon[2] = { m.color, m.glyph };
+            vnu::vfs::write(fd, icon, 2);
+            vnu::vfs::close(fd);
+        }
+    }
+
+    char bin_path[80];
+    join(bin_path, sizeof(bin_path), dir, "bin");
+    int fd = vnu::vfs::open(bin_path, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd >= 0) {
+        vnu::vfs::write(fd, m.prog.data, m.prog.size);
+        vnu::vfs::close(fd);
+    }
+
+    if (m.man && m.man_size) {
+        char man_dir[80];
+        join(man_dir, sizeof(man_dir), dir, "man");
+        vnu::vfs::mkdir(man_dir);
+        char man_path[96];
+        join(man_path, sizeof(man_path), man_dir, m.name);
+        fd = vnu::vfs::open(man_path, O_WRONLY | O_CREAT | O_TRUNC);
+        if (fd >= 0) {
+            vnu::vfs::write(fd, m.man, m.man_size);
+            vnu::vfs::close(fd);
+        }
     }
 }
 
@@ -110,6 +174,13 @@ void install_demo_apps()
     install_one("clock", vnu::vgfx::COLOR_LGREEN, IconGlyph::ICON_CLOCK, embedded_clock_elf, embedded_clock_elf_size);
     install_one("play", vnu::vgfx::COLOR_LBLUE, IconGlyph::ICON_MUSIC, embedded_play_elf, embedded_play_elf_size);
     install_one("sticky", vnu::vgfx::COLOR_YELLOW, IconGlyph::ICON_NOTE, embedded_sticky_elf, embedded_sticky_elf_size);
+
+    /* Third-party modules come last, so a module cannot displace a
+     * shipped app out of a tile slot the desktop already draws. */
+    int modules = 0;
+    const vnu::thams::Module* list = vnu::thams::list(&modules);
+    for (int i = 0; i < modules; ++i)
+        install_module(list[i]);
 }
 
 /* Mount the demo photograph pack under /etc/vnu/pics so picview has
@@ -211,12 +282,27 @@ int list(AppEntry* out, int max)
         bool is_dot = de->name[0] == '.' &&
                       (de->name[1] == '\0' || (de->name[1] == '.' && de->name[2] == '\0'));
         if (de->type == 4 /* DT_DIR */ && !is_dot) {
-            str_copy(out[count].name, de->name, NAME_CAP);
-
             char icon_path[80];
             char dir[64];
+            char bin_path[80];
             join(dir, sizeof(dir), "/apps", de->name);
+            join(bin_path, sizeof(bin_path), dir, "bin");
             join(icon_path, sizeof(icon_path), dir, "icon");
+
+            /* A tile needs both halves of an app: something to launch
+             * and something to draw. /apps/<name>/ is also where a
+             * command-only module keeps its manual page, and such a
+             * module is not on the desktop — a terminal tool that got a
+             * tile would be one click away from a terminal that runs
+             * it. So both files have to be there, and the generic grey
+             * letter below stays what it was written for: an app whose
+             * icon file is empty, not one that has none. */
+            if (!exists(bin_path) || !exists(icon_path)) {
+                off += de->reclen;
+                continue;
+            }
+
+            str_copy(out[count].name, de->name, NAME_CAP);
             uint8_t color = vnu::vgfx::COLOR_LGRAY;
             uint8_t glyph = IconGlyph::ICON_LETTER;
             int ifd = vnu::vfs::open(icon_path, O_RDONLY);

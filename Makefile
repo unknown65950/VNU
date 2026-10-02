@@ -34,11 +34,12 @@ EMBEDDED := $(wildcard $(KERNEL_DIR)/proc/embedded_*.h)
 # on purpose: they are written into these very trees (embedded_*.h,
 # vnu/kernel/build), so counting them would make the ISO look older than
 # its own sources for ever and rebuild it every time.
-ISO_SOURCES := $(shell find $(KERNEL_DIR) $(VNU)/userspace vlibc tools \
+ISO_SOURCES := $(shell find $(KERNEL_DIR) $(VNU)/userspace vlibc tools thams \
                       -type f -not -path '$(KERNEL_DIR)/build/*' \
-                      -not -name 'embedded_*.h' 2>/dev/null)
+                      -not -name 'embedded_*.h' -not -name '.off' 2>/dev/null)
 
 .PHONY: help all iso kernel userspace vhd \
+        thambuild thamupdate thamon thamoff thamstatus \
         run run-headless run-gpu run-headless-gpu run-vhd run-headless-vhd \
         run-installed run-headless-installed \
         test test-gpu test-install test-all \
@@ -80,6 +81,47 @@ userspace: ## build the userspace binaries and embedded_*.h
 kernel: $(if $(EMBEDDED),,userspace) ## build only the kernel (cmake, no ISO)
 	@cmake -S $(KERNEL_DIR) -B $(BUILD_DIR)
 	@cmake --build $(BUILD_DIR) -j$(JOBS)
+
+## @third-party modules (thams/)
+
+# A THAM is a program kept out of the system tree: its own directory in
+# thams/, its own sources, its own manual page, and no line of the OS
+# edited to add it. See thams/README.md for the contract. The module
+# binaries live in sysroot/thams/ and their bytes go into the kernel
+# image through the generated embedded_thams.h.
+
+thamstatus: ## list the modules in thams/ and what each one brings
+	@python3 ./tools/thams.py status
+
+thambuild: ## compile the modules in thams/ once (no kernel, no ISO)
+	@python3 ./tools/thams.py build
+
+# Rebuilding a module means putting new bytes in the kernel, so this is
+# the whole chain and not just the compile — which is the reason it is
+# a target of its own rather than part of thambuild.
+#
+# The order matters and is the reason this is not just `iso`: the
+# header has to be written before the kernel is compiled, and the ISO
+# is a file target that would happily be rebuilt first and leave the
+# module header stale. So: regenerate, drop the image, build it again.
+#
+# It depends on `userspace` because build_iso.sh skips that step when
+# the embedded headers are already there, and a module build must never
+# quietly ship a stale OS binary beside it: change man.c and run
+# thamupdate, and the man in the image has to be the new one.
+thamupdate: userspace ## put the modules in the image (rebuilds the ISO)
+	@python3 ./tools/thams.py generate
+	@rm -f $(ISO)
+	@$(MAKE) --no-print-directory iso
+	@echo "  the modules are in $(ISO)"
+
+thamoff: ## leave the modules out of the image, keeping the sources
+	@python3 ./tools/thams.py off
+	@echo "  run 'make thamupdate' to rebuild the ISO without them"
+
+thamon: ## build the modules into the image again
+	@python3 ./tools/thams.py on
+	@echo "  run 'make thamupdate' to rebuild the ISO with them"
 
 ## @running in QEMU
 

@@ -26,6 +26,14 @@ print("embedded", name, len(data))
 PY
 }
 
+# Third-party modules first: tools/thams.py writes the one header
+# vnu/kernel/proc/thams.cpp includes, so it has to exist before the
+# kernel is compiled and it has to be regenerated whenever thams/ or
+# the on/off marker changes. An empty thams/ (or `make thamoff`) writes
+# an empty table, which is what a fresh checkout builds against.
+echo "==> thams"
+python3 "$ROOT/tools/thams.py" generate
+
 echo "==> userspace"
 "$VCC" "$ROOT/vnu/userspace/vash/vash.c" -o "$ROOT/sysroot/bin/vash"
 "$VCC" "$ROOT/vnu/userspace/editors/vedit.c" -o "$ROOT/sysroot/bin/vedit"

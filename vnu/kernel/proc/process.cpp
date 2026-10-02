@@ -1,4 +1,5 @@
 #include <vnu/process.h>
+#include <vnu/thams.h>
 #include <vnu/elf.h>
 #include <vnu/images.h>
 #include <vnu/abi.h>
@@ -76,12 +77,6 @@ int current_idx = 0;
 int next_pid = 1;
 bool console_session = false;
 
-struct EmbeddedProg {
-    const char* path;
-    const uint8_t* data;
-    uint32_t size;
-};
-
 /* Each command is its own embedded ELF. Only vash is re-used under
  * several names (/bin/vash, /sbin/init, /bin/sh) — a login shell by
  * any other name. */
@@ -149,6 +144,13 @@ void register_embedded_sizes()
         if (embedded[i].path[0] == '/')
             vnu::images::add(vnu::images::Userspace, embedded[i].size);
     }
+    /* A module is userspace too: its bytes are in the image and
+     * /proc/images should say so, or `vnu size` would report an image
+     * smaller than the one booting. */
+    int modules = 0;
+    const vnu::thams::Module* list = vnu::thams::list(&modules);
+    for (int i = 0; i < modules; ++i)
+        vnu::images::add(vnu::images::Userspace, list[i].prog.size);
 }
 
 const EmbeddedProg* find_embedded(const char* path)
@@ -164,6 +166,17 @@ const EmbeddedProg* find_embedded(const char* path)
         }
         if (!*a && !*b)
             return &embedded[i];
+    }
+    /* Not one of ours. A module from thams/ lives at /bin/<name> and is
+     * in no table above, so the table is asked second and the generated
+     * registry answers instead: the shell resolves `tree` to /bin/tree
+     * through PATH and lands here. The entry is static, so handing back
+     * a pointer into it costs nothing. */
+    if (path[0] == '/' && path[1] == 'b' && path[2] == 'i' && path[3] == 'n' &&
+        path[4] == '/') {
+        const vnu::thams::Module* m = vnu::thams::find(path + 5);
+        if (m)
+            return &m->prog;
     }
     return nullptr;
 }

@@ -362,7 +362,23 @@ def check(name, output, expects, forbids, result, verbose):
 # The default suite. Each case is (name, command, expected, forbidden);
 # `expected` patterns are regular expressions matched against the output of
 # the command alone.
+#
+# A case may carry a fifth element saying what has to be true of the image
+# before it means anything: a (command, pattern) probe, run once and cached.
+# That is for the parts of a system a build can legitimately leave out, not
+# for a test that is allowed to fail.
 # ---------------------------------------------------------------------------
+
+# A module is in the image only when the build put it there, and an image
+# without modules is what `make thamoff` produces on purpose. The module
+# cases therefore name what they need instead of failing on such an image.
+#
+# The probe is `ls /apps/<name>` rather than `which <name>`: vash answers
+# `which` with a best-guess /bin/<cmd> for anything that is not a builtin
+# (the same fallback execve's embedded lookup uses), so it reports /bin/tree
+# whether or not there is a tree. The directory only exists if the module
+# was mounted.
+THAM_ON = ("ls /apps/tree", r"^man/?$")
 
 SUITE = [
     # -- the system information command ---------------------------------
@@ -517,6 +533,35 @@ SUITE = [
     ("man-sticky-text", "cat /tmp/man-sticky.out",
      [r"^NAME$", r"sticky - a sticky note for the desktop",
       r"^KEYS$", r"^FILES$", r"/root/\.sticky-note"], []),
+    # -- third-party modules (thams/) ----------------------------------
+    # A module lives in thams/, not in vnu/userspace/, and nothing in
+    # the system tree was edited to make it a command. These three are
+    # the whole contract seen from the guest: the shell resolves it
+    # through PATH like any other binary, it works, and its manual page
+    # comes from /apps/<name>/man/<name> rather than from man's table.
+    # They go quiet rather than fail when `make thamoff` has left the
+    # modules out of the image, since that is a supported build.
+    # `which` is not the check for a program existing here: see THAM_ON.
+    ("tham-which", "which tree",
+     [r"^/bin/tree$"], [], THAM_ON),
+    ("tham-tree", "tree -d /etc",
+     [r"^etc/$", r"vnu/", r"sounds/", r"pics/", r"^\d+ director(y|ies)$"],
+     [], THAM_ON),
+    ("tham-tree-file", "tree /etc/hostname",
+     [r"^/etc/hostname$"], [], THAM_ON),
+    ("tham-tree-missing", "tree /no/such/place",
+     [r"^tree: /no/such/place: cannot stat:"], [], THAM_ON),
+    ("man-tham", "man tree > /tmp/man-tham.out",
+     [], [r"press h for help", r"no manual page"], THAM_ON),
+    ("man-tham-text", "cat /tmp/man-tham.out",
+     [r"^NAME$", r"tree - list a directory as a tree",
+      r"^SYNOPSIS$", r"^OPTIONS$", r"^EXIT STATUS$", r"third-party module"],
+     [r"no manual page"], THAM_ON),
+    # The module is not on the desktop: a command has no tile. `ls
+    # /apps/tree` lists the page and the placeholder bin, and a tile is
+    # only ever made from an icon.
+    ("tham-no-icon", "ls /apps/tree",
+     [r"^man/?$", r"^bin$"], [r"^icon$"], THAM_ON),
     # -- fork(2) --------------------------------------------------------
     # `forkdemo` prints one line per claim the kernel makes about a
     # forked child: two processes that run at the same time, separate
@@ -561,7 +606,28 @@ def run_suite(guest, cases, result, verbose, timeout, boot_timeout=120.0):
     print("==> %d cases" % len(cases))
     guest.wait(r"VNU login:", boot_timeout)
     guest.login(timeout=min(timeout, 30.0))
-    for name, command, expects, forbids in cases:
+    probes = {}
+    for case in cases:
+        name, command, expects, forbids = case[:4]
+        # A fifth element says what has to be true of the image before
+        # this case means anything. It is a command and a pattern: run
+        # it once, cache the answer, and skip the case when it does not
+        # hold. That is for the parts of the system a build can leave
+        # out — see THAM_ON — not for a test that is allowed to fail.
+        requires = case[4] if len(case) > 4 else None
+        if requires:
+            probe_command, probe_pattern = requires
+            if probe_command not in probes:
+                try:
+                    probe, _ = guest.sh(probe_command, timeout)
+                    probes[probe_command] = bool(
+                        re.search(probe_pattern, probe, re.MULTILINE))
+                except (TimeoutError, RuntimeError):
+                    probes[probe_command] = False
+            if not probes[probe_command]:
+                result.skipped += 1
+                print("skip %-18s %s is not in this image" % (name, probe_command))
+                continue
         try:
             output, _ = guest.sh(command, timeout)
         except (TimeoutError, RuntimeError) as exc:
@@ -3146,8 +3212,10 @@ def main():
         else:
             shutil.rmtree(workdir, ignore_errors=True)
 
-    total = result.passed + len(result.failed)
+    total = result.passed + len(result.failed) + result.skipped
     print("\n%d/%d passed" % (result.passed, total))
+    if result.skipped:
+        print("%d skipped: not in this image" % result.skipped)
     for name, output, problems in result.failed:
         if output:
             print("\n--- %s output ---\n%s" % (name, output))

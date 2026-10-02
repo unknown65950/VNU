@@ -1,0 +1,56 @@
+NAME
+    tree - list a directory as a tree
+
+SYNOPSIS
+    tree [-a] [-d] [path]...
+
+DESCRIPTION
+    Walks each path and prints what is under it as a tree, a directory
+    per line with the connectors that show which entries have children
+    of their own:
+
+        /
+        |-- bin/
+        |   |-- cat
+        |   `-- ls
+        `-- etc/
+            `-- hostname
+
+    A file given as a path is a tree of one, and several paths are
+    printed one after another with a blank line between them. With no
+    path at all the current directory is walked.
+
+    Entries are sorted by name, so the same directory prints the same
+    way twice. "." and ".." are never listed.
+
+OPTIONS
+    -a   list the dot files too, not only the hidden entries that are
+         skipped by default
+    -d   list the directories and nothing else, which is the shape of
+         a filesystem without the files in it
+
+DIAGNOSTICS
+    A path that cannot be stat'd, or a directory that cannot be
+    opened, is named on standard error and the exit status becomes 1.
+    Walking continues over the paths that do work, so one unreadable
+    directory does not cost the whole run. An entry whose own stat()
+    fails is still listed, marked [cannot stat it], rather than dropped:
+    a name is there to be shown.
+
+EXIT STATUS
+    0 when every path could be read, 1 when any of them could not.
+
+EXAMPLES
+    tree
+        the current directory and everything under it
+
+    tree -d /
+        the shape of the whole filesystem, directories only
+
+    tree -a /root
+        the current directory including .profile and the rest
+
+NOTES
+    This is a third-party module: it is built from thams/tree/ and
+    lives at /bin/tree, and nothing in the system tree was changed to
+    put it there. See thams/README.md in the sources.

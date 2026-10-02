@@ -38,3 +38,8 @@ __pycache__/
 # mine is neither. Do not "fix" this line — if it ever belongs in the tree,
 # translate it to English first (AGENTS.md) and commit it on purpose.
 ROADMAP.md
+
+# The switch `make thamoff` throws: an image built without the third-party
+# modules in thams/ is a deliberate build, not a leftover. Local to one
+# tree, so it is never committed.
+thams/.off

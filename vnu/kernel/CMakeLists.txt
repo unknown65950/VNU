@@ -134,6 +134,7 @@ add_executable(kernel.elf
     mm/paging.cpp
     proc/elf.cpp
     proc/process.cpp
+    proc/thams.cpp
     proc/mboot.cpp
     proc/images.cpp
     proc/switch.s

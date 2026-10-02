@@ -110,6 +110,18 @@ instead, sending the keys with `guest._type("<down>q")`.
   do not count as device access.
 - The kernel is freestanding C++20 (no exceptions/RTTI/STL) and may only
   include `<vnu/...>` headers. Userspace is C++17 with `vlibc` only.
+- **A third-party program is a THAM, not a patch to the OS.** Anything that
+  is not part of VNU itself belongs in `thams/<name>/` — its own directory,
+  a `tham.conf`, a manual page and, if the code came from elsewhere, the
+  license it came under. `tools/thams.py` compiles it with `tools/vcc`
+  against `vlibc` alone and embeds it; the image gets `/bin/<name>` and,
+  with `GUI=1`, `/apps/<name>/icon` and a desktop tile, and `man <name>`
+  reads `/apps/<name>/man/<name>`. Never hand-edit `vnu/kernel/gui/apps.cpp`
+  or `vnu/kernel/proc/process.cpp` to make a new program appear, and never
+  put a module's source in `vnu/userspace/` — the whole point is that the
+  system tree stays as it would be without it. `make thamstatus` lists what
+  is there, `make thamupdate` puts it in the image. A module that changes
+  nothing in `vnu/` and works after that alone has followed the rule.
 - Keep the style of the file you edit — same indentation, same comment
   style, no new dependencies — except for the language, which is English
   everywhere.

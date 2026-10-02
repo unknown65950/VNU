@@ -32,6 +32,7 @@
 #include <vlibc/string.h>
 #include <vlibc/stdio.h>
 #include <vlibc/stdlib.h>
+#include <vlibc/fcntl.h>
 #include <vlibc/keys.h>
 #include <vlibc/term.h>
 
@@ -51,6 +52,74 @@ static void we(const char* s)
 {
     if (s)
         write(2, s, strlen(s));
+}
+
+/* --- pages that are files, not tables ------------------------------ */
+
+/* A third-party module (see thams/README.md) ships its page as a file
+ * next to its binary rather than as a string in this table, which is
+ * the whole point of keeping the module out of the source: the OS is
+ * not edited to carry somebody else's documentation. The kernel mounts
+ * it at /apps/<name>/man/<name>, so reading it is all this has to do.
+ *
+ * The page is the printed text as it stands — the same layout as the
+ * pages above, without the C string quoting. */
+#define MAX_PAGE_BYTES 16384
+
+static char* load_page_file(const char* name)
+{
+    char path[128];
+    /* A module name is a directory name, and the one character that
+     * would turn it into a path is a slash: without it the page can
+     * only come from /apps/<name>/, which is the one place a module
+     * keeps it. Control characters are refused so the name cannot put
+     * anything on the terminal that was not there to begin with. */
+    if (!name[0] || strlen(name) > 48)
+        return 0;
+    for (const char* s = name; *s; ++s)
+        if (*s == '/' || *s == '\\' || *s < ' ')
+            return 0;
+
+    const char* pre = "/apps/";
+    const char* mid = "/man/";
+    int n = strlen(pre) + strlen(name) + strlen(mid) + strlen(name) + 1;
+    if (n > (int)sizeof(path))
+        return 0;
+    int at = 0;
+    for (const char* s = pre; *s; ++s)
+        path[at++] = *s;
+    for (const char* s = name; *s; ++s)
+        path[at++] = *s;
+    for (const char* s = mid; *s; ++s)
+        path[at++] = *s;
+    for (const char* s = name; *s; ++s)
+        path[at++] = *s;
+    path[at] = 0;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return 0;
+    char* buf = (char*)malloc(MAX_PAGE_BYTES);
+    if (!buf) {
+        close(fd);
+        return 0;
+    }
+    /* A read may come back short, so the page is read until it ends or
+     * the buffer is full — the last byte is left for the terminator. */
+    int got = 0;
+    while (got < MAX_PAGE_BYTES - 1) {
+        int chunk = (int)read(fd, buf + got, MAX_PAGE_BYTES - 1 - got);
+        if (chunk <= 0)
+            break;
+        got += chunk;
+    }
+    close(fd);
+    if (got <= 0) {
+        free(buf);
+        return 0;
+    }
+    buf[got] = 0;
+    return buf;
 }
 
 /* --- manual pages --------------------------------------------------- */
@@ -1787,9 +1856,24 @@ int main(int argc, char** argv)
     /* On a terminal the pages are shown one screen at a time; otherwise
      * they are printed straight out, so a redirect keeps working. */
     int interactive = isatty(1) == 1;
+    /* Pages read from /apps/<name>/man/<name> rather than from the
+     * table above. The pager keeps pointers into them rather than
+     * copies, so they are held until it has finished — the same cap as
+     * g_names, since both grow once per page asked for. */
+    static char* file_pages[32];
+    unsigned n_file_pages = 0;
+
     for (int i = 1; i < argc; ++i) {
         const struct Page* page = find_page(argv[i]);
-        if (page == 0) {
+        char* own = 0;
+        const char* name = argv[i];
+        const char* text = 0;
+        if (page) {
+            name = page->name;
+            text = page->text;
+        } else if ((own = load_page_file(argv[i]))) {
+            text = own;
+        } else {
             we("man: no manual page for ");
             we(argv[i]);
             we("\n");
@@ -1799,21 +1883,27 @@ int main(int argc, char** argv)
         if (interactive) {
             /* One document holds every page asked for, so the status bar
              * can name the one on screen; the array of names is the cap. */
-            if (g_npages >= sizeof(g_names) / sizeof(g_names[0])) {
+            if (g_npages >= sizeof(g_names) / sizeof(g_names[0]) ||
+                n_file_pages >= sizeof(file_pages) / sizeof(file_pages[0])) {
                 we("man: too many pages requested\n");
                 return 1;
             }
-            g_names[g_npages++] = page->name;
-            if (doc_add(page->text, g_npages - 1) != 0) {
+            g_names[g_npages++] = name;
+            if (doc_add(text, g_npages - 1) != 0) {
                 we("man: out of memory building the page\n");
                 return 1;
             }
+            if (own)
+                file_pages[n_file_pages++] = own;
         } else {
-            w(page->text);
+            w(text);
             w("\n");
+            free(own);
         }
     }
     if (interactive && g_npages > 0)
         run_pager();
+    for (unsigned i = 0; i < n_file_pages; ++i)
+        free(file_pages[i]);
     return rc;
 }
