@@ -69,13 +69,84 @@ static int b_exit(int argc, char** argv)
     return v;
 }
 
+/* export [-p] [NAME[=VALUE]...] - give shell variables to the programs
+ * this shell runs. POSIX: with no operand, write the exported names in a
+ * form that can be read back in; with operands, set and export them. A
+ * bare NAME creates the variable empty if it did not exist, which is
+ * what marks it for export - the attribute lives on the variable, so
+ * there is nothing to record separately.
+ *
+ * The attribute only means something because var_env_array() builds the
+ * child's environment out of it (vars.c) and both execve() paths hand
+ * that array over; without a caller of var_export() nothing was ever
+ * exported and every child inherited an empty environment. */
 static int b_export(int argc, char** argv)
 {
-    (void)argc;
-    (void)argv;
-    /* minimal - just mark exported if name=value form */
-    for (int i = 1; i < argc; ++i) {
-        char* p = argv[i];
+    int first = 1;
+    int print = 0;
+    /* Every option is read before anything is done, so an unknown one is
+     * reported even when a valid one has already asked for the list. */
+    while (first < argc && argv[first][0] == '-' && argv[first][1]) {
+        if (strcmp(argv[first], "-p") != 0) {
+            sh_err("vash: export: ");
+            sh_err(argv[first]);
+            sh_err(": invalid option\n");
+            return 2;
+        }
+        print = 1;
+        ++first;
+    }
+    if (print || first == argc) {
+        /* var_names() hands back pointers the table owns, so they are
+         * read through var_find() and only the array is released. */
+        int n = 0;
+        char** names = var_names(&n);
+        for (int k = 0; k < n; ++k) {
+            Var* v = var_find(names[k]);
+            if (!v || !v->exported)
+                continue;
+            sh_out("export ");
+            sh_out(v->name);
+            sh_out("=\"");
+            sh_out(v->val ? v->val : "");
+            sh_out("\"\n");
+        }
+        free(names);
+        return 0;
+    }
+    for (int i = first; i < argc; ++i) {
+        char* a = argv[i];
+        if (a[0] == '-' && a[1]) {
+            sh_err("vash: export: ");
+            sh_err(a);
+            sh_err(": invalid option\n");
+            return 2;
+        }
+        int j = 0;
+        while (a[j] && a[j] != '=' && a[j] != '[')
+            ++j;
+        if (a[j] == '[') {
+            /* An array cannot be in a child's environment: the kernel
+             * copies NAME=value strings, so there is nowhere for
+             * `a[2]' to live. Say so rather than exporting `a' and
+             * leaving the caller to wonder. */
+            sh_err("vash: export: ");
+            sh_err(a);
+            sh_err(": arrays cannot be exported\n");
+            return 1;
+        }
+        /* The name is copied rather than cut out of the caller's word:
+         * var_export() below wants the name alone, and a word that came
+         * out of the expander is not ours to leave half-terminated. */
+        char name[64];
+        int n = j;
+        if (n > (int)sizeof(name) - 1)
+            n = (int)sizeof(name) - 1;
+        memcpy(name, a, (unsigned long)n);
+        name[n] = 0;
+        if (a[j] == '=')
+            var_set(name, a + j + 1);
+        var_export(name, 1);
     }
     return 0;
 }

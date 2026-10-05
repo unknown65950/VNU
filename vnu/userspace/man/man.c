@@ -208,17 +208,33 @@ DESCRIPTION\n\
     Unix. Built-in to vash (run inside the shell).\n"
 
 #define EXPORT_PAGE "NAME\n\
-    export - print or set the PATH search path\n\
+    export - give shell variables to the programs the shell runs\n\
 \n\
 SYNOPSIS\n\
-    export\n\
-    export PATH=<dirs>\n\
+    export [-p] [NAME[=VALUE]...]...\n\
 \n\
 DESCRIPTION\n\
-    With no argument, prints the current entry search path used\n\
-    to locate external commands. With an argument of the form\n\
-    PATH=dir1:dir2:... it replaces the search path in the current\n\
-    session. Only PATH is supported. Shell builtin.\n"
+    Marks each NAME as exported, so that its value is placed in the\n\
+    environment of every program this shell starts. With NAME=VALUE\n\
+    the variable is given that value first; a bare NAME is created\n\
+    empty if it does not exist yet. A variable that is not exported\n\
+    belongs to the shell alone and no program ever sees it, which is\n\
+    why `FOO=1' and `export FOO=1' are not the same command.\n\
+\n\
+    With no operand, and with -p, writes the exported variables in a\n\
+    form that can be read back in:\n\
+\n\
+        export NAME=\"VALUE\"\n\
+\n\
+    An array cannot be exported. The environment holds NAME=VALUE\n\
+    strings and has nowhere to put a subscript, so `export a[2]' is\n\
+    refused rather than quietly exporting `a' and leaving the caller\n\
+    to wonder what happened to the element.\n\
+\n\
+    Exporting says nothing about where commands are looked up: that\n\
+    is the shell's own search path, which `type' reports (see type).\n\
+    Unknown options are refused, whether or not -p was given first.\n\
+    Shell builtin.\n"
 
 #define UNSET_PAGE "NAME\n\
     unset - empty (unset) the command search path\n\
@@ -1631,7 +1647,7 @@ static const struct Page pages[] = {
      TERM_PAGE},
     {"cd",       "change the working directory",
      CD_PAGE},
-    {"export",   "print or set the PATH search path",
+    {"export",   "give shell variables to the programs the shell runs",
      EXPORT_PAGE},
     {"unset",    "empty (unset) the command search path",
      UNSET_PAGE},

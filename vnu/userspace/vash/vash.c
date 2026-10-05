@@ -572,7 +572,21 @@ static int run_external(int ac, char** av)
     for (int i = 1; i < ac && i < 15; ++i)
         xav[i] = av[i];
     xav[ac < 15 ? ac : 15] = 0;
-    execve(resolved, xav, 0);
+    /* The exported variables go with the command. This used to pass 0 for
+     * envp, which is not "inherit" - there is nothing to inherit from,
+     * the shell is the only thing that was ever going to build it - so
+     * every external command came up with an empty environment however
+     * many variables had been exported. */
+    char** env = var_env_array();
+    execve(resolved, xav, env);
+    /* Reached only when the execve() failed, and unlike the child in
+     * exec_child() this process carries on as the shell, so the vector is
+     * ours to release rather than about to die with us. */
+    if (env) {
+        for (int i = 0; env[i]; ++i)
+            free(env[i]);
+        free(env);
+    }
     we("vash: command not found: ");
     we(av[0]);
     we("\n");
