@@ -663,8 +663,10 @@ uint32_t elf_need_pages(const uint8_t* image, uint32_t size);
 
 /* One shebang line, plus room for the slashes around it. */
 constexpr int SHEBANG_MAX = 128;
-/* How many `#!` indirections this syscall has already followed. */
-static int shebang_depth = 0;
+/* How many `#!` indirections one execve() will follow. Four is far past
+ * anything real; the only thing it has to get right is that a script
+ * naming itself, directly or through others, stops somewhere. */
+constexpr int SHEBANG_MAX_DEPTH = 4;
 
 /* One execve()'s worth of argument, environment and path strings, copied
  * out of the arrays the calling program handed in before anything can
@@ -754,7 +756,8 @@ static void take_snapshot(ExecSnapshot& snap, const char* path,
  * strings the level above had already made and is still holding. */
 static int exec_prepared(Registers* trap, const char* path,
                          char* const* arg_ptrs, int argc,
-                         char* const* env_ptrs, int envc)
+                         char* const* env_ptrs, int envc,
+                         int shebang_depth)
 {
     const EmbeddedProg* prog = find_embedded(path);
 
@@ -795,6 +798,12 @@ static int exec_prepared(Registers* trap, const char* path,
              * would run a program the author did not put on this line. */
             if (p == interp)
                 return -VNU_ENOEXEC;
+            /* Refused before the line is taken apart rather than after: a
+             * chain that is already too deep has no use for an argv, and
+             * doing the work first means the limit is only reached by
+             * succeeding at everything else on the way to it. */
+            if (shebang_depth >= SHEBANG_MAX_DEPTH)
+                return -VNU_ENOEXEC;
             /* The blank that ended the interpreter path is also where the
              * argument starts, so both halves of the line want a NUL
              * written over one of its bytes: the one that ends `interp`,
@@ -832,22 +841,23 @@ static int exec_prepared(Registers* trap, const char* path,
             for (int i = 1; i < argc && sn < 8; ++i)
                 sargv[sn++] = arg_ptrs[i];
             sargv[sn] = 0;
-            /* A script that (directly or through another script) keeps
-             * naming a script would recurse forever; four levels is far
-             * past anything real. */
-            if (++shebang_depth > 4) {
-                --shebang_depth;
-                return -VNU_ENOEXEC;
-            }
             /* The recursion runs on this frame's own strings - `interp`
              * out of the line just read, `path` and the arguments below
              * out of the snapshot - all of which outlive the call, and on
              * the environment already copied, rather than on the arrays
              * the original caller passed in. Those are the program's, and
-             * this call is what is about to overwrite them. */
-            int r = exec_prepared(trap, interp, sargv, sn, env_ptrs, envc);
-            --shebang_depth;
-            return r;
+             * this call is what is about to overwrite them.
+             *
+             * The depth goes with it, as an argument rather than a
+             * counter in a static. The number of indirections followed is
+             * a property of this one execve(), and a global for it means
+             * every way out of the function has to put it back — one that
+             * does not leaves the next execve on the machine with less
+             * budget than it should have, and does so silently. Carrying
+             * it down makes it true by construction and leaves nothing to
+             * balance. */
+            return exec_prepared(trap, interp, sargv, sn, env_ptrs, envc,
+                                 shebang_depth + 1);
         }
     }
 
@@ -957,7 +967,7 @@ int sys_execve(Registers* trap, const char* path, char* const* argv,
     ExecSnapshot snap;
     take_snapshot(snap, path, argv, envp);
     return exec_prepared(trap, snap.path_copy, snap.arg_ptrs, snap.argc,
-                         snap.env_ptrs, snap.envc);
+                         snap.env_ptrs, snap.envc, 0);
 }
 
 extern "C" void vnu_enter_user(uint32_t entry, uint32_t user_esp);
