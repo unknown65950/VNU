@@ -11,6 +11,11 @@
 
 static Var* vars;
 
+/* `set -a': every variable is exported, now and later. It has to be a
+ * flag rather than a one-off pass over the table, because the whole point
+ * is the assignments that come *after* it. */
+static int allexport;
+
 void var_init(void)
 {
     Var* v;
@@ -41,6 +46,7 @@ static Var* var_make(const char* name)
         return 0;
     memset(v, 0, sizeof(Var));
     v->name = sh_strdup(name);
+    v->exported = allexport;
     /* New variables go on the front: a script reads the same handful of
      * names thousands of times, and the ones it defines later are the
      * ones it looks up most. */
@@ -129,8 +135,26 @@ char** var_env_array(void)
     return env;
 }
 
-void var_export_all(void)
+/* `set -a' / `set +a'. Marking the table is only half of it: the flag
+ * makes every variable created from here on exported too, which is the
+ * part anyone who writes `set -a' is relying on.
+ *
+ * Turning it off only clears the flag. It does not un-export what is
+ * already exported - neither the variables `set -a' marked a moment ago
+ * nor the ones `export' marked before it - because a variable's exported
+ * state is its own, and `set +a' says only "stop doing it from now
+ * on". Walking the table on the way out as well is the difference
+ * between this and bash:
+ *
+ *     set -a; FOO=1; set +a; BAR=2; export -p
+ *     bash  declare -x FOO="1"        FOO stays, BAR does not appear
+ *     both  (nothing)                  un-marking FOO, which is wrong
+ */
+void var_export_all(int on)
 {
+    allexport = on;
+    if (!on)
+        return;
     for (Var* v = vars; v; v = v->next)
         v->exported = 1;
 }

@@ -236,6 +236,42 @@ DESCRIPTION\n\
     Unknown options are refused, whether or not -p was given first.\n\
     Shell builtin.\n"
 
+#define SET_PAGE "NAME\n\
+    set - show or change the shell's own settings\n\
+\n\
+SYNOPSIS\n\
+    set [-a] [-e] [-o NAME] [-u] [+a] [+e] [+o NAME] [+u]\n\
+    set -- [ARG...]\n\
+    set\n\
+\n\
+DESCRIPTION\n\
+    Changes the settings the shell keeps for the session. A leading -\n\
+    turns a setting on and a leading + turns it off; the two are not\n\
+    two spellings of the same thing, and for -a the difference shows.\n\
+\n\
+    -a          every variable is exported from now on, so each later\n\
+                assignment exports too (see export). +a stops doing\n\
+                that without un-exporting what is already exported: a\n\
+                variable's exported state is its own, and +a says only\n\
+                `stop doing it from here on'.\n\
+    -e          leave the shell at once if a command fails. +e ignores\n\
+                failures and carries on.\n\
+    -u          referring to a variable that is not set is an error.\n\
+                +u treats it as empty.\n\
+    -o NAME     the long form of the above, with two more:\n\
+                    errexit, nounset, allexport, pipefail\n\
+                Each has a +o NAME form that turns it off.\n\
+\n\
+    With --, or with arguments that are not options, the arguments\n\
+    become the positional parameters $1, $2, ... of the shell.\n\
+\n\
+    With no other argument, writes every variable and its value, one\n\
+    per line:\n\
+\n\
+        NAME=VALUE\n\
+\n\
+    An unknown option letter is refused with status 2. Shell builtin.\n"
+
 #define UNSET_PAGE "NAME\n\
     unset - empty (unset) the command search path\n\
 \n\
@@ -1651,6 +1687,8 @@ static const struct Page pages[] = {
      EXPORT_PAGE},
     {"unset",    "empty (unset) the command search path",
      UNSET_PAGE},
+    {"set",      "show or change the shell's own settings",
+     SET_PAGE},
     {"exit",     "end the shell session",
      EXIT_PAGE},
     {"help",     "list the shell builtins",

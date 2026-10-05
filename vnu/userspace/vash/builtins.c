@@ -977,6 +977,7 @@ static int b_set(int argc, char** argv)
             switch (*f) {
             case 'e': sh_set_e = on; break;
             case 'u': sh_nounset = on; break;
+            case 'a': var_export_all(on); break;
             case 'o': {
                 const char* name = f[1] ? f + 1 : (argv[i + 1] ? argv[i + 1] : "");
                 if (!f[1] && name[0] && name[0] != '-' && name[0] != '+')
@@ -987,6 +988,8 @@ static int b_set(int argc, char** argv)
                     sh_set_e = on;
                 else if (strcmp(name, "nounset") == 0)
                     sh_nounset = on;
+                else if (strcmp(name, "allexport") == 0)
+                    var_export_all(on);
                 else if (!name[0])
                     listed = 1;
                 f += strlen(f) - 1;
