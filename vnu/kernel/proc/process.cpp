@@ -671,12 +671,20 @@ int sys_execve(Registers* trap, const char* path, char* const* argv,
 {
     const EmbeddedProg* prog = find_embedded(path);
 
-    /* Snapshot argv strings BEFORE load() overwrites userspace at 0x400000. */
+    /* Snapshot argv strings BEFORE load() overwrites userspace at
+     * 0x400000 - and test the bound before the subscript, on purpose.
+     * Written the other way round the subscript is evaluated at the
+     * limit, so a caller whose list stops exactly there has its element
+     * past the end read before the loop notices it is full - and
+     * argv[] comes from the program being exec'd, so that read is not
+     * one the kernel can vouch for. POSIX says the list is terminated; a
+     * program that gets that wrong is to be refused, not read one entry
+     * further. */
     char arg_store[8][96];
     char* arg_ptrs[9];
     int argc = 0;
     if (argv) {
-        while (argv[argc] && argc < 8) {
+        while (argc < 8 && argv[argc]) {
             const char* s = argv[argc];
             int j = 0;
             for (; s[j] && j < 95; ++j)
@@ -702,7 +710,7 @@ int sys_execve(Registers* trap, const char* path, char* const* argv,
     char* env_ptrs[VNU_MAX_ENV + 1];
     int envc = 0;
     if (envp) {
-        while (envp[envc] && envc < VNU_MAX_ENV) {
+        while (envc < VNU_MAX_ENV && envp[envc]) {
             const char* s = envp[envc];
             int j = 0;
             for (; s[j] && j < 95; ++j)
