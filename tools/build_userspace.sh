@@ -37,7 +37,14 @@ python3 "$ROOT/tools/thams.py" generate
 echo "==> userspace"
 # Build vash (multi-file)
 VASH_SRC="$ROOT/vnu/userspace/vash/strbuf.c $ROOT/vnu/userspace/vash/cmd.c $ROOT/vnu/userspace/vash/lex.c $ROOT/vnu/userspace/vash/vars.c $ROOT/vnu/userspace/vash/fnmatch.c $ROOT/vnu/userspace/vash/expand.c $ROOT/vnu/userspace/vash/regex.c $ROOT/vnu/userspace/vash/parse.c $ROOT/vnu/userspace/vash/exec.c $ROOT/vnu/userspace/vash/arith.c $ROOT/vnu/userspace/vash/builtins.c $ROOT/vnu/userspace/vash/vash.c"
-"$VCC" $VASH_SRC -o "$ROOT/sysroot/bin/vash" 2>&1 | tail -30
+# Nothing is piped through tail here, and that is the point. This is the
+# longest compile in the tree, so its output was cut to the last 30 lines
+# to keep it readable - which throws away the first diagnostic of a run of
+# thirteen translation units, and the first one is the one that names the
+# file and the line to start at. A build that fails should say why in the
+# order the compiler said it. `set -o pipefail` was keeping the *exit
+# status* honest, which is not the same thing as keeping the output.
+"$VCC" $VASH_SRC -o "$ROOT/sysroot/bin/vash"
 "$VCC" "$ROOT/vnu/userspace/editors/vedit.c" -o "$ROOT/sysroot/bin/vedit"
 "$VCC" "$ROOT/vnu/userspace/gui/calc.c" -o "$ROOT/sysroot/bin/calc"
 "$VCC" "$ROOT/vnu/userspace/gui/files.c" -o "$ROOT/sysroot/bin/files"
@@ -62,6 +69,12 @@ for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wallpaper; do
   "$VCC" "$ROOT/vnu/userspace/vibecoreutils/$c.c" -o "$ROOT/sysroot/bin/$c"
 done
+# imagine lives under cli/ rather than vibecoreutils/, so it is built here
+# with everything else and not from inside the loop below that embeds the
+# binaries. A loop that both compiles and embeds is a build step wearing
+# an embed's clothes: it runs late, it runs in list order, and a reader
+# looking for where a binary is compiled does not find it there.
+"$VCC" "$ROOT/vnu/userspace/cli/imagine.c" -o "$ROOT/sysroot/bin/imagine"
 # the compiler itself (runs inside the guest and links against /lib).
 "$VCC" "$ROOT/vnu/userspace/vcc/vcc.c" -o "$ROOT/sysroot/bin/vcc"
 # system information: what machine am I on (fetch/version/size).
@@ -118,9 +131,6 @@ embed "$ROOT/sysroot/lib/libvlibc.a" lib_vlibc
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wc head tail grep sort cp mv basename dirname seq df ping \
          wallpaper imagine; do
-  if [ "$c" = "imagine" ]; then
-    "$VCC" "$ROOT/vnu/userspace/cli/imagine.c" -o "$ROOT/sysroot/bin/imagine"
-  fi
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
 for c in id whoami groups useradd passwd su; do
