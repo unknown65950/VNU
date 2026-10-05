@@ -4,6 +4,7 @@ extern "C" {
 
 #pragma once
 
+#include <stddef.h>
 #include <vlibc/unistd.h>
 #include <stdarg.h>
 

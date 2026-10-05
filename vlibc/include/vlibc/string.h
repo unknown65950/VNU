@@ -4,6 +4,7 @@ extern "C" {
 
 #pragma once
 
+#include <stddef.h>
 #include <vlibc/stdio.h>
 
 unsigned long strlen(const char* str);

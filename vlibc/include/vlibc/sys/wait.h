@@ -1,8 +1,19 @@
 #pragma once
+#include <vlibc/sys/types.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
-int waitpid(int pid, int* status, int options);
+
+/* The options argument of waitpid(). Only the one the kernel acts on is
+ * defined: sys_waitpid() reads it as "return 0 instead of blocking when
+ * no zombie of mine is ready" (process.cpp), so a nonzero value means
+ * exactly WNOHANG and nothing else. WUNTRACED and WCONTINUED are left
+ * undefined rather than defined-and-ignored — a program that passed
+ * them would get non-blocking behaviour it had not asked for, and a
+ * name in a header is a promise about what the call does. */
+#define WNOHANG 1
+
+int waitpid(pid_t pid, int* status, int options);
 int wait(int* status);
 
 /* The bits of a status word, spelled the way POSIX spells them: what a

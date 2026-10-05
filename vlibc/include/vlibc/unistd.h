@@ -1,5 +1,7 @@
 #pragma once
+#include <stddef.h>
 #include <vlibc/sys/syscall.h>
+#include <vlibc/sys/types.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -20,7 +22,7 @@ long read(int fd, void* buffer, unsigned long count);
 long lseek(int fd, long offset, int whence);
 int open(const char* path, int flags, ...);
 int close(int fd);
-int fork(void);
+pid_t fork(void);
 int execve(const char* path, char* const argv[], char* const envp[]);
 void exit(int status);
 unsigned long getpid(void);
