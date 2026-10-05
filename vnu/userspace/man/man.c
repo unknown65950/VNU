@@ -1392,7 +1392,12 @@ THE DEVICE: /dev/fb0\n\
     The program writes pixels into va directly and then writes zero\n\
     bytes to the descriptor, which puts the frame on the screen. A\n\
     write with data instead copies those bytes into the frame at the\n\
-    descriptor's position, which lseek moves.\n\
+    descriptor's position, which lseek moves. SEEK_END there is the size\n\
+    of the frame, one byte past the last row that can be written, so a\n\
+    write starting exactly there is refused with EINVAL; ask for the\n\
+    tail by a negative offset instead, as in lseek(fd, -stride,\n\
+    SEEK_END) for the last row. On the other character devices SEEK_END\n\
+    is 0, since a stream has no end.\n\
 \n\
     Opening the device takes the display with it. A machine at its\n\
     prompt is in text mode, where there is no frame to map, so an\n\

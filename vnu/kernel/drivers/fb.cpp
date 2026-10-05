@@ -60,6 +60,18 @@ bool available()
     return vnu::vgfx::in_gfx_mode() && current().phys != 0;
 }
 
+uint32_t frame_bytes()
+{
+    const Frame f = current();
+    /* The same coherence check current() itself makes, kept rather than
+     * assumed: a geometry read one instruction apart from the frame's
+     * is a mode change in progress, and multiplying the two would give
+     * an end offset for a frame that is not there. */
+    if (!f.phys)
+        return 0;
+    return stride_of(f) * static_cast<uint32_t>(f.height);
+}
+
 /* Whether entering the mode was this device's doing. A frame the desktop
  * took is the desktop's to give back, and a display nobody asked to
  * change is not ours to put back either. */

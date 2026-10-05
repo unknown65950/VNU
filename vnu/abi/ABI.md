@@ -521,6 +521,17 @@ clipped to the frame, damaging only the rows it reached; a position past
 the end of the frame fails with `-VNU_EINVAL` rather than writing
 elsewhere.
 
+`lseek` answers `SEEK_END` on this device with the size of the frame,
+which is one past the last writable byte — the frame is a fixed-size
+buffer and does not grow, so a write starting exactly there is refused
+like any other position past the end. A program that means the tail of
+the frame asks for it by a negative offset from the end
+(`lseek(fd, -stride, SEEK_END)` for the last row). It is worth being
+precise about this because a character device has no size of its own, and
+deriving `SEEK_END` from the node's size answers 0 — which would put
+"the end of the frame" at the top left and overwrite the first row.
+On the other `/dev` nodes `SEEK_END` is 0: they are streams with no end.
+
 The frame belongs to the display, not to the caller: the mapping is
 borrowed (`paging::map_borrowed_frames`), so exiting, forking or
 execveing takes the mapping with it and never returns the framebuffer to

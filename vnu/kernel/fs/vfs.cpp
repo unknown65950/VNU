@@ -1340,6 +1340,34 @@ int write(int fd, const void* buf, uint32_t count)
     return static_cast<int>(count);
 }
 
+/* How far a seek to the end of a device lands. A character device has no
+ * size of its own, so a node's `size` is 0 and lseek(fd, 0, SEEK_END)
+ * would answer 0 - which for /dev/fb0 sends a program that means "the
+ * end of the frame" back to the top left, where write_pixels() then
+ * puts its picture over the beginning of the frame instead of after what
+ * is already there.
+ *
+ * The frame is the one device with a real extent, and it is the end of
+ * the frame rather than of the node that a caller wants: the descriptor
+ * is a position in the frame buffer, not in a file. Everything else is a
+ * stream with no end, where 0 is the honest answer and the driver's own
+ * position is the only position that means anything.
+ *
+ * That end is one past the last writable byte - the frame is a fixed-size
+ * buffer, so there is nothing to grow into - and write_pixels() refuses
+ * a write that starts there with EINVAL, as it refuses any other position
+ * past the end. A program that means "the last row" says so:
+ * lseek(fd, -stride, SEEK_END). */
+static uint32_t seek_end_of(DevKind dev)
+{
+    switch (dev) {
+    case DevKind::Framebuffer:
+        return vnu::fb::frame_bytes();
+    default:
+        return 0;
+    }
+}
+
 int lseek(int fd, int32_t offset, int whence)
 {
     if (fd < 0 || fd >= MAX_FD || !files[fd].used)
@@ -1353,7 +1381,8 @@ int lseek(int fd, int32_t offset, int whence)
     if (whence == 1)
         base = static_cast<int32_t>(files[fd].position);
     else if (whence == 2)
-        base = static_cast<int32_t>(n.size);
+        base = static_cast<int32_t>(n.dev != DevKind::None ? seek_end_of(n.dev)
+                                                            : n.size);
     int32_t np = base + offset;
     if (np < 0)
         np = 0;

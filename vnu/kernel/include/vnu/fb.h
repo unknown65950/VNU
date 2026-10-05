@@ -100,6 +100,18 @@ Prep ensure_frame();
 // the question, not the action.
 bool available();
 
+// How many bytes a whole frame is, or 0 when there is no frame. This is
+// what a write's offset is measured against, and what a seek to the end
+// of /dev/fb0 has to answer with: the device carries no size of its own,
+// so a program that means "the end of the frame" has to be handed the end
+// of the frame rather than the end of nothing.
+//
+// The same number write_pixels() checks its offset against, by the same
+// expression, so the two cannot drift apart. It is one past the last
+// writable byte - the frame does not grow - and a write starting exactly
+// there is refused like any other position past the end.
+uint32_t frame_bytes();
+
 // Give the display back, when this is what put it into a graphics mode:
 // the text mode the console was in, its characters readable on the card
 // again. Called when the last descriptor on the device is closed, and a
