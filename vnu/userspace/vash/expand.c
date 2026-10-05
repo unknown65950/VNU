@@ -411,10 +411,23 @@ static void expand_brace_body(Exp* e, const char* body, int quoted)
         free(nbuf);
         return;
     }
-    /* ${!name} — the value of the variable `name' names. */
+    /* ${!name} — the value of the variable that `name' names. Two steps,
+     * and it used to take one: var_lookup_word() is the $name expander, so
+     * passing it `name' printed the value of `name' and left the `!'
+     * accepted but ignored — ${!P} answered exactly what ${P} does.
+     * The value it returns is the *name* to look up. */
     if (body[0] == '!' && is_name(body + 1)) {
-        const char* v = var_lookup_word(body + 1);
-        add_text(e, v, quoted, 1);
+        const char* named = var_lookup_word(body + 1);
+        if (!named[0]) {
+            /* An unset or empty inner name has no name to indirection
+             * through, and quietly expanding to nothing would be
+             * indistinguishable from a variable that is merely unset. */
+            sh_err("vash: ");
+            sh_err(body + 1);
+            sh_err(": invalid indirect expansion\n");
+            return;
+        }
+        add_text(e, var_get(named), quoted, 1);
         return;
     }
     /* ${!prefix*} — every name that starts with `prefix'. */
