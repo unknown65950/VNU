@@ -251,6 +251,7 @@ int var_setn(const char* name, const char* val, int n);
 void var_export(const char* name, int on);
 int var_unset(const char* name);
 void var_export_all(int on);
+int var_allexport(void);
 const char* var_lookup_word(const char* name); /* $0, $?, $1 ... */
 char** var_env_array(void);                    /* the exported environment */
 

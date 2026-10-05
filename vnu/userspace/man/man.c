@@ -260,7 +260,17 @@ DESCRIPTION\n\
                 +u treats it as empty.\n\
     -o NAME     the long form of the above, with two more:\n\
                     errexit, nounset, allexport, pipefail\n\
-                Each has a +o NAME form that turns it off.\n\
+                Each has a +o NAME form that turns it off. A NAME\n\
+                this shell does not have is refused, rather than\n\
+                accepted and ignored.\n\
+\n\
+    A bare -o with no NAME writes what the shell is currently set to,\n\
+    one per line, which is the four settings above:\n\
+\n\
+        allexport  off\n\
+        errexit    off\n\
+        nounset    off\n\
+        pipefail   off\n\
 \n\
     With --, or with arguments that are not options, the arguments\n\
     become the positional parameters $1, $2, ... of the shell.\n\

@@ -159,6 +159,12 @@ void var_export_all(int on)
         v->exported = 1;
 }
 
+/* So `set -o' can report the setting instead of only setting it. */
+int var_allexport(void)
+{
+    return allexport;
+}
+
 /* The shell's own names ($?, $#, $1, ...) are answered here rather than
  * kept as variables, so that `$?` is always the last status and `$#`
  * always the current argument count. */

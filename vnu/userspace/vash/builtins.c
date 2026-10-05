@@ -959,6 +959,7 @@ static int b_set(int argc, char** argv)
     int i = 1;
     int positional = 0;
     int listed = 0;
+    int opts = 0;
     for (; i < argc; ++i) {
         char* a = argv[i];
         if (strcmp(a, "--") == 0) {
@@ -986,7 +987,7 @@ static int b_set(int argc, char** argv)
                  * first: the chain below ends in a diagnostic, and the
                  * empty name is not a name it knows. */
                 if (!name[0])
-                    listed = 1;
+                    opts = 1;
                 else if (strcmp(name, "pipefail") == 0)
                     sh_pipefail = on;
                 else if (strcmp(name, "errexit") == 0)
@@ -1026,6 +1027,32 @@ static int b_set(int argc, char** argv)
             params[n++] = argv[i];
         params[n] = 0;
         sh_set_params(params, n);
+        return 0;
+    }
+    if (opts) {
+        /* A bare -o asks what the shell is currently doing, so it
+         * prints the settings. It used to fall into the variable listing
+         * below, which made the one form whose whole purpose is to show
+         * the shell's state show the shell's variables instead, and
+         * left every setting this shell has invisible in it. Only the
+         * settings this shell actually has are listed - printing thirty
+         * names vash does not implement would be a worse lie than
+         * printing four it does. */
+        static const char* const names[4] = {
+            "allexport", "errexit", "nounset", "pipefail"};
+        const int state[4] = {
+            var_allexport(), sh_set_e, sh_nounset, sh_pipefail};
+        for (int k = 0; k < 4; ++k) {
+            int w = 0;
+            while (names[k][w])
+                ++w;
+            sh_out(names[k]);
+            for (int c = w; c < 15; ++c)
+                sh_out(" ");
+            sh_out("\t");
+            sh_out(state[k] ? "on" : "off");
+            sh_out("\n");
+        }
         return 0;
     }
     if (listed || i == 1) {
