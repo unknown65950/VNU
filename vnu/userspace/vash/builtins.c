@@ -97,8 +97,8 @@ static int b_export(int argc, char** argv)
         ++first;
     }
     if (print || first == argc) {
-        /* var_names() hands back pointers the table owns, so they are
-         * read through var_find() and only the array is released. */
+        /* Read back through var_find() and release only the array:
+         * var_names() lends the table's own name pointers. */
         int n = 0;
         char** names = var_names(&n);
         for (int k = 0; k < n; ++k) {
@@ -1019,8 +1019,8 @@ static int b_set(int argc, char** argv)
             sh_out("=");
             sh_out(var_get(names[k]));
             sh_out("\n");
-            free(names[k]);
         }
+        /* The array is ours; the names belong to the table (vars.c). */
         free(names);
     }
     return 0;

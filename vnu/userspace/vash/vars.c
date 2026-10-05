@@ -312,7 +312,10 @@ char** arr_keys(const char* name, int* count)
 }
 
 /* Every variable name, in the order the list holds them — what
- * `${!prefix*}' walks. */
+ * `${!prefix*}' walks. The pointers are the table's own, borrowed for
+ * the length of the call: freeing one frees the Var's name while the Var
+ * still points at it, and every later lookup of that name then reads
+ * freed memory. The array is the caller's to free; the names are not. */
 char** var_names(int* count)
 {
     int n = 0;

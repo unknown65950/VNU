@@ -262,7 +262,7 @@ void arr_clear(const char* name);
 int arr_is_assoc(const char* name);
 void arr_make_assoc(const char* name);
 char** arr_keys(const char* name, int* count);
-char** var_names(int* count);  /* every variable name */
+char** var_names(int* count);  /* every name; borrowed, free the array only */
 
 /* --- functions --------------------------------------------------------
  * A function keeps the command tree of its body: defining it parses the
