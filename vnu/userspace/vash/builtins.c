@@ -982,7 +982,12 @@ static int b_set(int argc, char** argv)
                 const char* name = f[1] ? f + 1 : (argv[i + 1] ? argv[i + 1] : "");
                 if (!f[1] && name[0] && name[0] != '-' && name[0] != '+')
                     ++i;
-                if (strcmp(name, "pipefail") == 0)
+                /* A bare -o asks for the listing, so it is decided
+                 * first: the chain below ends in a diagnostic, and the
+                 * empty name is not a name it knows. */
+                if (!name[0])
+                    listed = 1;
+                else if (strcmp(name, "pipefail") == 0)
                     sh_pipefail = on;
                 else if (strcmp(name, "errexit") == 0)
                     sh_set_e = on;
@@ -990,8 +995,17 @@ static int b_set(int argc, char** argv)
                     sh_nounset = on;
                 else if (strcmp(name, "allexport") == 0)
                     var_export_all(on);
-                else if (!name[0])
-                    listed = 1;
+                else {
+                    /* Every name this shell knows was listed above, so
+                     * anything reaching here is a typo. Swallowing it
+                     * made `set -o allexport' (which B27 had just
+                     * wired up) indistinguishable from a setting that
+                     * works. */
+                    sh_err("vash: set: ");
+                    sh_err(name);
+                    sh_err(": invalid option name\n");
+                    return 2;
+                }
                 f += strlen(f) - 1;
                 break;
             }

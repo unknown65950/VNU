@@ -270,7 +270,8 @@ DESCRIPTION\n\
 \n\
         NAME=VALUE\n\
 \n\
-    An unknown option letter is refused with status 2. Shell builtin.\n"
+    An unknown option is refused with status 2, whether it is spelled\n\
+    as a letter or as a -o NAME. Shell builtin.\n"
 
 #define UNSET_PAGE "NAME\n\
     unset - empty (unset) the command search path\n\
