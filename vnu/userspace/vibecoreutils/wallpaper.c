@@ -22,24 +22,6 @@
 #define SHIPPED    "/etc/vnu/wallpaper.default"
 #define PROC_GFX   "/proc/gfx"
 #define NAME_CAP   64
-#define PATH_CAP   96
-
-static void join(char* dst, int cap, const char* dir, const char* name)
-{
-    int i = 0;
-    while (dir[i] && i < cap - 2) {
-        dst[i] = dir[i];
-        ++i;
-    }
-    dst[i++] = '/';
-    int j = 0;
-    while (name[j] && i < cap - 1) {
-        dst[i] = name[j];
-        ++i;
-        ++j;
-    }
-    dst[i] = 0;
-}
 
 /* What the desktop is drawing, as /proc/gfx reports it. "none" until a
  * picture has been decoded (the procedural sky is not a file). */
