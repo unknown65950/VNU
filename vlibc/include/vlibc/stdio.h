@@ -21,6 +21,13 @@ int putchar(int c);
 int puts(const char* str);
 int printf(const char* format, ...);
 int vprintf(const char* format, va_list args);
+// Formatted output into the caller's buffer. `size` counts the byte the
+// NUL goes in, both return the length the output would have had (so a
+// truncated result is visible as a return value larger than `size`),
+// and `buf` may be null when `size` is zero. `unsigned long` for `size`
+// is vlibc's length type, as everywhere else in the library.
+int snprintf(char* buf, unsigned long size, const char* format, ...);
+int vsnprintf(char* buf, unsigned long size, const char* format, va_list args);
 
 
 #ifdef __cplusplus

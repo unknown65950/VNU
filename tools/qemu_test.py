@@ -424,6 +424,13 @@ SUITE = [
     ("man-imagine-text", "cat /tmp/man-imagine.out",
      [r"^NAME$", r"imagine - put a picture on the screen", r"/dev/fb0",
       r"VNU_FB_VA", r"stride"], []),
+    ("bin-browser", "ls /bin",
+     [r"^browser$"], []),
+    ("man-browser", "man browser > /tmp/man-browser.out", [],
+     [r"press h for help"]),
+    ("man-browser-text", "cat /tmp/man-browser.out",
+     [r"^NAME$", r"browser - a small web browser for the desktop",
+      r"vgfx_poll", r"Esc", r"F5"], []),
 
     # -- the facts behind it --------------------------------------------
     ("proc-version", "cat /proc/version",
@@ -808,6 +815,122 @@ def run_imagine_screen(guest, result, verbose, timeout=60.0):
         else:
             result.passed += 1
             print("ok   %-18s" % "imagine-screen")
+    finally:
+        for name in os.listdir(shotdir):
+            os.unlink(os.path.join(shotdir, name))
+        os.rmdir(shotdir)
+
+
+def run_browser(guest, result, verbose, timeout=60.0):
+    """A windowed program receives keys.
+
+    The browser is the case this is here for. Its first version read its
+    input with read(0, 0, 0), and the kernel answers that with 0 - a
+    windowed task has no console byte stream - so it drew a frame and
+    then sat in it: no key ever arrived, the address bar could not be
+    typed into, and Esc could not close the window. Every other check in
+    this harness reads the serial log, which a windowed program never
+    writes to, so nothing caught it.
+
+    So this looks at the screen, and it is deliberately one question:
+    does typing change the window? Three steps, in the order they can
+    fail - a window opens, a keypress moves it, Esc closes it - because
+    a program that fails the second has failed all three.
+
+    A function rather than a SUITE case, for the reason `man' is one: the
+    app owns the screen until it is closed, so there is no prompt to
+    sh() a command through and no output to assert on.
+    """
+    print("==> browser input (screendump)")
+    shotdir = tempfile.mkdtemp(prefix="vnu-browser-")
+    problems = []
+    try:
+        def shot(name):
+            return settled_shot(guest, os.path.join(shotdir, name))
+
+        # The bare desktop, to have something to compare a window with.
+        # `gui <app>` opens an app on startup; the bare session is what
+        # run_gfx_surface() does for the same reason.
+        guest._type("gui\n")
+        time.sleep(3.0)
+        bare = shot("bare.ppm")
+        if not frame_is_desktop(bare):
+            problems.append("the desktop did not come up, so there is "
+                            "nothing to open a window on")
+        if not esc_to_shell(guest, timeout):
+            problems.append("the desktop did not give the console back")
+            bare = None
+
+        if bare is not None:
+            guest._type("gui browser\n")
+            time.sleep(5.0)
+            opened = shot("open.ppm")
+
+            # A window is a band of changed rows below the taskbar, the
+            # same measure run_gfx_surface() uses: the compositor's frame
+            # and title bar are ~20 rows, and what is under them is the
+            # app's own canvas.
+            if (opened[0], opened[1]) != (bare[0], bare[1]):
+                problems.append("the browser changed the display geometry "
+                                "from %dx%d to %dx%d"
+                                % (bare[0], bare[1], opened[0], opened[1]))
+            else:
+                rows = changed_rows(opened[2], bare[2], opened[0], opened[1])
+                top, bottom = longest_run(rows, min_changed=1)
+                if bottom - top < 40:
+                    problems.append("the window changed only %d rows, too "
+                                    "few for a browser: nothing was drawn"
+                                    % (bottom - top))
+
+                # The question. No pointer between these two shots: it
+                # sits wherever it was and stays there, so a difference
+                # inside the window can only be the program redrawing.
+                # The rows compared are the window's own top ones - where
+                # an address bar is - so a program that redraws for any
+                # other reason cannot pass this.
+                if bottom - top >= 40:
+                    guest._type("ab")
+                    time.sleep(1.5)
+                    typed = shot("typed.ppm")
+
+                    if (typed[0], typed[1]) != (opened[0], opened[1]):
+                        problems.append("the window changed size while "
+                                        "typing, %dx%d became %dx%d"
+                                        % (opened[0], opened[1],
+                                           typed[0], typed[1]))
+                    else:
+                        bar = (0, top, opened[0] - 1, min(top + 48, bottom))
+                        moved = diff_pixels(typed, opened, bar)
+                        if moved == 0:
+                            problems.append("typing two keys changed "
+                                            "nothing in the top rows of "
+                                            "the window: the browser is "
+                                            "not receiving input")
+                        elif moved < 8:
+                            problems.append("typing two keys moved only "
+                                            "%d pixels in the window's top "
+                                            "rows, which is not an address "
+                                            "bar redrawing" % moved)
+
+                    # And Esc has to close it. The retries are for the
+                    # reason esc_to_shell() has them: a vgfx reader can
+                    # swallow the first press.
+                    if not esc_to_shell(guest, timeout):
+                        problems.append("the window did not close on Esc, "
+                                        "or the desktop did not give the "
+                                        "console back")
+
+        if not esc_to_shell(guest, timeout):
+            problems.append("no shell prompt after the browser: the "
+                            "window could not be left")
+
+        for p in problems:
+            print("FAIL %-18s %s" % ("browser", p))
+        if problems:
+            result.failed.append(("browser", "", ["; ".join(problems)]))
+        else:
+            result.passed += 1
+            print("ok   %-18s" % "browser")
     finally:
         for name in os.listdir(shotdir):
             os.unlink(os.path.join(shotdir, name))
@@ -2806,10 +2929,52 @@ def settled_shot(guest, path, budget=2.0, quiet=200):
             return frame
 
 
-def diff_pixels(a, b):
-    """How many pixels differ between two frames of the same size."""
-    return sum(1 for k in range(0, min(len(a), len(b)), 3)
-               if a[k:k + 3] != b[k:k + 3])
+def diff_pixels(a, b, box=None):
+    """How many pixels differ between two frames.
+
+    Takes what `settled_shot()` returns - (width, height, bytes) - or two
+    raw byte strings, and reports -1 when the two are not the same size,
+    since a count of differences between different geometries says
+    nothing.
+
+    `box` is (x0, y0, x1, y1) and restricts the comparison to that
+    rectangle: a pointer that moved between two shots is a real
+    difference and would otherwise hide the absence of the one being
+    looked for."""
+    if isinstance(a, tuple):
+        aw, ah, a = a
+    else:
+        aw = ah = -1
+    if isinstance(b, tuple):
+        bw, bh, b = b
+    else:
+        bw = bh = -1
+    if aw >= 0 and (aw, ah) != (bw, bh):
+        return -1
+
+    if box is None:
+        n = sum(1 for k in range(0, min(len(a), len(b)), 3)
+                if a[k:k + 3] != b[k:k + 3])
+        return n
+
+    if aw < 0:
+        raise ValueError("diff_pixels needs a box and therefore the whole "
+                         "frame, not a bare byte string")
+    x0, y0, x1, y1 = box
+    x0 = max(0, x0)
+    y0 = max(0, y0)
+    x1 = min(aw - 1, x1)
+    y1 = min(ah - 1, y1)
+    if x1 < x0 or y1 < y0:
+        return 0
+    n = 0
+    for y in range(y0, y1 + 1):
+        base = y * aw * 3
+        for x in range(x0, x1 + 1):
+            k = base + x * 3
+            if a[k:k + 3] != b[k:k + 3]:
+                n += 1
+    return n
 
 
 def flat_share(frame):
@@ -3428,6 +3593,9 @@ def main():
                                         for sel in args.only):
                     run_imagine_screen(guest, result, args.verbose,
                                        args.timeout)
+                if not args.only or any(sel in "browser"
+                                        for sel in args.only):
+                    run_browser(guest, result, args.verbose, args.timeout)
                 if not args.only or any(sel in "gfx-surface"
                                         for sel in args.only):
                     run_gfx_surface(guest, result, args.verbose,

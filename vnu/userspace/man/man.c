@@ -1205,6 +1205,88 @@ SYSCALLS\n\
 FILES\n\
     /apps/clock/bin   the program itself\n"
 
+#define BROWSER_PAGE "NAME\n\
+    browser - a small web browser for the desktop\n\
+\n\
+SYNOPSIS\n\
+    browser\n\
+\n\
+DESCRIPTION\n\
+    A web browser for the VNU desktop. It fetches one address over the\n\
+    socket syscalls and shows what came back as plain text, with every\n\
+    link on the page selectable and followable. It is deliberately\n\
+    small: no HTML layout, no CSS, no cookies, no history and no TLS.\n\
+    What it shows is that a desktop program has a window, a keyboard\n\
+    and a network here, and can use all three at once.\n\
+\n\
+    A page is handled rather than parsed. A tag is skipped whole, from\n\
+    its < to its >, the four entities a text page uses (&amp; &lt;\n\
+    &gt; &nbsp;) become their one character and anything else in that\n\
+    position is dropped; what is left between them is laid out as text.\n\
+    A <br> is a line break and every other tag is invisible.\n\
+\n\
+    An <a href=\"...\"> is both a run of text on the page and a link that\n\
+    can be followed: its text is shown like any other text and its\n\
+    address is remembered. A link with no address, or one whose </a>\n\
+    never arrives, shows its text and is not selectable - nothing is\n\
+    offered that is not really there.\n\
+\n\
+    The focus is either in the address bar or on the page. Tab moves\n\
+    between them, Enter on a link follows it, and Esc returns to the\n\
+    bar rather than quitting, so a mistyped address is one key from\n\
+    being fixed. A second Esc, from the bar, closes the window. With no\n\
+    links on the page, Tab, Enter, Space and the arrows all go back to\n\
+    the bar, since there is then nothing to move through.\n\
+\n\
+    The bar shows what is being typed and the page below shows what was\n\
+    last fetched. The two are kept apart so an address that has been\n\
+    edited but not fetched is visibly still a proposal. F5 fetches the\n\
+    last address again.\n\
+\n\
+    A failed fetch does not blank the window. The reason is drawn over\n\
+    the page, which stays where it was, together with the address it is\n\
+    still showing: an address with no host in it, a name that does not\n\
+    resolve, a refused connection, a request that cannot be sent and an\n\
+    empty answer are all reported this way. With nothing loaded there\n\
+    is no page underneath, so the reason is all there is to show.\n\
+\n\
+    A relative link is resolved against the address of the page it was\n\
+    found on: one beginning with / takes the scheme and host and changes\n\
+    the path, and a bare name is taken relative to the directory the\n\
+    current path names. A port that is not the default is carried into\n\
+    the resolved address.\n\
+\n\
+    There is no TLS. An https address is fetched over a plain\n\
+    connection, so a server that requires TLS will refuse, and one that\n\
+    does not is noted on screen as having answered in the clear.\n\
+\n\
+    The window is pre-created by the desktop and input arrives through\n\
+    vgfx_poll() like every other desktop program, which is the only way\n\
+    a windowed program is delivered keys here: read(0, ...) is the\n\
+    console's byte stream, a windowed task has none of it, and the\n\
+    kernel answers that call with nothing.\n\
+\n\
+KEYS\n\
+    printable  edit the address\n\
+    Backspace  delete the character before the caret\n\
+    Delete     delete the character at the caret\n\
+    Left Right move the caret; Home End go to either end\n\
+    Tab        move between the address bar and the page\n\
+    Enter      fetch the address, or follow the selected link\n\
+    Up Down    choose a link; Home End the first or the last\n\
+    F5         fetch the last address again\n\
+    Esc        back to the address bar, and from there close the window\n\
+\n\
+NOTES\n\
+    Only the first 64 KiB of an answer is kept, and only the rows that\n\
+    fit the window are drawn. A page larger than either is shown as far\n\
+    as it goes rather than refused, and a line longer than a row wraps\n\
+    onto the next one instead of being cut off.\n\
+\n\
+FILES\n\
+    /apps/browser/bin   the program itself\n\
+"
+
 #define PLAY_PAGE "NAME\n\
     play - WAV sound player for the desktop\n\
 \n\
@@ -1625,6 +1707,8 @@ static const struct Page pages[] = {
      PREFS_PAGE},
     {"picview",  "graphical image viewer",
      PICVIEW_PAGE},
+    {"browser",  "small web browser for the desktop",
+     BROWSER_PAGE},
     {"wallpaper", "show or set the desktop background",
      WALLPAPER_PAGE},
     {"imagine",   "draw a picture straight onto the display (/dev/fb0)",

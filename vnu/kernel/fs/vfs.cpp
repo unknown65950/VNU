@@ -953,6 +953,8 @@ void init()
     add("/bin/man", false);
     /* Draws a picture on the display itself, through /dev/fb0. */
     add("/bin/imagine", false);
+    /* The desktop's web browser, with the image viewer. */
+    add("/bin/browser", false);
     add("/bin/vibecommander", false);
     add("/bin/df", false);
     add("/bin/ping", false);
