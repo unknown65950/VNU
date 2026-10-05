@@ -513,6 +513,7 @@ DESCRIPTION\n\
 SYNOPSIS\n\
     head [-n N] [-c N] [FILE]\n\
     head [-N] [FILE]\n\
+    head [OPTION]... -- [FILE]\n\
 \n\
 DESCRIPTION\n\
     Prints the first N lines (default 10), or with -c the first N\n\
@@ -520,6 +521,11 @@ DESCRIPTION\n\
     -c the whole file is read into a fixed buffer first, so only the\n\
     first 128 lines (or 100 columns each) of any input are ever\n\
     seen - a documented consequence of using a static buffer.\n\
+\n\
+    A lone -- ends the options, and is how a file whose name begins\n\
+    with a dash is reached - `head -- -n5' reads the file called -n5,\n\
+    which without the separator is not reachable at all, since -n5 is\n\
+    how you ask for five lines.\n\
 "
 
 #define TAIL_PAGE "NAME\n\

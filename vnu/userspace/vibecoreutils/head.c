@@ -13,6 +13,17 @@ int main(int argc, char** argv)
         const char* a = argv[file_arg];
         const char* num;
         char which;
+        /* `--' ends the options, which is the only way to reach a file
+         * whose name starts with a dash - and that is not a corner case
+         * here, because `head -n5' is how you ask for five lines and
+         * `-n5' is a perfectly good file name. Without this the loop
+         * reads `--' as a plain -N, hands atoi("-") its one dash, gets 0
+         * back and complains "invalid number: --" about the separator
+         * itself. */
+        if (a[1] == '-' && a[2] == 0) {
+            ++file_arg;
+            break;
+        }
         if (a[1] == 'n' || a[1] == 'c') {
             which = a[1];
             num = a + 2;
