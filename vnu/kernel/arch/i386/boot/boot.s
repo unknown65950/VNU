@@ -49,7 +49,16 @@ _start:
     mov eax, esi
     mov ebx, edx
 
+    ; The stack the compiler assumes: 16-byte aligned at the call, so a
+    ; function finds 12 mod 16 with its return address pushed, and any
+    ; local it promises itself a 16-byte alignment really has one. Left
+    ; to GRUB's esp that promise is eight bytes out, which is invisible
+    ; until something hands such a local to fxsave (see gui/wallpaper.cpp)
+    ; and takes a #GP for it. Two words of argument and a return address
+    ; are twelve bytes, so square away eight on top of them.
     mov esp, stack_top
+    and esp, -16
+    sub esp, 8
     push ebx
     push eax
     call kernel_main

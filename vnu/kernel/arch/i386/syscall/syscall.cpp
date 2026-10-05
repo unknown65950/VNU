@@ -292,7 +292,8 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
             uint32_t new_eip = 0, new_esp = 0;
             bool ok = vnu::wintask::exec_current(
                 reinterpret_cast<const char*>(tf->ebx),
-                reinterpret_cast<char* const*>(tf->ecx), new_eip, new_esp);
+                reinterpret_cast<char* const*>(tf->ecx),
+                reinterpret_cast<char* const*>(tf->edx), new_eip, new_esp);
             if (!ok)
                 return static_cast<std::uint32_t>(-VNU_ENOENT);
             vnu_pending_user_eip = new_eip;
@@ -352,7 +353,8 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
         trap.eip = tf->eip;
         trap.eflags = tf->eflags;
         int rc = vnu::proc::sys_execve(&trap, reinterpret_cast<const char*>(tf->ebx),
-                                       reinterpret_cast<char* const*>(tf->ecx));
+                                       reinterpret_cast<char* const*>(tf->ecx),
+                                       reinterpret_cast<char* const*>(tf->edx));
         if (rc == 0) {
             /* Must not iretd onto user stack — jump cleanly to new entry. */
             vnu_pending_user_eip = trap.eip;
@@ -610,20 +612,21 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
         }
 
     case VNU_SYS_gfx_palette:
-        /* The 16 DAC entries as the frame holds them (ebx = uint32_t*,
-         * ecx = bytes offered): 0xXXRRGGBB words, the same layout a
-         * 32bpp pixel is in, so a program can put a palette colour
-         * straight into one. It is a syscall because the palette is the
+        /* The 256 palette entries as the frame holds them (ebx =
+         * uint32_t*, ecx = bytes offered): 0xXXRRGGBB words, the same
+         * layout a 32bpp pixel is in, so a program can put a palette
+         * colour straight into one. It is a syscall because the palette is the
          * kernel's own - the table it composites and converts with - and
-         * a program that hardcoded those 48 bytes would be right until
-         * the palette changed under it. See ABI.md. */
+         * a program that hardcoded those bytes would be right until the
+         * palette changed under it. See ABI.md. */
         {
             if (tf->ebx == 0)
                 return static_cast<std::uint32_t>(-VNU_EFAULT);
             if (tf->ecx < VNU_GFX_PALETTE_BYTES)
                 return static_cast<std::uint32_t>(-VNU_EINVAL);
             auto* out = reinterpret_cast<std::uint32_t*>(tf->ebx);
-            return static_cast<std::uint32_t>(vnu::vgfx::palette(out, 16u));
+            return static_cast<std::uint32_t>(
+                vnu::vgfx::palette(out, VNU_GFX_PALETTE_SLOTS));
         }
 
     case VNU_SYS_ping:

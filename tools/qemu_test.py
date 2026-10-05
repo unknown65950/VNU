@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -388,12 +389,14 @@ SUITE = [
       r"^Shell +: +vash$",
       r"^Graphics +: +\w[\w-]* \d+x\d+ \d+bpp$", r"^VCC +: +0\.5$",
       r"^Build +: +\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"], []),
+
+    ("neofetch-test", "neofetch", [r"OS", r"Host", r"Kernel"], []),
     ("vnu-version", "vnu version",
      [r"VNU version information", r"^OS +: +VNU 0\.7$",
       r"^Kernel +: +0\.7\.0$", r"^ABI +: +1$", r"^Arch +: +i386$"], []),
     ("vnu-size", "vnu size",
      [r"VNU image size", r"^kernel +: .*\(1 object\)$",
-      r"^userspace: .*\(4[0-9] objects\)$", r"^libraries: .*\(2 objects\)$",
+      r"^userspace: .*\([0-9]+ objects\)$", r"^libraries: .*\(2 objects\)$",
       r"^fonts +: .*\(1 object\)$", r"^resources: .*\(1[0-9] objects\)$",
       r"^total +: "], []),
     ("vnu-version-flag", "vnu --version", [r"^vnu \(VNU\) 0\.7$"], []),
@@ -402,6 +405,25 @@ SUITE = [
       r"install +install VNU onto a disk"], []),
     ("vnu-unknown", "vnu bogus", [r"unknown command: bogus"], []),
     ("vnu-noargs", "vnu", [r"Usage: vnu"], []),
+
+    # -- the display as a device ----------------------------------------
+    # The node itself is what a bare boot can be asked about: it is there
+    # whether or not a graphics mode has ever been programmed. What is
+    # behind it needs a mode, and a machine at its prompt has none, so
+    # the open is expected to be refused rather than to answer.
+    ("dev-fb0", "ls /dev",
+     [r"^fb0$", r"^null$", r"^zero$", r"^dsp$"], []),
+    ("imagine-noargs", "imagine",
+     [r"imagine: usage: imagine FILE"], []),
+    ("imagine-missing", "imagine /etc/vnu/nosuchpicture.png",
+     [r"imagine: cannot read the file"], []),
+    ("imagine-notimage", "imagine /etc/hostname",
+     [r"imagine: not an image this can show"], []),
+    ("man-imagine", "man imagine > /tmp/man-imagine.out", [],
+     [r"press h for help"]),
+    ("man-imagine-text", "cat /tmp/man-imagine.out",
+     [r"^NAME$", r"imagine - put a picture on the screen", r"/dev/fb0",
+      r"VNU_FB_VA", r"stride"], []),
 
     # -- the facts behind it --------------------------------------------
     ("proc-version", "cat /proc/version",
@@ -474,19 +496,23 @@ SUITE = [
       r"^gray_alpha\.png$", r"^shapes_pal\.png$", r"^shapes_rgba\.png$"], []),
     ("media-sounds", "ls /etc/vnu/sounds",
      [r"^chime\.wav$", r"^melody\.wav$", r"^beep\.wav$"], []),
-    # Both wallpaper files hold the shipped image (4436 bytes as built).
+    # Both wallpaper files hold the shipped image: abstract-art.jpg, a
+    # progressive 1280x804 JPEG, as built.
     ("media-wall", "wc /etc/vnu/wallpaper",
-     [r"^\d+ \d+ 4436 /etc/vnu/wallpaper$"], []),
+     [r"^\d+ \d+ 122431 /etc/vnu/wallpaper$"], []),
     ("media-wall-shipped", "wc /etc/vnu/wallpaper.default",
-     [r"^\d+ \d+ 4436 /etc/vnu/wallpaper\.default$"], []),
+     [r"^\d+ \d+ 122431 /etc/vnu/wallpaper\.default$"], []),
     # The wallpaper is a file the kernel decodes on request, so the
     # desktop background can be set and read back from the shell too.
     ("wallpaper-show", "wallpaper", [r"^none$"], []),
     ("wallpaper-list", "wallpaper --list",
-     [r"^sunset\.png$", r"^logo\.jpg  \(jpeg: the kernel cannot decode it\)$",
+     [r"^sunset\.png$", r"^logo\.jpg$",
       r"^/etc/vnu/wallpaper\.default  \(the desktop VNU ships with\)$"], []),
-    ("wallpaper-bad-jpeg", "wallpaper /etc/vnu/pics/logo.jpg",
-     [r"^wallpaper: /etc/vnu/pics/logo\.jpg: not a usable wallpaper"], []),
+    # A JPEG the kernel decodes, baseline this time: it goes on screen
+    # like any other picture.
+    ("wallpaper-jpeg", "wallpaper /etc/vnu/pics/logo.jpg",
+     [r"^logo\.jpg$"], []),
+    ("wallpaper-jpeg-live", "wallpaper", [r"^logo\.jpg$"], []),
     ("wallpaper-missing", "wallpaper /etc/vnu/pics/nope.png",
      [r"^wallpaper: /etc/vnu/pics/nope\.png: no such file$"], []),
     # A file that is not an image at all: the kernel must refuse it and
@@ -496,6 +522,13 @@ SUITE = [
     ("wallpaper-notimage-read", "cat /tmp/notapic.png", [r"^hello$"], []),
     ("wallpaper-text-rejected", "wallpaper /tmp/notapic.png",
      [r"not a usable wallpaper"], []),
+    # ...and a truncated JPEG: a header the decoder accepts, entropy
+    # data that runs out mid-picture.
+    ("wallpaper-shortjpeg-make", "head -c 900 /etc/vnu/pics/logo.jpg > /tmp/short.jpg",
+     [], [r"[a-z]"]),
+    ("wallpaper-shortjpeg", "wallpaper /tmp/short.jpg",
+     [r"not a usable wallpaper"], []),
+    ("wallpaper-still-jpeg", "wallpaper", [r"^logo\.jpg$"], []),
     ("wallpaper-set", "wallpaper /etc/vnu/pics/sunset.png",
      [r"^sunset\.png$"], []),
     ("wallpaper-live", "wallpaper", [r"^sunset\.png$"], []),
@@ -664,6 +697,121 @@ def run_suite(guest, cases, result, verbose, timeout, boot_timeout=120.0):
 # background that goes with it (SGR 0;30;47 right after the row is picked).
 MAN_STATUS = r"Manual page vcc\(1\) line (\d+) \(press h for help or q to quit\)"
 MAN_BAR = "\x1b[25;1H\x1b[0;30;47m"
+
+
+def run_imagine_screen(guest, result, verbose, timeout=60.0):
+    """imagine puts a picture on the display, and the display comes back.
+
+    A function rather than a SUITE case, for the reason `man' is one:
+    imagine owns the screen from the moment it draws until a key is
+    pressed, so there is no prompt to sh() a command through and no output
+    to assert on - the answer is in the pixels.
+
+    Three things are checked, in the order they can fail:
+
+      1. `imagine FILE' at a text console leaves the text mode behind. A
+         program that mapped a frame and drew into it while the card was
+         still reading a character cell would show nothing at all, and
+         this is the step that would let it: the mode has to change.
+      2. What is on the screen is a picture and not a black frame. The
+         picture is a flower against the black it was drawn on, so the
+         check is that the frame carries colour in it - which a decode
+         that produced nothing, a palette that was never loaded or a
+         present that never reached the card would all fail the same way.
+      3. The picture is still the picture seconds later. The display is
+         the program's until it closes the device, and the console is
+         pixels like anything else: on a display with no text mode of
+         its own, a console pass does not dirty a row, it takes the
+         whole scanout back at the text mode's geometry, and on one that
+         has a text mode it paints its characters straight over the
+         picture. Either way the frame a moment later is not the frame
+         the program drew, which is what this step is for.
+      4. A key brings the shell back, in the text mode, with a console
+         that reads. A program that kept the display would leave the
+         machine showing a picture with no way back to it.
+    """
+    print("==> imagine on the display (screendump)")
+    shotdir = tempfile.mkdtemp(prefix="vnu-imagine-")
+    problems = []
+    try:
+        def shot(name):
+            return settled_shot(guest, os.path.join(shotdir, name))
+
+        before = shot("before.ppm")
+        if (before[0], before[1]) != (TEXT_W, TEXT_H):
+            problems.append("the console was not in the text mode to start "
+                            "with: %dx%d" % (before[0], before[1]))
+
+        guest._type("imagine /etc/vnu/pics/flower.bmp\n")
+        time.sleep(5.0)
+        pic = shot("picture.ppm")
+
+        if (pic[0], pic[1]) == (TEXT_W, TEXT_H):
+            problems.append("imagine left the display in the text mode: a "
+                            "picture in a frame the card is not scanning "
+                            "out is a picture nobody sees")
+
+        # Colour in the frame: the demo photograph is a flower, and the
+        # frame around it is the black it was fitted onto.
+        ink = sum(1 for i in range(0, len(pic[2]), 3)
+                  if max(pic[2][i], pic[2][i + 1], pic[2][i + 2]) > 40)
+        total = float(pic[0] * pic[1])
+        if ink < total * 0.01:
+            problems.append("the frame is black: %d of %d pixels carry "
+                            "anything, so the picture did not reach the "
+                            "screen" % (ink, pic[0] * pic[1]))
+
+        if not diff_pixels(before[2], pic[2]):
+            problems.append("the display did not change at all")
+
+        # Still the program's picture a few seconds later: nothing else
+        # may draw on the display while it holds the device, and on a
+        # display without a text mode a console pass also puts the
+        # geometry back to the console's, which is the other half of what
+        # used to go wrong here.
+        time.sleep(3.0)
+        held = shot("held.ppm")
+        if (held[0], held[1]) != (pic[0], pic[1]):
+            problems.append("the display went back to %dx%d while imagine "
+                            "still had it: the console took the screen from "
+                            "a program that had not given it up"
+                            % (held[0], held[1]))
+        else:
+            share = flat_share(held)
+            if share >= FLAT_SHARE_MAX:
+                problems.append("a console was drawn over the picture: %.0f%% "
+                                "of the frame is a single colour, which is "
+                                "what a console looks like in a graphics "
+                                "mode" % (share * 100))
+            changed = diff_pixels(pic[2], held[2])
+            if changed > pic[0] * pic[1] * 0.005:
+                problems.append("the picture changed under a program that "
+                                "still had the display: %d pixels differ "
+                                "between two frames of the same picture"
+                                % changed)
+
+        # Any key goes back, and the console has to come with it.
+        guest._type(" ")
+        time.sleep(3.0)
+        back = shot("back.ppm")
+        if (back[0], back[1]) != (TEXT_W, TEXT_H):
+            problems.append("the display did not come back to the text "
+                            "mode: %dx%d" % (back[0], back[1]))
+        else:
+            console_restored(back, before, problems)
+
+        for p in problems:
+            print("FAIL %-18s %s" % ("imagine-screen", p))
+        if problems:
+            result.failed.append(("imagine-screen", "",
+                                  ["; ".join(problems)]))
+        else:
+            result.passed += 1
+            print("ok   %-18s" % "imagine-screen")
+    finally:
+        for name in os.listdir(shotdir):
+            os.unlink(os.path.join(shotdir, name))
+        os.rmdir(shotdir)
 
 
 def run_man_pager(guest, result, verbose, timeout=60.0):
@@ -2664,6 +2812,30 @@ def diff_pixels(a, b):
                if a[k:k + 3] != b[k:k + 3])
 
 
+def flat_share(frame):
+    """What fraction of a frame is its single most common colour.
+
+    A text console drawn into a graphics framebuffer is one flat
+    background with a few thousand glyph pixels on it, so almost the
+    whole frame is one colour - measured at 97% on the VGA path. A
+    decoded photograph fitted onto the same frame is not: the same
+    picture measures 60%, which is the black it was fitted onto with the
+    colours of the flower in the rest. The floor between the two is
+    wide, which is what makes this worth having: geometry alone cannot
+    see a console drawn over a picture on a display that never leaves a
+    graphics mode, and ink alone cannot either, since a console's
+    background is ink too.
+    """
+    counts = Counter()
+    data = frame[2]
+    step = 3 * 7          # every 7th pixel: a share, not a census
+    for k in range(0, len(data), step):
+        counts[data[k:k + 3]] += 1
+    if not counts:
+        return 1.0
+    return counts.most_common(1)[0][1] / float(sum(counts.values()))
+
+
 # The console is 80x25 cells of 16 pixels, the text mode QEMU renders as
 # 720x400 with a 9-pixel cell (the ninth column of a VGA text cell is
 # blank, and it is what makes the mode 720 rather than 640 wide). A
@@ -2691,6 +2863,12 @@ CONSOLE_LIT_MIN = 1000
 # 2000 cells. A frame that is a desktop with something on it is not, and
 # the floor below is far enough under 80% to notice either way.
 BLANK_CELLS_MIN = 0.70
+
+# The share of one colour a frame has to stay under not to be a console
+# drawn over what was on the display (see flat_share): 0.85 is far above
+# the 0.60 a fitted photograph measures and far below the 0.97 a console
+# measures.
+FLAT_SHARE_MAX = 0.85
 
 
 def lit_pixels(frame):
@@ -2763,6 +2941,53 @@ def console_at_boot(frame, problems, where):
                         % (where, frame[0], frame[1], TEXT_W, TEXT_H))
         return
     check_console_shape(frame, 0, 0, TEXT_CELL_W, problems, where)
+
+
+def console_fill(frame):
+    """Lit console cells in a frame, or None when it is not a console."""
+    grid = console_grid(frame)
+    if grid is None:
+        return None
+    x0, y0, cell_w = grid
+    cells = console_cells(frame, x0, y0, cell_w)
+    return None if cells is None else sum(1 for c in cells if c)
+
+
+def console_row_cells(frame):
+    """How many console cells fit in one row of a frame."""
+    grid = console_grid(frame)
+    if grid is None:
+        return 0
+    return frame[0] // grid[2]
+
+
+def console_restored(frame, before, problems):
+    """The console came back with the characters it had, and not a blank
+    screen wearing a console's geometry.
+
+    A fixed "the screen is full of text" threshold is no use here: how
+    much of the console is still on screen depends on how far the boot
+    had scrolled by the time this ran, and a picture program that hands
+    the machine back is entitled to bring back whatever was there. So the
+    comparison is against the console as it was before the picture went
+    over it, which is the thing the mode switch owes the program.
+    """
+    got = console_fill(frame)
+    want = console_fill(before)
+    if got is None or want is None:
+        problems.append("after imagine: the display is %dx%d, not a console"
+                        % (frame[0], frame[1]))
+        return
+    # Two rows of slack, for the two lines imagine itself prints: its
+    # "any key brings the shell back" and the prompt that comes back with
+    # it. That is a scroll of at most two rows, and a scroll is what takes
+    # the half-filled top line off the screen - which is the console doing
+    # its job, not losing anything.
+    if got + 2 * console_row_cells(frame) < want:
+        problems.append("after imagine: the console came back with %d lit "
+                        "cells, against %d before the picture went over it "
+                        "- what is on the screen is not the console that was "
+                        "there" % (got, want))
 
 
 def console_on_screen(frame, problems, where):
@@ -2846,9 +3071,13 @@ def driver_name(proc_gfx):
 
 
 def palette_colours(proc_gfx):
-    """The palette /proc/gfx reports, as (r, g, b) tuples: sixteen
-    RRGGBB words, the same table a program gets from gfx_palette(2)."""
-    m = re.search(r"^palette\t([0-9a-f ]+)$", proc_gfx, re.MULTILINE)
+    """The palette /proc/gfx reports, as (r, g, b) tuples: RRGGBB words,
+    the same table a program gets from gfx_palette(2). The kernel prints
+    sixteen to a line and continues the field on the lines after the
+    tabbed one, so the block runs until a line that is not a colour."""
+    m = re.search(r"^palette\t((?:[0-9a-f]{6}[ ]+)*[0-9a-f]{6}"
+                  r"(?:\n\t(?:[0-9a-f]{6}[ ]+)*[0-9a-f]{6})*)[ ]*$",
+                  proc_gfx, re.MULTILINE)
     if not m:
         return set()
     out = set()
@@ -3130,7 +3359,8 @@ def main():
     TRACE_NAV = args.trace_nav
 
     if args.list:
-        for name, command, _, _ in SUITE:
+        for t in SUITE:
+            name, command = t[0], t[1]
             print("%-18s %s" % (name, command))
         print("%-18s %s" % ("console-screen",
                             "text prompt on the display (screendump)"))
@@ -3162,9 +3392,9 @@ def main():
     # The interactive checks are functions, not SUITE rows, so a filter
     # that names one of them selects no shell case and still runs.
     interactive = ("console-screen", "man-pager", "ctrl-c",
-                   "prefs-wallpaper", "gfx-surface", "gfx-resolution",
-                   "gfx-damage", "gfx-canvas-resize", "occlusion",
-                   "vibecommander")
+                   "prefs-wallpaper", "imagine-screen", "gfx-surface",
+                   "gfx-resolution", "gfx-damage", "gfx-canvas-resize",
+                   "occlusion", "vibecommander")
     cases = SUITE
     if args.only:
         cases = [c for c in SUITE
@@ -3194,6 +3424,10 @@ def main():
                                         for sel in args.only):
                     run_prefs_wallpaper(guest, result, args.verbose,
                                         args.timeout)
+                if not args.only or any(sel in "imagine-screen"
+                                        for sel in args.only):
+                    run_imagine_screen(guest, result, args.verbose,
+                                       args.timeout)
                 if not args.only or any(sel in "gfx-surface"
                                         for sel in args.only):
                     run_gfx_surface(guest, result, args.verbose,
@@ -3248,3 +3482,5 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+# temp

@@ -103,7 +103,8 @@ Process* current();
  * (the kernel's own pid 0). */
 int session_shell(char* out, int cap);
 int sys_fork(Registers* trap);
-int sys_execve(Registers* trap, const char* path, char* const* argv);
+int sys_execve(Registers* trap, const char* path, char* const* argv,
+               char* const* envp);
 void sys_exit(int status);
 int sys_getpid();
 int sys_waitpid(int pid, int* status, int options);

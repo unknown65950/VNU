@@ -16,6 +16,8 @@
 /* read_line is defined near the bottom (after load_hist); login/session
  * helpers above it need the prototype. */
 static int read_line(char* line, int max);
+int run_string(const char* text, int capture);
+extern int sh_status;
 
 /* The SIGINT handler, which does nothing on purpose: ^C is an event in
  * the line, and only the line editor knows what the line looks like
@@ -26,6 +28,8 @@ static void on_intr(int sig)
 {
     (void)sig;
 }
+int run_string(const char* text, int capture);
+extern int sh_status;
 
 #define HIST 16
 #define LMAX 128
@@ -808,8 +812,6 @@ static int read_line(char* line, int max)
 
 int main(int argc, char** argv)
 {
-    (void)argc;
-    (void)argv;
     /* ^C at the console is SIGINT, and the terminal hands it to
      * whichever process is reading it — which is this one, at the
      * prompt, and the command this shell has execve()d over itself
@@ -832,12 +834,51 @@ int main(int argc, char** argv)
     else if (do_login() < 0)
         return 0;
     /* 0x9000: warm-start flag (shared physical mem, no paging). */
-    volatile unsigned* warm = (volatile unsigned*)0x9000;
-    if (!*warm) {
-        w("VNU vash — PATH=");
-        w(path_var);
-        w("\ntype 'help'\n");
-        *warm = 1;
+    volatile unsigned* warm = 0;
+    /* skip warm-start in standalone test builds */
+    if (0) {
+        warm = (volatile unsigned*)0x9000;
+        if (warm && !*warm) {
+            w("VNU vash — PATH=");
+            w(path_var);
+            w("\ntype 'help'\n");
+            *warm = 1;
+        }
+    }
+    if (argc > 1) {
+        if (strcmp(argv[1], "-c") == 0 && argc > 2) {
+            run_string(argv[2], 0);
+            return sh_status;
+        }
+        /* script file */
+        int fd = open(argv[1], O_RDONLY);
+        if (fd >= 0) {
+            /* The script belongs in the heap, not on the stack: a script
+             * is not shy about being a few hundred kilobytes of shell,
+             * a process stack is 64 KiB, and a stack buffer here would
+             * run off the end of it on the first line of a long script.
+             * The heap takes what the file actually holds, so nothing is
+             * lost to a fixed limit either. */
+            struct stat st;
+            unsigned long cap = 65536;
+            if (fstat(fd, &st) == 0 && st.st_size > 0)
+                cap = (unsigned long)st.st_size + 1;
+            char* buf = (char*)malloc(cap);
+            if (!buf) {
+                w("vash: out of memory reading ");
+                w(argv[1]);
+                w("\n");
+                close(fd);
+                return 1;
+            }
+            long n = read(fd, buf, cap - 1);
+            close(fd);
+            if (n < 0) n = 0;
+            buf[n] = 0;
+            run_string(buf, 0);
+            free(buf);
+            return sh_status;
+        }
     }
     load_hist();
 

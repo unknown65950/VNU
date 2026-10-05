@@ -445,7 +445,9 @@ int main(int argc, char** argv)
             unsigned long kb_u = m->used / 1024;
             unsigned long kb_a = avail / 1024;
             num_field(kb_t, size_w);
+            w(" ");
             num_field(kb_u, used_w);
+            w(" ");
             num_field(kb_a, avail_w);
             l1 = l2 = l3 = 0;
         }
@@ -453,9 +455,11 @@ int main(int argc, char** argv)
             w(t1);
             for (int i2 = l1; i2 < size_w; ++i2)
                 w(" ");
+            w(" ");
             w(t2);
             for (int i2 = l2; i2 < used_w; ++i2)
                 w(" ");
+            w(" ");
             w(t3);
             for (int i2 = l3; i2 < avail_w; ++i2)
                 w(" ");

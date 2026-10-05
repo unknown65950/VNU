@@ -125,12 +125,48 @@ struct vnu_gfx_canvas {
     uint32_t granted; /* out: 1 = want_w/want_h met, 0 = clamped */
 };
 
+/* /dev/fb0: where a program draws on the display itself.
+ *
+ * There is no syscall for this. The device maps the display's frame into
+ * the caller's address space when it is opened, and a read answers with
+ * this struct: open("/dev/fb0"), read(fd, &fb, sizeof(fb)), draw into
+ * fb.va, write(fd, 0, 0) to put it on the screen. The address is fixed
+ * so a program compiled ahead of the run can name it.
+ *
+ * Above the 32 MiB identity map on purpose: that region is the kernel
+ * image, .bss and the frame pool, and a program's private mapping must
+ * not land on any of it. The window is VNU_FB_MAX_PAGES pages, which
+ * covers the top mode (1280x1024 at 32bpp is 5 MiB) with room to spare.
+ */
+#define VNU_FB_VA 0x02000000u
+#define VNU_FB_MAX_PAGES 2048u
+
+/* One read() on /dev/fb0. Plain uint32 fields, so it is the same struct
+ * on both sides of the boundary with no packing to get wrong.
+ *
+ * A pixel is one byte at 8 bpp (a palette index, the desktop's own DAC)
+ * and a B8G8R8X8 word at 32 bpp - blue, green, red, then a byte the
+ * compositor reads as coverage, 0xFF for opaque. va is VNU_FB_VA mapped;
+ * size is stride * height, the whole frame. */
+struct vnu_fb_info {
+    uint32_t va;     /* where the frame is in this process */
+    uint32_t width;
+    uint32_t height;
+    uint32_t bpp;    /* 8 or 32 */
+    uint32_t stride; /* bytes per row: width * bpp / 8 */
+    uint32_t size;   /* bytes in the whole frame */
+};
+
 /* How many slots VNU_SYS_gfx_palette answers, and how many bytes a
- * program has to offer for it: the 16 entries of the desktop's own
- * image palette as the same B8G8R8X8 words the frame itself holds
- * (0xXXRRGGBB, alpha in the top byte). */
-#define VNU_GFX_PALETTE_SLOTS 16
-#define VNU_GFX_PALETTE_BYTES 64 /* SLOTS * sizeof(uint32_t) */
+ * program has to offer for it: the 256 entries of the display palette
+ * as the same B8G8R8X8 words the frame itself holds (0xXXRRGGBB,
+ * alpha in the top byte). The first 16 are the system's own colours -
+ * the ones the desktop and the console draw in, and the ones a
+ * program's VGFX_* constants mean - and the 240 after them belong to
+ * whatever picture is on screen (the wallpaper's), so a program can
+ * index the exact colour a pixel of it holds. */
+#define VNU_GFX_PALETTE_SLOTS 256
+#define VNU_GFX_PALETTE_BYTES 1024 /* SLOTS * sizeof(uint32_t) */
 
 /* --- signals -----------------------------------------------------------
  * A signal is a number, a handler is an address, and a set of signals

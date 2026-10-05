@@ -111,13 +111,17 @@ with `-1` leaves a field unchanged; only root may chown.
   is looked up and **not** signalled (0 if it exists, `-VNU_ESRCH` if
   not). Any other `sig` terminates the process and wakes a `waitpid`
   blocked on it. Signals other than termination are not delivered yet.
-- `execve(ebx, ecx)` — replaces the current process image with the ELF
-  found at path `ebx` (argv `ecx`). Resolution order: the embedded
+- `execve(ebx, ecx, edx)` — replaces the current process image with the ELF
+  found at path `ebx` (argv `ecx`, environment `edx`; at most 16
+  `NAME=value` strings). Resolution order: the embedded
   `/bin` table first, then a real VFS file — a guest-compiled binary in
   `/tmp`, say — which is read into a kernel staging buffer and executed
-  like any other ELF. The process's app-image region grows on demand to
-  fit the new image (cap 1 MiB). Errors: `-VNU_ENOENT`, `-VNU_ENOEXEC`,
-  `-VNU_ENOMEM`.
+  like any other ELF. A file whose first two bytes are `#!` is a script:
+  the interpreter named on that line is run on it instead, with
+  `argv = interpreter [, interpreter-arg] script original-args...` and
+  the same environment, at most four `#!` levels deep. The process's
+  app-image region grows on demand to fit the new image (cap 1 MiB).
+  Errors: `-VNU_ENOENT`, `-VNU_ENOEXEC`, `-VNU_ENOMEM`.
 - `blkcount(ebx)` — returns the number of ATA disks the installer sees.
 - `install(ebx, ecx, edx)` — `ebx` is the target ATA disk index; `ecx` is
   the partition size in MiB (0 = as much as the disk/FAT16 allows); `edx` is
@@ -444,6 +448,76 @@ manager) when the left button is pressed over one if its files: it hands
 the kernel the full VFS path of that item so the GUI can arm a drag. The
 kernel tracks the press only while the button is held and the item
 belongs to that press, so misshots never stick.
+
+### /dev/fb0 — the display's own frame
+
+No syscall: the device is reached through `open`, `read` and `write` on
+`/dev/fb0`, which are the ordinary three. What is new to this document is
+the struct a read answers and the address it names.
+
+`open("/dev/fb0")` puts the display into a graphics mode if it is not in
+one already — the machine at its prompt is in text mode, where there is no
+frame to map — programs the mode the last graphics session left behind (the
+one `gfxconf` holds, the same the desktop uses) and maps the resulting frame
+into the calling process's address space at `VNU_FB_VA` (`0x02000000`).
+It returns a descriptor, or fails with `-VNU_ENODEV` when the card cannot
+be put into a mode with a frame at all. `read(fd, info, sizeof(*info))`
+fills a `struct vnu_fb_info`:
+
+| field | meaning |
+|-------|---------|
+| `va` | where the frame is mapped in this process (`VNU_FB_VA`) |
+| `width`, `height` | the display in pixels |
+| `bpp` | 8 (palette index) or 32 (B8G8R8X8) |
+| `stride` | bytes per row: `width * bpp / 8` |
+| `size` | bytes in the whole frame: `stride * height` |
+
+A read shorter than the struct fails with `-VNU_EINVAL`; a read that
+cannot map fails with `-VNU_ENODEV`. The mapping is made against the
+calling process's own page directory, taken from the process table rather
+than from `paging::current_pgdir()`: a coroutine context switch loads CR3
+from assembly without going through `paging::switch_to()`, so that global
+still names the scheduler's directory while a process runs. Mapping is
+re-done on every read and write, because `fork()` and `execve()` build a
+fresh address space and a mapping does not follow it there — so a program
+that asks again is never told an address it cannot touch.
+
+`close()` of the last descriptor on the device gives the display back to
+text mode (`vgfx::exit_to_text()`), which is what makes the console
+readable again: its characters have been sitting in their own cells,
+unscanned, for as long as the card was reading a frame. Until that close,
+though, the display belongs to the process holding the descriptor: the
+console's scheduler pass draws nothing while a descriptor is open
+(`vga_gfx::program_presenting_set()`), because a console is pixels like
+anything else — on a display with a text mode of its own that pass would
+paint its characters straight over the program's frame, and on one with
+none (virtio-gpu) it would hand the whole scanout back at the console's
+720×400 geometry while the program still held a 1024×768 frame. The mode
+goes back
+only if this device was what took it and no desktop has claimed the display
+in the meantime; a frame the desktop was already showing stays with the
+desktop. Closing is also what a program that draws and exits has to do to
+leave a prompt behind.
+
+`write(fd, 0, 0)` puts the frame on the screen: the whole frame counts as
+damage and the display is handed it. That is the handshake for a program
+that drew into `va` itself. `write(fd, buf, n)` with data copies `n`
+bytes into the frame at the descriptor's position (moved by `lseek`),
+clipped to the frame, damaging only the rows it reached; a position past
+the end of the frame fails with `-VNU_EINVAL` rather than writing
+elsewhere.
+
+The frame belongs to the display, not to the caller: the mapping is
+borrowed (`paging::map_borrowed_frames`), so exiting, forking or
+execveing takes the mapping with it and never returns the framebuffer to
+the page pool. A mode change replaces the frame, which is why the address
+is fixed and the geometry is read rather than assumed.
+
+`VNU_FB_VA` is above the 32 MiB identity map on purpose: that region is
+the kernel image, `.bss` and the frame pool, all of which the kernel
+reaches by identity, so a private mapping over any of it would be a page
+of somebody else's memory. `VNU_FB_MAX_PAGES` (2048, i.e. 8 MiB) is the
+window, which covers the top mode (1280x1024 at 32bpp is 5 MiB).
 
 ### Errors added with networking
 

@@ -35,12 +35,15 @@ echo "==> thams"
 python3 "$ROOT/tools/thams.py" generate
 
 echo "==> userspace"
-"$VCC" "$ROOT/vnu/userspace/vash/vash.c" -o "$ROOT/sysroot/bin/vash"
+# Build vash (multi-file)
+VASH_SRC="$ROOT/vnu/userspace/vash/strbuf.c $ROOT/vnu/userspace/vash/cmd.c $ROOT/vnu/userspace/vash/lex.c $ROOT/vnu/userspace/vash/vars.c $ROOT/vnu/userspace/vash/fnmatch.c $ROOT/vnu/userspace/vash/expand.c $ROOT/vnu/userspace/vash/regex.c $ROOT/vnu/userspace/vash/parse.c $ROOT/vnu/userspace/vash/exec.c $ROOT/vnu/userspace/vash/arith.c $ROOT/vnu/userspace/vash/builtins.c $ROOT/vnu/userspace/vash/vash.c"
+"$VCC" $VASH_SRC -o "$ROOT/sysroot/bin/vash" 2>&1 | tail -30
 "$VCC" "$ROOT/vnu/userspace/editors/vedit.c" -o "$ROOT/sysroot/bin/vedit"
 "$VCC" "$ROOT/vnu/userspace/gui/calc.c" -o "$ROOT/sysroot/bin/calc"
 "$VCC" "$ROOT/vnu/userspace/gui/files.c" -o "$ROOT/sysroot/bin/files"
 "$VCC" "$ROOT/vnu/userspace/gui/prefs.c" -o "$ROOT/sysroot/bin/prefs"
 "$VCC" "$ROOT/vnu/userspace/gui/picview.c" -o "$ROOT/sysroot/bin/picview"
+"$VCC" "$ROOT/vnu/userspace/gui/browser.c" -o "$ROOT/sysroot/bin/browser"
 "$VCC" "$ROOT/vnu/userspace/gui/clock.c" -o "$ROOT/sysroot/bin/clock"
 "$VCC" "$ROOT/vnu/userspace/gui/sticky.c" -o "$ROOT/sysroot/bin/sticky"
 "$VCC" "$ROOT/vnu/userspace/examples/hello/hello.c" -o "$ROOT/sysroot/bin/hello"
@@ -75,6 +78,7 @@ embed "$ROOT/sysroot/bin/calc" calc
 embed "$ROOT/sysroot/bin/files" files
 embed "$ROOT/sysroot/bin/prefs" prefs
 embed "$ROOT/sysroot/bin/picview" picview
+embed "$ROOT/sysroot/bin/browser" browser
 embed "$ROOT/sysroot/bin/clock" clock
 embed "$ROOT/sysroot/bin/play" play
 embed "$ROOT/sysroot/bin/sticky" sticky
@@ -87,9 +91,16 @@ embed "$ROOT/vnu/userspace/gui/pics/logo.jpg" pic_logo
 embed "$ROOT/vnu/userspace/gui/pics/gray_alpha.png" pic_gray_alpha
 embed "$ROOT/vnu/userspace/gui/pics/shapes_pal.png" pic_shapes_pal
 embed "$ROOT/vnu/userspace/gui/pics/shapes_rgba.png" pic_shapes_rgba
-# The shipped desktop image, embedded as wallpaper_png so the plain
+# The shipped desktop image, embedded as wallpaper_jpg so the plain
 # name stays free for the `wallpaper` command's own binary above.
-embed "$ROOT/vnu/userspace/gui/pics/wallpaper.png" wallpaper_png
+#
+# It is a JPEG because the palette a picture gets is the display's, and
+# the display has 240 slots for a picture: a photograph is what a desktop
+# should be showing, and a 122 KB JPEG of one beats a 4 KB PNG designed
+# in the sixteen colours the system's own half of the palette holds.
+# The kernel decodes it with px.h's float IDCT, borrowing the FPU for the
+# duration of the decode (gui/wallpaper.cpp).
+embed "$ROOT/vnu/userspace/gui/pics/abstract-art.jpg" wallpaper_jpg
 embed "$ROOT/sysroot/bin/hello" hello
 embed "$ROOT/sysroot/bin/vprobe" vprobe
 embed "$ROOT/sysroot/bin/tlsdemo" tlsdemo
@@ -106,7 +117,10 @@ embed "$ROOT/sysroot/lib/crt0.o" lib_crt0
 embed "$ROOT/sysroot/lib/libvlibc.a" lib_vlibc
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wc head tail grep sort cp mv basename dirname seq df ping \
-         wallpaper; do
+         wallpaper imagine; do
+  if [ "$c" = "imagine" ]; then
+    "$VCC" "$ROOT/vnu/userspace/cli/imagine.c" -o "$ROOT/sysroot/bin/imagine"
+  fi
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
 for c in id whoami groups useradd passwd su; do

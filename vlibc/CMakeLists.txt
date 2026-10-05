@@ -54,6 +54,8 @@ set(VLIBC_SOURCES
     src/stdlib/malloc.c
     src/stdlib/atoi.c
     src/stdlib/atol.c
+    src/gui/vgfx.c
+    src/gui/tx.c
 )
 
 # Static library WITHOUT crt0 — crt0 is linked explicitly by vld/vcc.

@@ -13,6 +13,13 @@
 // drawn in graphics mode looks like the console font.
 
 namespace vnu::vgfx {
+// How the palette is split by role: the first slots are the system's own
+// colours, the rest belong to whatever picture is on screen (see
+// picture_palette_set). Mirrors SYSTEM_SLOTS/PALETTE_SLOTS/PICTURE_SLOTS in
+// drivers/vga_gfx.cpp, which is where the DAC is programmed.
+constexpr int SYSTEM_SLOTS = 16;
+constexpr int PALETTE_SLOTS = 256;
+constexpr int PICTURE_SLOTS = PALETTE_SLOTS - SYSTEM_SLOTS;
 
 // The modes the desktop can be put into, smallest first. MAX_MODE is
 // the top of the ladder and nothing else: the framebuffer is allocated
@@ -55,9 +62,57 @@ constexpr Mode MAX_MODE = {1280, 1024};
 // cycles through, and what /proc/gfx lists.
 const Mode* modes();
 
-// width() x height() is the mode actually programmed right now.
+// width() x height() is the mode actually programmed right now - which
+// is the console's own 9x16 grid while the card is still in text mode,
+// since that is what is on the screen then. in_gfx_mode() tells the two
+// apart, and a caller about to hand out a frame needs to know which it is
+// looking at: the console's grid is a geometry no frame has.
 int width();
 int height();
+bool in_gfx_mode();
+
+// The frame as one contiguous physical run, for a program that draws on
+// the display itself rather than in a window (see vnu/fb.h and
+// /dev/fb0). Zero pages when no frame is held - before any mode has been
+// programmed, and after exit_to_text() gives the run back - which is the
+// answer a caller has to treat as "there is nothing to draw on yet".
+//
+// One run covers both drivers, and that is not a simplification: the
+// desktop composites into g_backbuf either way, and on a virtio-gpu
+// present() copies from it into the scanout resource. The scanout's own
+// segment list is a host-side staging area, not somewhere a program
+// should be pointed.
+//
+// `phys` is the run's physical address - also a valid kernel pointer,
+// since the pool is identity-mapped - and 0 when there is no frame. It is
+// what a program gets mapped, so it is the one number here that says
+// nothing about the display's contents.
+uint32_t backbuffer_phys();
+uint32_t backbuffer_pages();
+
+// Whether a desktop session is presenting every frame of its own. The
+// console's scheduler pass draws nothing while this is true, and is the
+// only thing that draws the console when it is false and the card is in
+// a graphics mode - which is what a program that entered one through
+// /dev/fb0 leaves behind. Set by gui::run() around its event loop.
+void desktop_presenting_set(bool on);
+
+// Whether it is set right now: what a program giving the display back
+// asks, so it never takes a mode away from a desktop that has since
+// started one.
+bool desktop_presenting();
+
+// Whether a program is painting the frame itself, with the display held
+// for it: the /dev/fb0 counterpart of desktop_presenting_set(), and set
+// for as long as the descriptor that took the frame is open. The console's
+// scheduler pass draws nothing while this is true either, and that is the
+// whole point of it - the console is pixels like anything else, so a pass
+// that redraws it over a picture the program is still working on destroys
+// that picture, one keystroke's worth of rows at a time.
+void program_presenting_set(bool on);
+
+// Whether it is set right now.
+bool program_presenting();
 
 // Bits per pixel of the pixel data a program draws in: 8 on the VBE
 // path, 32 where a virtio-gpu holds the display. The depth follows the
@@ -69,14 +124,31 @@ int height();
 // which on a machine without a virtio-gpu is 8 for good.
 uint32_t bpp();
 
-// The 16 DAC entries as the frame holds them: 0xXXRRGGBB words, the
-// same B8G8R8X8 layout a 32bpp pixel is in, so a colour the desktop
-// draws in can be put straight into a pixel. Writes up to `count` of
-// them and returns how many, 0 for a null buffer or a count under 16.
-// Both paths are answered from the same table, which is what lets a
-// program's colour constants (VGFX_LGRAY and the rest) mean the same
-// thing without either side hardcoding a palette.
+// The palette as the frame holds it: 0xXXRRGGBB words, the same
+// B8G8R8X8 layout a 32bpp pixel is in, so a colour the desktop draws in
+// can be put straight into a pixel. Writes up to `count` of them and
+// returns how many (PALETTE_SLOTS), 0 for a null buffer or a count
+// under it. Both paths are answered from the same table, which is what
+// lets a program's colour constants (VGFX_LGRAY and the rest) mean the
+// same thing without either side hardcoding a palette - and what lets a
+// program index a colour the wallpaper chose with the same call.
+//
+// The first SYSTEM_SLOTS are the system's own (COLOR_* indexes them and
+// the console presents in them); the PICTURE_SLOTS after them are
+// whatever picture is on screen.
 uint32_t palette(uint32_t* out, uint32_t count);
+
+// Install a picture's colours in the palette's picture half, starting at
+// slot SYSTEM_SLOTS, in the same 6-bit-per-channel form the DAC takes.
+// Up to PICTURE_SLOTS of them; slots past the last one written repeat it,
+// so an index a picture did not ask for is still a colour rather than
+// whatever was there. Reprograms the DAC when the display is in a
+// graphics mode, so on an 8bpp display the change is on the monitor
+// before the frame holding the new indices is presented.
+//
+// One call per image, not per pixel: a photo's 240 colours are chosen
+// once from its pixels and then every frame of it is a table lookup.
+void picture_palette_set(const uint8_t (*rgb)[3], uint32_t count);
 
 // Which driver owns the display: DRIVER_VGA or DRIVER_VIRTIO_GPU.
 uint32_t driver();
@@ -255,7 +327,7 @@ void present();
  * virtio-gpu expansion reads the palette here - it has no card DAC to ask,
  * so it goes through a kernel-side table - while the VBE path presents
  * the framebuffer as it stands, with whatever the DAC was loaded with. */
-void present_with(const uint8_t (&pal)[16][3]);
+void present_with(const uint8_t (&pal)[PALETTE_SLOTS][3]);
 
 /* Draw the text console into the framebuffer and present it.
  *

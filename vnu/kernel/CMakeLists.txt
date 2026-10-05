@@ -74,6 +74,19 @@ set_source_files_properties(
     PROPERTIES LANGUAGE ASM_NASM
 )
 
+# One file in the kernel is allowed to use the FPU: gui/wallpaper.cpp
+# carries px.h's JPEG decoder, whose IDCT is the only IEEE-float code in
+# the tree, and -mno-80387 would turn every operation in it into a call to
+# a soft-float helper (__addsf3 and friends) that a freestanding kernel
+# has nowhere to satisfy. Turning the FPU on for this one translation
+# unit is the smaller change: the file borrows the processor state
+# between fxsave() and fxrstor() (see FpuBorrow there), so nothing the
+# kernel does outside it, and nothing a program left in the registers,
+# is disturbed. -mgeneral-regs-only stays on - the two are not exclusive,
+# and SSE is still off, so this is x87 and nothing else.
+set_source_files_properties(gui/wallpaper.cpp PROPERTIES
+    COMPILE_OPTIONS "-m80387")
+
 # GRUB stage blobs for the disk installer. core.img contains only GRUB
 # modules, so generating it before the kernel links introduces no
 # circular dependency; the .inc with the incbin's is pulled in by
@@ -119,6 +132,7 @@ add_executable(kernel.elf
     drivers/e1000.cpp
     drivers/ac97.cpp
     drivers/virtio_gpu.cpp
+    drivers/fb.cpp
     drivers/tcp.cpp
     gui/gui.cpp
     gui/apps.cpp

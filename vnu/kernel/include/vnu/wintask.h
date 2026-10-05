@@ -292,6 +292,7 @@ void task_write(const char* buf, uint32_t n);
 char task_getch_blocking();
 [[noreturn]] void task_exit();
 bool exit_respawns_root(uint32_t& out_eip, uint32_t& out_esp);
-bool exec_current(const char* path, char* const* argv, uint32_t& out_eip, uint32_t& out_esp);
+bool exec_current(const char* path, char* const* argv, char* const* envp,
+                   uint32_t& out_eip, uint32_t& out_esp);
 
 } // namespace vnu::wintask

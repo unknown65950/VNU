@@ -6,12 +6,11 @@
  * decided: the kernel decodes first and only swaps the picture in when
  * it is good, so a file it refuses leaves the desktop untouched.
  *
- * The kernel is the only authority on what a wallpaper may be — BMP or
- * PNG px.h understands, at most 512x384 and 64 KiB, and never JPEG,
- * whose IDCT is the one piece of float code this -mno-80387 kernel
- * cannot link. So this file deliberately does not carry px.h just to
- * sniff headers: --list marks the JPEGs and leaves the verdict to the
- * call.
+ * The kernel is the only authority on what a wallpaper may be — any
+ * BMP, PNG or JPEG px.h understands, at most 1280x1024 pixels. So this
+ * file deliberately does not carry px.h just to sniff headers: the
+ * verdict is the call's, and a file the kernel refuses leaves the
+ * desktop exactly as it was.
  */
 #include "cu.h"
 #include <vnu/abi.h>
@@ -46,22 +45,39 @@ static void join(char* dst, int cap, const char* dir, const char* name)
  * picture has been decoded (the procedural sky is not a file). */
 static void show_current(void)
 {
-    /* The whole file, not one read: /proc/gfx reports more of the
-     * display as there is more to report - the mode, the depth, the
-     * palette, the mode ladder, the wallpaper - and a line this
-     * command needs can end up past a single short read's reach. */
-    char buf[512];
+    /* All of /proc/gfx, and not a fixed buffer: it reports the mode,
+     * the depth, the whole palette and then the wallpaper, which is
+     * kilobytes of text, and the line this command needs is the last
+     * one in it. A buffer that stops short of that reports "none" for
+     * a desktop that is drawing a picture perfectly well. */
+    unsigned long cap = 4096;
+    char* buf = (char*)malloc(cap);
+    if (!buf) {
+        we("wallpaper: out of memory reading " PROC_GFX "\n");
+        return;
+    }
     int fd = open(PROC_GFX, 0);
     if (fd < 0) {
         we("wallpaper: cannot read " PROC_GFX "\n");
+        free(buf);
         return;
     }
-    int n = 0;
-    while (n < (int)sizeof(buf) - 1) {
-        int r = (int)read(fd, buf + n, sizeof(buf) - 1 - n);
+    unsigned long n = 0;
+    for (;;) {
+        if (n + 1 >= cap) {
+            char* bigger = (char*)malloc(cap * 2);
+            if (!bigger)
+                break;
+            for (unsigned long i = 0; i < n; ++i)
+                bigger[i] = buf[i];
+            free(buf);
+            buf = bigger;
+            cap *= 2;
+        }
+        int r = (int)read(fd, buf + n, cap - 1 - n);
         if (r <= 0)
             break;
-        n += r;
+        n += (unsigned long)r;
     }
     close(fd);
     buf[n] = 0;
@@ -82,6 +98,7 @@ static void show_current(void)
             name[j] = 0;
             w(name);
             w("\n");
+            free(buf);
             return;
         }
         while (*p && *p != '\n')
@@ -90,18 +107,7 @@ static void show_current(void)
             ++p;
     }
     w("none\n");
-}
-
-/* Does this file start with a JPEG SOI marker? */
-static int is_jpeg(const char* path)
-{
-    int fd = open(path, 0);
-    if (fd < 0)
-        return 0;
-    unsigned char head[2] = { 0, 0 };
-    int n = (int)read(fd, head, sizeof(head));
-    close(fd);
-    return n == 2 && head[0] == 0xFF && head[1] == 0xD8;
+    free(buf);
 }
 
 static void list_candidates(void)
@@ -116,10 +122,6 @@ static void list_candidates(void)
         if (e->d_type != 8) /* regular file */
             continue;
         w(e->d_name);
-        char path[PATH_CAP];
-        join(path, sizeof(path), PICS_DIR, e->d_name);
-        if (is_jpeg(path))
-            w("  (jpeg: the kernel cannot decode it)");
         w("\n");
     }
     closedir(d);
@@ -137,7 +139,7 @@ static void wallpaper_help(void)
     w("With no argument, print the background in use. With a FILE, decode it\n");
     w("and put it on the desktop: the image replaces " SHIPPED "'s\n");
     w("neighbour, /etc/vnu/wallpaper, and the next redraw draws it.\n\n");
-    w("BMP and PNG of at most 512x384 pixels and 64 KiB are accepted. The\n");
+    w("BMP, PNG and JPEG pictures of at most 1280x1024 pixels are accepted.\n");
     w("demo pack in " PICS_DIR " holds the candidates; the shipped\n");
     w("desktop is " SHIPPED ", which stays untouched so it can\n");
     w("always come back. The choice lives in the RAM filesystem and is\n");
@@ -181,8 +183,8 @@ int main(int argc, char** argv)
         we("wallpaper: ");
         we(file);
         if (rc == -VNU_EINVAL)
-            we(": not a usable wallpaper (bmp or png, at most 512x384 "
-               "pixels and 64 KiB)\n");
+            we(": not a usable wallpaper (bmp, png or jpeg, at most "
+               "1280x1024 pixels)\n");
         else if (rc == -VNU_ENOENT)
             we(": no such file\n");
         else

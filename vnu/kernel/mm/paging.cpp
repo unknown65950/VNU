@@ -51,7 +51,17 @@ constexpr int MAX_ADDRESS_SPACES = 16;
  * (up to 1 MiB -> 256 frames), the heap is 1 MiB (256) and the stack 16:
  * bigger guest binaries (a guest C compiler!) need the headroom. */
 constexpr int MAX_FRAMES_PER_SPACE = 1024;
-constexpr int MAX_PRIVATE_PDES_PER_SPACE = 4;
+/* Every address space needs one private table for the app region, since
+ * the image at 0x400000, the canvas at 0x500000, the stack slots at
+ * 0x600000 and the heap at 0x700000 all fall inside the one 4 MiB window
+ * from 0x400000 to 0x7FFFFF. The framebuffer a program borrows through
+ * /dev/fb0 is mapped above the 32 MiB identity map instead, and a 5 MiB
+ * frame at the top mode (1280x1024 at 32bpp) spans two windows of its
+ * own there, each of which has to be a private copy of a shared identity
+ * entry. Three is what the largest mode costs; the rest is headroom for
+ * a mapping nobody has needed yet, and the cost of being wrong is 4 KiB
+ * of kernel memory per space. */
+constexpr int MAX_PRIVATE_PDES_PER_SPACE = 6;
 
 struct AddrSpaceMeta {
     bool used = false;
@@ -116,7 +126,24 @@ void init()
     uint32_t cr0;
     asm volatile("mov %%cr0, %0" : "=r"(cr0));
     cr0 |= 0x80000000u; /* PG on */
+    /* EM and TS clear: a processor with the coprocessor disabled raises
+     * #NM on the first x87 instruction, and TS set - which the kernel
+     * never sets, but no rule says the firmware did not - makes every
+     * one of them fault. gui/wallpaper.cpp borrows the FPU to decode a
+     * JPEG, so this is where that borrow is made legal. */
+    cr0 &= ~0x0000000Cu;
     asm volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
+
+    /* CR4.OSFXSR: fxsave()/fxrstor() - how that borrow is saved and
+     * given back - check this bit, and without it the instruction is a
+     * #UD. OSXMMEXCPT alongside it because an SSE exception has to be
+     * reported the way the processor's own users do, and because the
+     * kernel compiles nothing with SSE: this is permission for the FPU
+     * to be saved, not a licence to use it. */
+    uint32_t cr4;
+    asm volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= 0x00000600u; /* OSFXSR | OSXMMEXCPT */
+    asm volatile("mov %0, %%cr4" : : "r"(cr4) : "memory");
 }
 
 uint32_t kernel_pgdir_phys()
@@ -352,6 +379,25 @@ bool map_frames(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages, u
         if (!owns_frame(meta, frame))
             meta->data_frames[meta->data_frame_count++] = frame;
         pt[pte_idx] = frame | PTE_PRESENT | PTE_RW;
+    }
+    return true;
+}
+
+bool map_borrowed_frames(uint32_t pgdir_phys, uint32_t vaddr_start,
+                         uint32_t num_pages, uint32_t phys_start)
+{
+    AddrSpaceMeta* meta = find_meta(pgdir_phys);
+    if (!meta)
+        return false;
+
+    uint32_t* pgdir = reinterpret_cast<uint32_t*>(pgdir_phys);
+    for (uint32_t p = 0; p < num_pages; ++p) {
+        const uint32_t vaddr = vaddr_start + p * PAGE_SIZE;
+        uint32_t* pt = private_page_table(meta, pgdir, vaddr >> 22);
+        if (!pt)
+            return false;
+        pt[(vaddr >> 12) & 0x3FF] =
+            (phys_start + p * PAGE_SIZE) | PTE_PRESENT | PTE_RW;
     }
     return true;
 }

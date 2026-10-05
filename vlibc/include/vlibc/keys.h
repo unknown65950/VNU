@@ -20,3 +20,5 @@
 #define VNU_KEY_F10   0x91
 #define VNU_KEY_F11   0x92
 #define VNU_KEY_F12   0x93
+#define VNU_KEY_PGUP  0x94
+#define VNU_KEY_PGDN  0x95

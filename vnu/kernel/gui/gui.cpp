@@ -1092,7 +1092,14 @@ void run(const char* open_app)
      * mode: vgfx::set_resolution() only records it here, and
      * enter_gfx_mode() below programs the card for it. */
     (void)vnu::gfxconf::load();
+    /* From here the desktop is what puts pixels on this display, and the
+     * console's own pass has to stay out of the way (see
+     * desktop_presenting_set). Set only once the mode is ours: a desktop
+     * that could not start hands the console straight back, and the
+     * console has to be the thing drawing. */
+    vnu::vgfx::desktop_presenting_set(true);
     if (!vnu::vgfx::enter_gfx_mode()) {
+        vnu::vgfx::desktop_presenting_set(false);
         /* The framebuffer comes out of the pool, and a pool with nothing
          * left is the one thing that can stop a desktop. Nothing was
          * programmed, so the console is still the console: say so on it
@@ -1429,11 +1436,24 @@ void run(const char* open_app)
             } else if (focused != NO_TASK && vnu::wintask::is_running(focused)) {
                 vnu::wintask::Console* con = vnu::wintask::console(focused);
                 if (con) {
-                    con->scroll_off = 0;
-                    if (con->gfx && key == 27)
-                        vnu::wintask::feed_mouse(focused, 3, 0, 0);
-                    else
-                        vnu::wintask::feed_input(focused, static_cast<char>(key));
+                    if (key == 0x94 || key == 0x95) {
+                        if (!con->gfx) {
+                            if (key == 0x94)
+                                con->scroll_off += 5;
+                            else
+                                con->scroll_off -= 5;
+                            if (con->scroll_off < 0)
+                                con->scroll_off = 0;
+                            if (con->scroll_off > con->hist_n)
+                                con->scroll_off = con->hist_n;
+                        }
+                    } else {
+                        con->scroll_off = 0;
+                        if (con->gfx && key == 27)
+                            vnu::wintask::feed_mouse(focused, 3, 0, 0);
+                        else
+                            vnu::wintask::feed_input(focused, static_cast<char>(key));
+                    }
                 }
                 vnu::wintask::run_slice(focused);
             }
@@ -2066,6 +2086,10 @@ void run(const char* open_app)
     }
 
 exit_gui:
+    /* The desktop is done presenting. The console's pass takes over from
+     * here, and in a graphics mode it is the only thing that will draw
+     * the console at all. */
+    vnu::vgfx::desktop_presenting_set(false);
     for (int i = 0; i < order_len; ++i)
         vnu::wintask::close_task(order[i]);
     /* The mouse goes with the desktop: it was told to report for this

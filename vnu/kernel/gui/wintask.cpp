@@ -102,21 +102,28 @@ inline void phys_store32(uint32_t pgdir, uint32_t vaddr, uint32_t v)
     *reinterpret_cast<uint32_t*>(pa) = v;
 }
 
+/* How many NAME=value strings a task's environment can hold. */
+constexpr int MAX_ENV = 16;
+
 /* Same argc/argv layout as build_argv_frame below (which mirrors
  * proc/process.cpp's setup_user_stack), but written into the private
  * frames of the address space `pgdir` via phys_store. Returns the
  * resulting (virtual) stack pointer. */
 uint32_t build_argv_frame_into(uint32_t pgdir, uint32_t stack_top, int argc,
-                               char* const* argv, const char* path0)
+                               char* const* argv, const char* path0,
+                               char* const* envp, int envc)
 {
     if (argc < 1)
         argc = 1;
     if (argc > 8)
         argc = 8;
+    if (envc > MAX_ENV)
+        envc = MAX_ENV;
 
     const char* a0 = path0 ? path0 : (argv && argv[0] ? argv[0] : "/bin/unknown");
     uint32_t sp = stack_top;
     uint32_t argv_addr[9] = {};
+    uint32_t env_addr[MAX_ENV + 1] = {};
 
     for (int i = 0; i < argc; ++i) {
         const char* s = (i == 0) ? a0 : (argv && argv[i] ? argv[i] : "");
@@ -127,8 +134,21 @@ uint32_t build_argv_frame_into(uint32_t pgdir, uint32_t stack_top, int argc,
         argv_addr[i] = sp;
     }
 
+    for (int i = 0; i < envc; ++i) {
+        const char* s = envp[i] ? envp[i] : "";
+        int len = str_len(s) + 1;
+        sp -= static_cast<uint32_t>((len + 3) & ~3u);
+        for (int c = 0; c < len; ++c)
+            phys_store(pgdir, sp + static_cast<uint32_t>(c), static_cast<uint8_t>(s[c]));
+        env_addr[i] = sp;
+    }
+
     sp -= 4;
     phys_store32(pgdir, sp, 0); /* envp NULL */
+    for (int i = envc - 1; i >= 0; --i) {
+        sp -= 4;
+        phys_store32(pgdir, sp, env_addr[i]);
+    }
     sp -= 4;
     phys_store32(pgdir, sp, 0); /* argv NULL terminator */
     for (int i = argc - 1; i >= 0; --i) {
@@ -142,16 +162,20 @@ uint32_t build_argv_frame_into(uint32_t pgdir, uint32_t stack_top, int argc,
 
 /* Same layout, but writes go straight to the CURRENT address space
  * (the executing task's own, for exit_respawns_root/exec_current). */
-uint32_t build_argv_frame(uint32_t stack_top, int argc, char* const* argv, const char* path0)
+uint32_t build_argv_frame(uint32_t stack_top, int argc, char* const* argv, const char* path0,
+                          char* const* envp, int envc)
 {
     if (argc < 1)
         argc = 1;
     if (argc > 8)
         argc = 8;
+    if (envc > MAX_ENV)
+        envc = MAX_ENV;
 
     const char* a0 = path0 ? path0 : (argv && argv[0] ? argv[0] : "/bin/unknown");
     uint8_t* sp = reinterpret_cast<uint8_t*>(stack_top);
     uint32_t argv_addr[9] = {};
+    uint32_t env_addr[MAX_ENV + 1] = {};
 
     for (int i = 0; i < argc; ++i) {
         const char* s = (i == 0) ? a0 : (argv && argv[i] ? argv[i] : "");
@@ -162,8 +186,21 @@ uint32_t build_argv_frame(uint32_t stack_top, int argc, char* const* argv, const
         argv_addr[i] = reinterpret_cast<uint32_t>(sp);
     }
 
+    for (int i = 0; i < envc; ++i) {
+        const char* s = envp[i] ? envp[i] : "";
+        int len = str_len(s) + 1;
+        sp -= (len + 3) & ~3u;
+        for (int c = 0; c < len; ++c)
+            sp[c] = static_cast<uint8_t>(s[c]);
+        env_addr[i] = reinterpret_cast<uint32_t>(sp);
+    }
+
     sp -= 4;
     *reinterpret_cast<uint32_t*>(sp) = 0; /* envp NULL */
+    for (int i = envc - 1; i >= 0; --i) {
+        sp -= 4;
+        *reinterpret_cast<uint32_t*>(sp) = env_addr[i];
+    }
     sp -= 4;
     *reinterpret_cast<uint32_t*>(sp) = 0; /* argv NULL terminator */
     for (int i = argc - 1; i >= 0; --i) {
@@ -339,7 +376,8 @@ TaskHandle spawn_common(const char* argv0_path, const char* arg1, const uint8_t*
 
     char* av[2] = {const_cast<char*>(argv0_path), const_cast<char*>(arg1)};
     uint32_t user_esp = build_argv_frame_into(
-        pgdir, STACK_TOP, arg1 ? 2 : 1, arg1 ? av : nullptr, argv0_path);
+        pgdir, STACK_TOP, arg1 ? 2 : 1, arg1 ? av : nullptr, argv0_path,
+        nullptr, 0);
     setup_switch_frame(pgdir, t);
 
     vnu_wintask_pending_entry = entry;
@@ -892,7 +930,7 @@ bool exit_respawns_root(uint32_t& out_eip, uint32_t& out_esp)
     char path_copy[64];
     str_copy(path_copy, t.root_path, sizeof(path_copy));
     out_eip = entry;
-    out_esp = build_argv_frame(STACK_TOP, 1, nullptr, path_copy);
+    out_esp = build_argv_frame(STACK_TOP, 1, nullptr, path_copy, nullptr, 0);
     t.child_running = false;
     return true;
 }
@@ -911,7 +949,8 @@ void task_exit()
     } /* unreachable: defensive only, vnu_swtch_pd never returns here */
 }
 
-bool exec_current(const char* path, char* const* argv, uint32_t& out_eip, uint32_t& out_esp)
+bool exec_current(const char* path, char* const* argv, char* const* envp,
+                  uint32_t& out_eip, uint32_t& out_esp)
 {
     uint32_t size = 0;
     const uint8_t* data = vnu::proc::find_embedded_data(path, size);
@@ -972,6 +1011,19 @@ bool exec_current(const char* path, char* const* argv, uint32_t& out_eip, uint32
     }
     arg_ptrs[argc] = nullptr;
 
+    /* The environment, snapshotted for the same reason argv is. */
+    char env_store[MAX_ENV][96];
+    char* env_ptrs[MAX_ENV + 1];
+    int envc = 0;
+    if (envp) {
+        while (envp[envc] && envc < MAX_ENV) {
+            str_copy(env_store[envc], envp[envc], sizeof(env_store[envc]));
+            env_ptrs[envc] = env_store[envc];
+            ++envc;
+        }
+    }
+    env_ptrs[envc] = nullptr;
+
     char path_copy[96];
     str_copy(path_copy, path, sizeof(path_copy));
 
@@ -982,7 +1034,8 @@ bool exec_current(const char* path, char* const* argv, uint32_t& out_eip, uint32
         return false;
 
     out_eip = entry;
-    out_esp = build_argv_frame(STACK_TOP, argc, arg_ptrs, path_copy);
+    out_esp = build_argv_frame(STACK_TOP, argc, arg_ptrs, path_copy, env_ptrs,
+                               envc);
     cur_task().child_running = true;
     return true;
 }

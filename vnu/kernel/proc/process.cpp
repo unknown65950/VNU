@@ -11,6 +11,8 @@
 #include "embedded_vash.h"
 #include "embedded_hello.h"
 #include "embedded_vedit.h"
+#include "embedded_browser.h"
+#include "embedded_imagine.h"
 #include "embedded_ttytest.h"
 #include "embedded_man.h"
 #include "embedded_echo.h"
@@ -97,7 +99,9 @@ const EmbeddedProg embedded[] = {
     {"/bin/uname", embedded_uname_elf, embedded_uname_elf_size},
     {"/bin/wallpaper", embedded_wallpaper_elf, embedded_wallpaper_elf_size},
     {"/bin/clear", embedded_clear_elf, embedded_clear_elf_size},
+    {"/bin/imagine", embedded_imagine_elf, embedded_imagine_elf_size},
     {"/bin/vedit", embedded_vedit_elf, embedded_vedit_elf_size},
+    {"/bin/browser", embedded_browser_elf, embedded_browser_elf_size},
     {"/bin/ttytest", embedded_ttytest_elf, embedded_ttytest_elf_size},
     {"/bin/wc", embedded_wc_elf, embedded_wc_elf_size},
     {"/bin/head", embedded_head_elf, embedded_head_elf_size},
@@ -248,16 +252,23 @@ static int str_len(const char* s)
 
 /* Build classic argc/argv/envp stack. argv[0] = path (or basename). */
 
-void setup_user_stack(vnu::proc::Process& p, int argc, char* const* argv, const char* path0)
+/* How many NAME=value strings a program's environment can hold. */
+constexpr int VNU_MAX_ENV = 16;
+
+void setup_user_stack(vnu::proc::Process& p, int argc, char* const* argv, const char* path0,
+                     char* const* envp, int envc)
 {
     if (argc < 1)
         argc = 1;
     if (argc > 8)
         argc = 8;
+    if (envc > VNU_MAX_ENV)
+        envc = VNU_MAX_ENV;
 
     const char* a0 = path0 ? path0 : (argv && argv[0] ? argv[0] : "/bin/unknown");
     uint32_t sp = p.user_stack_top;
     uint32_t argv_addr[9] = {};
+    uint32_t env_addr[VNU_MAX_ENV + 1] = {};
 
     for (int i = 0; i < argc; ++i) {
         const char* s = (i == 0) ? a0 : (argv && argv[i] ? argv[i] : "");
@@ -267,9 +278,23 @@ void setup_user_stack(vnu::proc::Process& p, int argc, char* const* argv, const 
         argv_addr[i] = sp;
     }
 
-    /* envp: single NULL */
+    for (int i = 0; i < envc; ++i) {
+        const char* s = envp[i] ? envp[i] : "";
+        int len = str_len(s) + 1;
+        sp -= static_cast<uint32_t>((len + 3) & ~3u);
+        copy_str(reinterpret_cast<char*>(sp), s, len);
+        env_addr[i] = sp;
+    }
+
+    /* The layout from the top down is argc, argv[], NULL, envp[], NULL
+     * and only then the strings themselves, which is what a program
+     * expects to find above its own frame. */
     sp -= 4;
     *reinterpret_cast<uint32_t*>(sp) = 0;
+    for (int i = envc - 1; i >= 0; --i) {
+        sp -= 4;
+        *reinterpret_cast<uint32_t*>(sp) = env_addr[i];
+    }
 
     /* argv NULL terminator */
     sp -= 4;
@@ -636,7 +661,13 @@ int sys_fork(Registers* trap)
  * starting at 0x400000? */
 uint32_t elf_need_pages(const uint8_t* image, uint32_t size);
 
-int sys_execve(Registers* trap, const char* path, char* const* argv)
+/* One shebang line, plus room for the slashes around it. */
+constexpr int SHEBANG_MAX = 128;
+/* How many `#!` indirections this syscall has already followed. */
+static int shebang_depth = 0;
+
+int sys_execve(Registers* trap, const char* path, char* const* argv,
+               char* const* envp)
 {
     const EmbeddedProg* prog = find_embedded(path);
 
@@ -665,12 +696,87 @@ int sys_execve(Registers* trap, const char* path, char* const* argv)
     }
     arg_ptrs[argc] = 0;
 
+    /* The environment is snapshotted the same way, for the same reason:
+     * the load that follows overwrites the memory argv[] points into. */
+    char env_store[VNU_MAX_ENV][96];
+    char* env_ptrs[VNU_MAX_ENV + 1];
+    int envc = 0;
+    if (envp) {
+        while (envp[envc] && envc < VNU_MAX_ENV) {
+            const char* s = envp[envc];
+            int j = 0;
+            for (; s[j] && j < 95; ++j)
+                env_store[envc][j] = s[j];
+            env_store[envc][j] = 0;
+            env_ptrs[envc] = env_store[envc];
+            ++envc;
+        }
+    }
+    env_ptrs[envc] = 0;
+
     char path_copy[96];
     {
         int j = 0;
         for (; path && path[j] && j < 95; ++j)
             path_copy[j] = path[j];
         path_copy[j] = 0;
+    }
+
+    /* A file that starts with `#!` is a script, and POSIX says execve()
+     * runs its interpreter on it: the interpreter becomes the new image,
+     * argv[0] stays the interpreter and the script's own path plus its
+     * arguments follow. Reading just the first line is enough to know,
+     * so it happens before anything is staged for the script itself. */
+    if (!prog) {
+        char head[SHEBANG_MAX];
+        int fd = vnu::vfs::open(path, static_cast<int>(vnu::posix::O_RDONLY));
+        if (fd < 0)
+            return -VNU_ENOENT;
+        int hn = vnu::vfs::read(fd, head, sizeof(head) - 1);
+        vnu::vfs::close(fd);
+        if (hn >= 2 && head[0] == '#' && head[1] == '!') {
+            head[hn > 0 ? hn : 0] = 0;
+            /* `#!interp [arg]` — the path runs to the first blank, and
+             * only one argument may follow it (that is all POSIX
+             * allows, and all a shebang needs). */
+            char* p = head + 2;
+            while (*p == ' ' || *p == '\t')
+                ++p;
+            char* interp = p;
+            while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
+                ++p;
+            char saved = *p;
+            *p = 0;
+            while (*p == ' ' || *p == '\t')
+                ++p;
+            char* sarg = p;
+            while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
+                ++p;
+            *p = 0;
+            if (!interp[0])
+                return -VNU_ENOEXEC;
+            /* argv: interp, [arg], the script, then the script's own
+             * arguments — the ones argv held for this execve. */
+            char* sargv[9];
+            int sn = 0;
+            sargv[sn++] = interp;
+            if (sarg[0] && saved != 0)
+                sargv[sn++] = sarg;
+            sargv[sn++] = const_cast<char*>(path_copy);
+            for (int i = 1; i < argc && sn < 8; ++i)
+                sargv[sn++] = arg_ptrs[i];
+            sargv[sn] = 0;
+            /* A script that (directly or through another script) keeps
+             * naming a script would recurse forever; four levels is far
+             * past anything real. */
+            if (++shebang_depth > 4) {
+                --shebang_depth;
+                return -VNU_ENOEXEC;
+            }
+            int r = sys_execve(trap, interp, sargv, envp);
+            --shebang_depth;
+            return r;
+        }
     }
 
     /* execve of a real VFS file — a guest-compiled binary, for example.
@@ -749,7 +855,7 @@ int sys_execve(Registers* trap, const char* path, char* const* argv)
     p.regs = {};
     p.regs.eip = entry;
     p.regs.eflags = 0x202;
-    setup_user_stack(p, argc, arg_ptrs, path_copy);
+    setup_user_stack(p, argc, arg_ptrs, path_copy, env_ptrs, envc);
     /* What POSIX says execve does to signals, and why each half is the
      * way it is: the new image is a new program, so what it does about
      * a signal is its own business and every handler goes back to the
@@ -1457,7 +1563,7 @@ void setup_and_enter()
     p.regs.eip = entry;
     p.regs.eflags = 0x202;
     char* av[] = {const_cast<char*>(pl.argv0_path), nullptr};
-    setup_user_stack(p, 1, av, pl.argv0_path);
+    setup_user_stack(p, 1, av, pl.argv0_path, nullptr, 0);
 
     pl.ok = true;
     vnu_enter_user(p.regs.eip, p.regs.esp);

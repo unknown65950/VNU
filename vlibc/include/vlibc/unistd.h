@@ -8,6 +8,13 @@ extern "C" {
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 
+/* What lseek's `whence` means. The values are the ordinary POSIX ones,
+ * which is what the kernel's lseek compares against (see vfs.cpp): a
+ * program may pass the number, but naming it is what the header is for. */
+#define SEEK_SET 0 /* from the start */
+#define SEEK_CUR 1 /* from the current position */
+#define SEEK_END 2 /* from the end */
+
 long write(int fd, const void* buffer, unsigned long count);
 long read(int fd, void* buffer, unsigned long count);
 long lseek(int fd, long offset, int whence);

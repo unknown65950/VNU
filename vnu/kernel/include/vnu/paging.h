@@ -57,6 +57,23 @@ bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t nu
  * already-present pages are left untouched. */
 bool map_frames(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages, uint32_t phys_start);
 
+/* The same mapping for frames the space does NOT own: the pages are
+ * mapped, but nothing is listed in the space's frame table, so neither
+ * unmap_frames() nor destroy_address_space() hands them back to the pool.
+ *
+ * This is what lets a program be given the display's own back buffer
+ * (see /dev/fb0 in vnu/fb.h). map_frames() would be a way to lose the
+ * screen: it records every frame it maps as the space's own, and a
+ * process that exits - or a fork/exec that replaces the space - would
+ * free the framebuffer the display is still scanning out. Borrowed
+ * pages outlive the mapping in the only direction that is safe: the
+ * private page table holding them goes with the address space, and the
+ * frames behind it stay where they are.
+ *
+ * Same contract otherwise: physical contiguity, false on out-of-memory,
+ * already-present pages are simply rewritten. */
+bool map_borrowed_frames(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages, uint32_t phys_start);
+
 /* Takes `num_pages` back out of `pgdir_phys` at `vaddr_start` and frees
  * the private frames behind them, which is what makes a canvas able to
  * change size. Fails without freeing anything from the point it hits a

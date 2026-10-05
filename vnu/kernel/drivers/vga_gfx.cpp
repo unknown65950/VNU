@@ -265,12 +265,33 @@ void restore_font()
     leave_font_window(w);
 }
 
+/* How the palette is split between the system's own colours and a
+ * picture's.
+ *
+ * The VGA DAC has 256 registers and every surface on an 8bpp display
+ * shares them, so the split is by role, not by who wants the colours:
+ * the first SYSTEM_SLOTS are the system's, because COLOR_* indexes
+ * them and the console presents in them - an image that moved them
+ * would repaint the console in its own colours. The remaining
+ * PICTURE_SLOTS belong to whatever picture is on screen, which is why
+ * they are the largest part of the table: a photograph quantized to the
+ * sixteen colours above looks like a postage stamp, and quantized to
+ * 240 it looks like the photograph.
+ *
+ * Nothing here is VGA's idea of the split - the DAC does not care what
+ * a slot means - and on a 32bpp virtio-gpu scanout there is no palette
+ * in the hardware at all, so both halves are just what an index means
+ * while a picture is on the screen. */
+constexpr int SYSTEM_SLOTS = 16;
+constexpr int PALETTE_SLOTS = 256;
+constexpr int PICTURE_SLOTS = PALETTE_SLOTS - SYSTEM_SLOTS;
+
 /* Catppuccin Mocha DAC palette for the first 16 palette registers (the
  * ones COLOR_* references). The desktop renders 8-bpp palette indices,
  * so programming the DAC once restyles every surface - wallpaper, window
  * chrome, icons and the gfx apps' own drawing - with no app-code churn.
  * Values are 6-bit per channel (0..63), as the VGA DAC expects. */
-constexpr uint8_t CATT_PAL[16][3] = {
+constexpr uint8_t CATT_PAL[SYSTEM_SLOTS][3] = {
     {7, 7, 11},    /*  0 BLACK   base      #1e1e2e */
     {34, 45, 62},  /*  1 BLUE    blue      #89b4fa */
     {41, 56, 40},  /*  2 GREEN   green     #a6e3a1 */
@@ -289,16 +310,80 @@ constexpr uint8_t CATT_PAL[16][3] = {
     {51, 53, 61},  /* 15 WHITE   text      #cdd6f4 */
 };
 
-uint8_t g_saved_pal[16][3];
+/* What every slot means right now: CATT_PAL in the system's half, the
+ * picture's own colours in the rest. This one table is what an index is
+ * looked up in - at 8bpp by the card's DAC, at 32bpp by pixel_of() - so
+ * there is a single answer to "what colour is this pixel" whatever the
+ * display is, and a program that read palette() and drew with it is
+ * right on both. Not .bss-sized on purpose: it is 768 bytes of table,
+ * and a picture that wants a hundredth of that memory back cannot have
+ * it while the table lives. */
+uint8_t g_pal[PALETTE_SLOTS][3];
+bool g_have_pal_init = false;
+
+/* The system's half, in whatever state g_pal is in, and the picture's
+ * half copied behind it: what the console presents in is its own sixteen
+ * colours over a frame the rest of the screen still fills with a
+ * picture's, so a table of all 256 with the two halves taken from
+ * different places is the only one that is right everywhere. */
+uint8_t g_console_pal[PALETTE_SLOTS][3];
+
+/* The palette registers a text mode has: sixteen, and no more, since a
+ * character cell names one by its attribute bits alone. */
+uint8_t g_saved_pal[SYSTEM_SLOTS][3];
 bool g_have_saved_pal = false;
 
-void load_palette(const uint8_t (&pal)[16][3])
+/* Fill the picture's half of g_pal with a grey ramp and the system's half
+ * with Catppuccin, so every index means something before anything has
+ * drawn. Called from the paths that program the DAC, which is before
+ * there is a picture to install one. */
+void ensure_pal()
 {
-    for (int i = 0; i < 16; ++i) {
+    if (g_have_pal_init)
+        return;
+    for (int i = 0; i < SYSTEM_SLOTS; ++i) {
+        g_pal[i][0] = CATT_PAL[i][0];
+        g_pal[i][1] = CATT_PAL[i][1];
+        g_pal[i][2] = CATT_PAL[i][2];
+    }
+    /* A ramp rather than black: an unwritten slot is a bug to see, not a
+     * colour the desktop chose. */
+    for (int i = SYSTEM_SLOTS; i < PALETTE_SLOTS; ++i) {
+        const uint8_t v = static_cast<uint8_t>((i - SYSTEM_SLOTS) * 63 /
+                                               (PICTURE_SLOTS - 1));
+        g_pal[i][0] = v;
+        g_pal[i][1] = v;
+        g_pal[i][2] = v;
+    }
+    g_have_pal_init = true;
+}
+
+void load_palette(const uint8_t (&pal)[PALETTE_SLOTS][3])
+{
+    /* All 256 registers, not the sixteen the text mode has: on an 8bpp
+     * display the card expands a pixel by looking its index up in the
+     * hardware table, so a picture's colours have to be in the card as
+     * well as in software or they never reach the monitor. */
+    for (int i = 0; i < PALETTE_SLOTS; ++i) {
         outb(0x3C8, static_cast<uint8_t>(i));
         outb(0x3C9, pal[i][0]);
         outb(0x3C9, pal[i][1]);
         outb(0x3C9, pal[i][2]);
+    }
+}
+
+/* The sixteen registers a text mode's attributes name, and nothing else:
+ * a character cell says "blue background, bright white" with four bits,
+ * so whatever the picture's half held is not a colour anything in this
+ * mode can ask for. Written register by register rather than through
+ * load_palette(), which programs all 256 for a picture's sake. */
+void load_text_palette()
+{
+    for (int i = 0; i < SYSTEM_SLOTS; ++i) {
+        outb(0x3C8, static_cast<uint8_t>(i));
+        outb(0x3C9, g_saved_pal[i][0]);
+        outb(0x3C9, g_saved_pal[i][1]);
+        outb(0x3C9, g_saved_pal[i][2]);
     }
 }
 
@@ -332,6 +417,33 @@ const vnu::vgfx::Mode g_modes[vnu::vgfx::MODE_COUNT] = {
 int g_width = vnu::vgfx::DEFAULT_MODE.width;
 int g_height = vnu::vgfx::DEFAULT_MODE.height;
 bool g_in_gfx_mode = false;
+
+void picture_palette_set_impl(const uint8_t (*rgb)[3], uint32_t count)
+{
+    if (!rgb || !count)
+        return;
+    if (count > PICTURE_SLOTS)
+        count = PICTURE_SLOTS;
+    ensure_pal();
+    for (uint32_t i = 0; i < PICTURE_SLOTS; ++i) {
+        /* A slot past the last colour handed over repeats it rather than
+         * keeping the ramp: an image that asked for 200 of 240 colours is
+         * saying "these 200 and nothing else", and an index it never
+         * assigns must not come out as the ramp's grey. */
+        const uint8_t* src = rgb[i < count ? i : count - 1];
+        /* Masked to the 6 bits a DAC register holds, so the software
+         * table and the hardware table are the same table. */
+        g_pal[SYSTEM_SLOTS + i][0] = src[0] & 0x3F;
+        g_pal[SYSTEM_SLOTS + i][1] = src[1] & 0x3F;
+        g_pal[SYSTEM_SLOTS + i][2] = src[2] & 0x3F;
+    }
+    /* Reprogrammed only when there is a mode whose pixels are indices:
+     * before the first mode switch there is nothing on screen that a DAC
+     * could colour, and the ports answer to no card. */
+    if (g_in_gfx_mode)
+        load_palette(g_pal);
+}
+
 
 /* The desktop's framebuffer, from the PMM pool rather than .bss, so a
  * 640x480 desktop holds 300 KiB instead of the 1.25 MiB of the top mode
@@ -394,6 +506,20 @@ constexpr uint32_t ALL_CONSOLE_ROWS = 0xFFFFFFFFu;
  * the session. A display with a text mode of its own never sets it and
  * never needs it. See console_tick(). */
 bool g_scanout_shown = false;
+
+/* Whether a desktop session is on the screen presenting every frame. Set
+ * by gui::run() around its event loop and nowhere else: it is the fact,
+ * not a guess from the mode, because a graphics mode with no desktop in
+ * it is exactly the state /dev/fb0 leaves the display in, and there the
+ * console is the only thing that will ever draw the console. */
+bool g_desktop_presenting = false;
+
+/* Whether a program holds the display and is painting the frame itself:
+ * the state /dev/fb0 leaves it in for as long as the descriptor is open.
+ * The same question as g_desktop_presenting and asked the same way, but
+ * for the other kind of presenter - one drawing straight into the frame
+ * instead of compositing over it - and it matters for the same reason. */
+bool g_program_presenting = false;
 
 /* True when g_backbuf is a frame nothing has drawn the console into
  * yet: freshly allocated, or left holding the desktop's last picture.
@@ -562,7 +688,8 @@ inline uint8_t* pixel_ptr(int x, int y)
  * palette at 32bpp, stored B,G,R,X the way the virtio-gpu scanout is.
  * `pal` is the palette to read, so the console can present in the one
  * the text mode booted with. */
-uint32_t pixel_of(uint8_t color, const uint8_t (&pal)[16][3], uint8_t out[4])
+uint32_t pixel_of(uint8_t color, const uint8_t (&pal)[PALETTE_SLOTS][3],
+                  uint8_t out[4])
 {
     if (g_bpp == 8) {
         out[0] = color;
@@ -578,7 +705,8 @@ uint32_t pixel_of(uint8_t color, const uint8_t (&pal)[16][3], uint8_t out[4])
     return 4;
 }
 
-inline void store_with(uint8_t* p, uint8_t color, const uint8_t (&pal)[16][3])
+inline void store_with(uint8_t* p, uint8_t color,
+                       const uint8_t (&pal)[PALETTE_SLOTS][3])
 {
     uint8_t px[4];
     const uint32_t n = pixel_of(color, pal, px);
@@ -592,7 +720,11 @@ inline void store_with(uint8_t* p, uint8_t color, const uint8_t (&pal)[16][3])
  * drawn, so the caller has to say which palette it is drawing in. */
 inline void store(uint8_t* p, uint8_t color)
 {
-    store_with(p, color, CATT_PAL);
+    /* The live palette, not CATT_PAL: a caller that draws index 200 is
+     * drawing a colour the picture chose, and there is no constant table
+     * that knows what 200 means. */
+    ensure_pal();
+    store_with(p, color, g_pal);
 }
 
 /* Quarter-sine profile (0..255) used to carve the wallpaper's hill
@@ -611,6 +743,31 @@ const uint8_t HILL_T[64] = {
 } // namespace
 
 namespace vnu::vgfx {
+
+/* Whether a desktop is presenting every frame (see g_desktop_presenting).
+ * The console's own scheduler pass asks before it draws anything. */
+void desktop_presenting_set(bool on)
+{
+    g_desktop_presenting = on;
+}
+
+bool desktop_presenting()
+{
+    return g_desktop_presenting;
+}
+
+/* Whether a program is painting the frame itself (see
+ * g_program_presenting). fb::ensure_frame() sets it, the last close of
+ * the device clears it. */
+void program_presenting_set(bool on)
+{
+    g_program_presenting = on;
+}
+
+bool program_presenting()
+{
+    return g_program_presenting;
+}
 
 /* Both glyph tables are part of the image whether or not the VGA font
  * was ever captured, so the size is reportable from the start (the
@@ -632,10 +789,11 @@ uint32_t palette(uint32_t* out, uint32_t count)
 {
     if (!out || count < VNU_GFX_PALETTE_SLOTS)
         return 0;
+    ensure_pal();
     for (int i = 0; i < VNU_GFX_PALETTE_SLOTS; ++i) {
         /* 6-bit DAC -> 8-bit channel, the same expansion pixel_of()
          * makes on the way to the frame. */
-        const uint8_t* rgb = CATT_PAL[i];
+        const uint8_t* rgb = g_pal[i];
         const uint32_t b = (static_cast<uint32_t>(rgb[2] << 2) | (rgb[2] >> 4)) << 0;
         const uint32_t g = (static_cast<uint32_t>(rgb[1] << 2) | (rgb[1] >> 4)) << 8;
         const uint32_t r = (static_cast<uint32_t>(rgb[0] << 2) | (rgb[0] >> 4)) << 16;
@@ -644,9 +802,33 @@ uint32_t palette(uint32_t* out, uint32_t count)
     return VNU_GFX_PALETTE_SLOTS;
 }
 
+/* The public entry: the table itself is filled in above, this is what
+ * puts it where an index is looked up (see vnu/vga_gfx.h). */
+void picture_palette_set(const uint8_t (*rgb)[3], uint32_t count)
+{
+    picture_palette_set_impl(rgb, count);
+}
+
 uint32_t font_bytes()
 {
     return static_cast<uint32_t>(sizeof(g_font) + sizeof(g_font8));
+}
+
+/* The display's frame as one run a program can be pointed at, for
+ * /dev/fb0 (see vnu/fb.h). g_backbuf is the physical address already -
+ * alloc_backbuf() hands back the pool's frames and the pool is
+ * identity-mapped - so these are the two questions a caller asks: is
+ * there a frame, and how big is it. */
+uint32_t backbuffer_phys()
+{
+    return reinterpret_cast<uint32_t>(g_backbuf);
+}
+
+uint32_t backbuffer_pages()
+{
+    if (!g_backbuf || g_bpp <= 0)
+        return 0;
+    return backbuf_frames(g_width, g_height, g_bpp);
 }
 
 /* Bochs VBE (the "std" VGA in QEMU): disable first, then select the
@@ -726,6 +908,11 @@ int height()
     return h;
 }
 
+bool in_gfx_mode()
+{
+    return g_in_gfx_mode;
+}
+
 bool mode_supported(int w, int h)
 {
     for (int i = 0; i < MODE_COUNT; ++i)
@@ -777,11 +964,12 @@ bool enter_gfx_mode()
      * the console on the screen where it already was. */
     arm_scanout();
 
-    /* Swap in the Catppuccin DAC the first time we enter graphics mode;
+    /* Swap in the desktop palette the first time we enter graphics mode;
      * the boot palette is saved so exit_to_text() can hand it back. */
     if (!g_have_saved_pal)
         save_palette();
-    load_palette(CATT_PAL);
+    ensure_pal();
+    load_palette(g_pal);
     return true;
 }
 
@@ -813,8 +1001,9 @@ bool set_resolution(int w, int h)
     if (g_in_gfx_mode) {
         program_mode(w, h);
         /* The DAC is reprogrammed by the mode switch, so the desktop
-         * palette has to go in again. */
-        load_palette(CATT_PAL);
+         * palette - picture's half included - has to go in again. */
+        ensure_pal();
+        load_palette(g_pal);
     }
     release_backbuf(); /* still sized for the mode being left */
     g_backbuf = next;
@@ -904,7 +1093,7 @@ void exit_to_text()
         return;
     g_in_gfx_mode = false;
     if (g_have_saved_pal)
-        load_palette(g_saved_pal);
+        load_text_palette();
     vbe_write(VBE_INDEX_ENABLE, VBE_DISABLED);
     write_registers(g_saved.misc, g_saved.seq, g_saved.crtc, g_saved.gc, g_saved.ac);
     restore_font();
@@ -919,7 +1108,7 @@ void clear(uint8_t color)
      * four bytes a pixel, and a screen of them is the one loop that
      * would be worth not doing per pixel. */
     uint8_t px[4];
-    const uint32_t n = pixel_of(color, CATT_PAL, px);
+    const uint32_t n = pixel_of(color, g_pal, px);
     for (int y = 0; y < g_height; ++y) {
         uint8_t* row = row_ptr(y);
         for (int x = 0; x < g_width; ++x)
@@ -997,7 +1186,7 @@ void draw_wallpaper()
             }
             for (unsigned long i = 0; i < n; ++i) {
                 uint8_t px[4];
-                const uint32_t got = pixel_of(in[i], CATT_PAL, px);
+                const uint32_t got = pixel_of(in[i], g_pal, px);
                 for (uint32_t b = 0; b < got; ++b)
                     row[i * got + b] = px[b];
             }
@@ -1118,7 +1307,7 @@ void fill_rect(int x, int y, int w, int h, uint8_t color)
         return;
     const int n = x1 - x0;
     uint8_t px[4];
-    const int bytes = static_cast<int>(pixel_of(color, CATT_PAL, px));
+    const int bytes = static_cast<int>(pixel_of(color, g_pal, px));
     for (int j = y0; j < y1; ++j) {
         uint8_t* row = row_ptr(j) + static_cast<long>(x0) * bytes;
         if (bytes == 1) {
@@ -1140,7 +1329,7 @@ void hline(int x, int y, int w, uint8_t color)
     if (!clip_box(x, y, w, 1, &x0, &y0, &x1, &y1))
         return;
     uint8_t px[4];
-    const int bytes = static_cast<int>(pixel_of(color, CATT_PAL, px));
+    const int bytes = static_cast<int>(pixel_of(color, g_pal, px));
     uint8_t* row = row_ptr(y0) + static_cast<long>(x0) * bytes;
     for (int i = x0; i < x1; ++i)
         for (int b = 0; b < bytes; ++b)
@@ -1153,7 +1342,7 @@ void vline(int x, int y, int h, uint8_t color)
     if (!clip_box(x, y, 1, h, &x0, &y0, &x1, &y1))
         return;
     uint8_t px[4];
-    const int bytes = static_cast<int>(pixel_of(color, CATT_PAL, px));
+    const int bytes = static_cast<int>(pixel_of(color, g_pal, px));
     for (int j = y0; j < y1; ++j) {
         uint8_t* p = row_ptr(j) + static_cast<long>(x0) * bytes;
         for (int b = 0; b < bytes; ++b)
@@ -1647,7 +1836,7 @@ unsigned long long present_total()
 
 void present()
 {
-    present_with(CATT_PAL);
+    present_with(g_pal);
 }
 
 /* The damage a transfer is about, taken out of the frame so the next one
@@ -1753,7 +1942,24 @@ static void present_rows(uint32_t want)
     /* The console is drawn in the palette the text mode booted with, at
      * either depth: at 8bpp the cells are indices and present_with()
      * expands them there, and at 32bpp they are already colours. */
-    const uint8_t (&pal)[16][3] = g_have_saved_pal ? g_saved_pal : CATT_PAL;
+    /* Sixteen of its own colours over a frame the rest of the screen
+     * still fills with the picture's: a console row drawn where a
+     * wallpaper pixel sits expands that pixel too, at 32bpp, and the
+     * palette it is looked up in has to have both halves or the wallpaper
+     * goes the colour of the nearest attribute. */
+    ensure_pal();
+    for (int i = 0; i < SYSTEM_SLOTS; ++i) {
+        const uint8_t* src = g_have_saved_pal ? g_saved_pal[i] : CATT_PAL[i];
+        g_console_pal[i][0] = src[0];
+        g_console_pal[i][1] = src[1];
+        g_console_pal[i][2] = src[2];
+    }
+    for (int i = SYSTEM_SLOTS; i < PALETTE_SLOTS; ++i) {
+        g_console_pal[i][0] = g_pal[i][0];
+        g_console_pal[i][1] = g_pal[i][1];
+        g_console_pal[i][2] = g_pal[i][2];
+    }
+    const uint8_t (&pal)[PALETTE_SLOTS][3] = g_console_pal;
     /* Blacking the frame is a whole screen of writes, and only a draw
      * that is doing all of it needs it: a redraw of one row paints over
      * every pixel of that row as it goes, and the rows either side are
@@ -1835,9 +2041,22 @@ void present_text()
  * not the guest's problem to wait on. */
 void console_tick()
 {
-    if (!g_scanout_shown || g_in_gfx_mode)
-        return;   /* either the text plane is still what the host shows, or
-                   * the desktop owns the screen and presents every frame */
+    /* Who has to draw the console, which is not the same question in a
+     * text mode as in a graphics one. In text mode the hardware puts the
+     * characters up by itself, and only a display with no text plane of
+     * its own needs the pixels (a virtio scanout is a picture of
+     * whatever was presented last). In a graphics mode the console is
+     * pixels like anything else and nobody else is going to draw them:
+     * the card is reading a framebuffer, not a character cell. So the
+     * two reasons to sit still are the two things that own the screen
+     * while it is in that mode: a desktop, which presents every frame
+     * over the top of whatever the console did, and a program that took
+     * the frame through /dev/fb0 and is painting it. Either way the
+     * console's characters wait in their cells - they are not lost, and
+     * the next pass after the display is given back puts them up. */
+    if (g_in_gfx_mode ? (g_desktop_presenting || g_program_presenting)
+                      : !g_scanout_shown)
+        return;
     if (vnu::tty::console_dirty_rows() == 0)
         return;
     if (static_cast<int32_t>(vnu::proc::now_jiffies() - g_console_tick) <
@@ -1847,7 +2066,7 @@ void console_tick()
     present_rows(vnu::tty::console_dirty_rows());
 }
 
-void present_with(const uint8_t (&pal)[16][3])
+void present_with(const uint8_t (&pal)[PALETTE_SLOTS][3])
 {
     /* What the host is owed. Taken here rather than in present() because
      * the console has its own idea of what changed (present_rows damages

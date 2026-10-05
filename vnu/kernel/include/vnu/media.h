@@ -22,8 +22,8 @@
 // Demo WAV clips, one file per clip.
 #define VNU_SOUNDS_DIR "/etc/vnu/sounds"
 
-// The wallpaper the desktop draws right now. Any BMP or PNG px.h
-// understands, up to 512x384 and 64 KiB; see gui/wallpaper.cpp.
+// The wallpaper the desktop draws right now. Any BMP, PNG or JPEG px.h
+// understands, up to 1280x1024 pixels; see gui/wallpaper.cpp.
 #define VNU_WALLPAPER "/etc/vnu/wallpaper"
 
 // The image shipped with the kernel, never overwritten: the wallpaper

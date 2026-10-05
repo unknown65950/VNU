@@ -3,6 +3,8 @@
 #include <vnu/version.h>
 #include <vnu/pmm.h>
 #include <vnu/images.h>
+#include <vnu/fb.h>
+#include <vnu/paging.h>
 #include <vnu/vga_gfx.h>
 #include <vnu/wallpaper.h>
 #include <vnu/virtio_gpu.h>
@@ -10,6 +12,25 @@
 #include <vnu/host.h>
 #include <vnu/mboot.h>
 #include <vnu/process.h>
+#include <vnu/wintask.h>
+/* The address space the caller runs in. paging::current_pgdir() is no
+ * use here: a coroutine context switch loads CR3 from assembly without
+ * going through paging::switch_to(), so that global still names the
+ * scheduler's own directory while a process is running. The process
+ * table knows where each one lives. */
+static uint32_t caller_pgdir()
+{
+    if (vnu::wintask::current_is_task()) {
+        vnu::wintask::Console* con = vnu::wintask::console_of_current();
+        if (con)
+            return vnu::wintask::pgdir_of(*con);
+    }
+    const vnu::proc::Process* p = vnu::proc::current();
+    if (p && p->pgdir_phys)
+        return p->pgdir_phys;
+    return vnu::paging::current_pgdir();
+}
+
 #include <vnu/ata.h>
 #include <vnu/net.h>
 #include "../proc/embedded_lib_crt0.h"
@@ -698,13 +719,19 @@ void regen_synth(Node& n)
          * is still where the desktop's own colours come from, but
          * nothing on the screen is limited to it, which is the whole
          * difference between the two paths. */
+        /* Sixteen to a line: 256 of them is 1791 characters, which is
+         * one unreadable line and one line a person cannot count. The
+         * tab names the field and the lines after it continue it, so a
+         * reader takes the block until something that is not a colour. */
         a.str("\npalette\t");
         uint32_t pal[VNU_GFX_PALETTE_SLOTS];
         if (vnu::vgfx::palette(pal, VNU_GFX_PALETTE_SLOTS) ==
             VNU_GFX_PALETTE_SLOTS) {
             for (uint32_t i = 0; i < VNU_GFX_PALETTE_SLOTS; ++i) {
-                if (i)
+                if (i && (i % 16))
                     a.str(" ");
+                if (i && !(i % 16))
+                    a.str("\n\t");
                 for (int c = 2; c >= 0; --c)
                     a.hex2((pal[i] >> (8 * c)) & 0xFFu);
             }
@@ -924,6 +951,8 @@ void init()
     add("/bin/dirname", false);
     add("/bin/seq", false);
     add("/bin/man", false);
+    /* Draws a picture on the display itself, through /dev/fb0. */
+    add("/bin/imagine", false);
     add("/bin/vibecommander", false);
     add("/bin/df", false);
     add("/bin/ping", false);
@@ -964,6 +993,12 @@ void init()
      * the DMA ring; the syscall layer routes them to the audio device
      * (see vnu::audio and VNU_SYS_audio_*). */
     add_dev("/dev/dsp", DevKind::Audio);
+    /* The display's own frame, for a program that draws on the screen
+     * itself rather than in a window (see vnu/fb.h): opened, it maps the
+     * frame into the caller's address space, read() hands out where that
+     * is and how big the frame is, and write() puts the result on the
+     * screen. */
+    add_dev("/dev/fb0", DevKind::Framebuffer);
     /* /dev nodes are world-accessible char devices. */
     for (int i = 0; i < MAX_N; ++i)
         if (nodes[i].used && nodes[i].dev != DevKind::None)
@@ -1071,6 +1106,25 @@ int open(const char* path, uint32_t flags)
      * current values rather than whatever the last reader saw. */
     if (nodes[ni].synth != SynthKind::None)
         regen_synth(nodes[ni]);
+    /* The framebuffer maps the display's frame into the caller's address
+     * space, so an open is also the moment that mapping is made - and the
+     * moment to refuse, when there is nothing to map. Opening it also
+     * puts the display in a graphics mode if it is not in one already
+     * (see vnu/fb.h): a frame the card is not scanning out cannot be put
+     * on the screen by anyone, so asking for the display's own pixels is
+     * a request for a mode as much as for a mapping. */
+    if (nodes[ni].dev == DevKind::Framebuffer) {
+        if (!vnu::fb::ensure_frame())
+            return -VNU_ENODEV;
+        /* A mapping that could not be made is an open that has to be
+         * undone, not one that is merely refused: the mode is programmed
+         * by now, the display is this device's, and a program that never
+         * got a frame to draw into has no way to give either back. */
+        if (!vnu::fb::map_for(caller_pgdir())) {
+            vnu::fb::release();
+            return -VNU_ENODEV;
+        }
+    }
     /* Real descriptors start at 3, right after stdio: a windowed app's
      * canvas is shared memory it holds a virtual address for now (see
      * wintask::GFX_SURFACE_VA), not a descriptor. */
@@ -1093,7 +1147,20 @@ int close(int fd)
 {
     if (fd < 3 || fd >= MAX_FD || !files[fd].used)
         return -VNU_EBADF;
+    const bool was_fb = nodes[files[fd].node].dev == DevKind::Framebuffer;
     files[fd] = {false, 0, 0, -1};
+    /* The last descriptor on /dev/fb0 is the end of the picture: whoever
+     * mapped the display's frame is finished with it, and if opening the
+     * device is what put the display in a graphics mode, this is where it
+     * goes back to the console. Inherited descriptors are why this counts
+     * rather than fires on every close. */
+    if (was_fb) {
+        bool held = false;
+        for (int i = 3; i < MAX_FD && !held; ++i)
+            held = files[i].used && nodes[files[i].node].dev == DevKind::Framebuffer;
+        if (!held)
+            vnu::fb::release();
+    }
     return 0;
 }
 
@@ -1138,6 +1205,19 @@ int read(int fd, void* buf, uint32_t count)
             /* Output-only stream (the AC'97 DAC); there is no recording
              * path, so reads always fail. */
             return -VNU_EIO;
+        case DevKind::Framebuffer:
+            /* One struct, once: where the frame was mapped and how it is
+             * laid out (vnu_fb_info). Mapping is redone here as well as
+             * at open(), because a fork or an execve builds a fresh
+             * address space and the mapping does not follow it there -
+             * so a program that asks again is never told an address it
+             * cannot touch. */
+            if (count < sizeof(vnu_fb_info))
+                return -VNU_EINVAL;
+            if (!vnu::fb::info(caller_pgdir(),
+                               static_cast<vnu_fb_info*>(buf)))
+                return -VNU_ENODEV;
+            return static_cast<int>(sizeof(vnu_fb_info));
         case DevKind::None:
             break;
         }
@@ -1180,6 +1260,24 @@ int write(int fd, const void* buf, uint32_t count)
             return -VNU_EIO; /* routed by the syscall layer */
         case DevKind::Audio:
             return -VNU_EIO; /* routed by the syscall layer */
+        case DevKind::Framebuffer: {
+            /* A write with no bytes is the handshake for a program that
+             * drew into the mapping itself: nothing to copy, the frame
+             * is simply put on the screen. A write with bytes copies them
+             * in at the descriptor's position, which lseek moves, so the
+             * device streams a frame the ordinary way. */
+            if (count == 0) {
+                if (!vnu::fb::available())
+                    return -VNU_ENODEV;
+                vnu::fb::present();
+                return 0;
+            }
+            const int put = vnu::fb::write_pixels(files[fd].position, buf, count);
+            if (put < 0)
+                return put; /* the errno, not a position to advance */
+            files[fd].position += static_cast<uint32_t>(put);
+            return put;
+        }
         case DevKind::None:
             break;
         }

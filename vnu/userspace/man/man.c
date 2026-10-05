@@ -508,16 +508,19 @@ DESCRIPTION\n\
     is any run of non-blank characters.\n"
 
 #define HEAD_PAGE "NAME\n\
-    head - print the first lines of a file\n\
+    head - print the first lines (or bytes) of a file\n\
 \n\
 SYNOPSIS\n\
+    head [-n N] [-c N] [FILE]\n\
     head [-N] [FILE]\n\
 \n\
 DESCRIPTION\n\
-    Prints the first N lines (default 10). The whole file is\n\
-    read into a fixed buffer first, so only the first 128 lines\n\
-    (or 100 columns each) of any input are ever seen - a\n\
-    documented consequence of using a static buffer.\n"
+    Prints the first N lines (default 10), or with -c the first N\n\
+    bytes, which is how a prefix of a binary file is taken. Without\n\
+    -c the whole file is read into a fixed buffer first, so only the\n\
+    first 128 lines (or 100 columns each) of any input are ever\n\
+    seen - a documented consequence of using a static buffer.\n\
+"
 
 #define TAIL_PAGE "NAME\n\
     tail - print the last lines of a file\n\
@@ -1089,16 +1092,17 @@ DESCRIPTION\n\
     desktop is drawing, or `none` while it is still the procedural\n\
     sky. With a file argument, hand the path to the kernel\n\
     (VNU_SYS_wallpaper): the kernel reads the file, decodes it with\n\
-    the same px.h decoder picview uses, quantises it to the 16\n\
-    palette indices the DAC holds, makes it the background and\n\
-    rewrites /etc/vnu/wallpaper with it, so the choice survives a\n\
-    restart of the GUI. A candidate that fails to decode is refused\n\
-    and changes nothing -- neither the file nor the screen.\n\
+    the same px.h decoder picview uses, quantises it to a palette of\n\
+    up to 240 of its own colours in the display palette, makes it\n\
+    the background and rewrites /etc/vnu/wallpaper with it, so the\n\
+    choice survives a restart of the GUI. A candidate that fails to\n\
+    decode is refused and changes nothing -- neither the file nor the\n\
+    screen.\n\
 \n\
-    BMP and PNG pictures of at most 512x384 pixels and 64 KiB are\n\
-    accepted. JPEG is not: its IDCT is the one piece of float code\n\
-    px.h has, and the kernel is built without a FPU. Such a file is\n\
-    listed by --list and refused when chosen.\n\
+    BMP, PNG and JPEG pictures of at most 1280x1024 pixels are\n\
+    accepted. JPEG is decoded by the same float IDCT picview uses,\n\
+    which the kernel borrows the FPU for and hands straight back;\n\
+    every other decoder is integer code and does without one.\n\
 \n\
     The picture lives in the RAM filesystem and is therefore\n\
     forgotten at reboot, where the kernel seeds the shipped desktop\n\
@@ -1239,6 +1243,110 @@ SYSCALLS\n\
     audio_open, audio_set_fmt, audio_write, audio_pending, audio_pause,\n\
     audio_reset, audio_close   the AC'97 playback channel\n"
 
+#define IMAGINE_PAGE "NAME\n\
+    imagine - put a picture on the screen, with nothing in between\n\
+\n\
+SYNOPSIS\n\
+    imagine FILE\n\
+\n\
+DESCRIPTION\n\
+    Draws a picture straight onto the display, through /dev/fb0, and\n\
+    returns. Nothing else is involved: no window, no canvas, no\n\
+    compositor and no palette of its own. What the monitor shows\n\
+    afterwards is the decoder's output and the display driver's, and\n\
+    nothing of this program's own idea of what the picture should\n\
+    look like.\n\
+\n\
+    That is the whole reason it exists. A desktop program draws through\n\
+    vgfx, which puts a window on the screen, quantises colour to the\n\
+    sixteen palette entries a DAC holds and lets the compositor scale\n\
+    the result -- so when a picture comes out wrong there, the decoder,\n\
+    the palette and the scaling are all still suspects. This program\n\
+    takes the display's own frame instead, and a wrong picture here is\n\
+    a wrong picture in px.h or on the hardware.\n\
+\n\
+    The picture is fitted to the display the way a photograph is fitted\n\
+    to a page: scaled to fit, centred, keeping its own shape, with the\n\
+    rest of the screen black. A 32bpp display gets true colour, a pixel\n\
+    being a B8G8R8X8 word written whole. An 8bpp display has a DAC in\n\
+    front of it and can hold only one of sixteen slots, so each pixel is\n\
+    reduced to the nearest entry of the palette the kernel programmed\n\
+    (VNU_SYS_gfx_palette) -- the closest the hardware can get, which is\n\
+    the display's limit and not this program's.\n\
+\n\
+    BMP, PNG and JPEG are read, at most 8192 pixels on a side and 4 MiB\n\
+    of file. A file that is not one of those, or whose header claims a\n\
+    size past those limits, is refused without touching the screen.\n\
+\n\
+    The picture stays on the screen until a key is pressed, which is\n\
+    what puts the console back in front of it: the program holds the\n\
+    display for exactly as long as it is worth looking at, and gives\n\
+    the machine back the moment anyone wants to type at it. Until then\n\
+    the frame is the device's to lend and this program's to paint;\n\
+    after it the text mode is back, with the console's own characters\n\
+    on the screen.\n\
+\n\
+    Where the picture ends up is the device's business, not this\n\
+    program's: the desktop draws into the same frame, and it redraws\n\
+    when it has a reason to -- a window changed, or the pointer moved --\n\
+    so a desktop that is running takes the picture back at its next\n\
+    redraw. That is why this one waits for a key rather than going\n\
+    straight back to the shell.\n\
+\n\
+FILES\n\
+    /dev/fb0            the display's own frame, mapped on open\n\
+\n\
+EXIT STATUS\n\
+    0 on success, 1 if the file cannot be read, is not an image this\n\
+    can show, or the display cannot be put into a mode with a frame.\n\
+\n\
+THE DEVICE: /dev/fb0\n\
+\n\
+    Opening /dev/fb0 maps the display's frame into the calling\n\
+    process at the fixed address VNU_FB_VA and returns a descriptor.\n\
+    A read of struct vnu_fb_info (in <vnu/abi.h>) answers where that\n\
+    address is and how the frame is laid out: va, width, height, bpp\n\
+    (8 or 32), stride in bytes a row, and size for the whole frame.\n\
+    The program writes pixels into va directly and then writes zero\n\
+    bytes to the descriptor, which puts the frame on the screen. A\n\
+    write with data instead copies those bytes into the frame at the\n\
+    descriptor's position, which lseek moves.\n\
+\n\
+    Opening the device takes the display with it. A machine at its\n\
+    prompt is in text mode, where there is no frame to map, so an\n\
+    open there programs the mode the last graphics session left\n\
+    behind -- the one the desktop itself would use -- and maps that\n\
+    frame. Open fails with ENODEV only when the card cannot be put\n\
+    into a mode with a frame at all.\n\
+\n\
+    Closing the last descriptor gives the mode back. The console has\n\
+    been sitting in its own cells the whole time, unreadable while the\n\
+    card reads a frame, so returning to text mode is what puts those\n\
+    characters on the screen again; a desktop that has taken the\n\
+    display over in the meantime keeps it. Closing is also how a\n\
+    program that paints and then exits hands the machine back its\n\
+    prompt.\n\
+\n\
+    Nothing else draws on the display while the descriptor is open.\n\
+    The console redraws itself from a scheduler pass, and it waits for\n\
+    the close to do it: a pass that ran anyway would paint its\n\
+    characters straight over the program's picture, and on a display\n\
+    that has no text mode of its own -- a virtio-gpu -- it would hand\n\
+    the whole screen back at the console's 720x400 geometry while the\n\
+    program still held a frame twice that size. So what is on the\n\
+    screen stays what was drawn into it, for as long as the program\n\
+    keeps the descriptor open.\n\
+\n\
+    A mode change replaces the frame a descriptor was opened on, so a\n\
+    read re-maps and answers with the frame in use now, which may be\n\
+    a different size -- read the geometry again rather than trusting\n\
+    the one you started with. The frame belongs to the display and not\n\
+    to the program: exiting, forking or execveing takes the mapping\n\
+    with it and never hands the frame back.\n\
+\n\
+SEE ALSO\n\
+    wallpaper, picview, vgfx\n\
+"
 #define HELLO_PAGE "NAME\n\
     hello - demonstration program\n\
 \n\
@@ -1479,7 +1587,7 @@ static const struct Page pages[] = {
      CLEAR_PAGE},
     {"wc",       "count lines, words and bytes",
      WC_PAGE},
-    {"head",     "print the first lines of a file",
+    {"head",     "print the first lines (or bytes) of a file",
      HEAD_PAGE},
     {"tail",     "print the last lines of a file",
      TAIL_PAGE},
@@ -1519,6 +1627,8 @@ static const struct Page pages[] = {
      PICVIEW_PAGE},
     {"wallpaper", "show or set the desktop background",
      WALLPAPER_PAGE},
+    {"imagine",   "draw a picture straight onto the display (/dev/fb0)",
+     IMAGINE_PAGE},
     {"clock",    "analog clock, stopwatch and timer",
      CLOCK_PAGE},
     {"play",     "WAV sound player for the desktop",

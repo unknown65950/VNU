@@ -13,6 +13,7 @@
 #include "../proc/embedded_calc.h"
 #include "../proc/embedded_files.h"
 #include "../proc/embedded_prefs.h"
+#include "../proc/embedded_browser.h"
 #include "../proc/embedded_picview.h"
 #include "../proc/embedded_clock.h"
 #include "../proc/embedded_play.h"
@@ -26,7 +27,7 @@
 #include "../proc/embedded_pic_gray_alpha.h"
 #include "../proc/embedded_pic_shapes_pal.h"
 #include "../proc/embedded_pic_shapes_rgba.h"
-#include "../proc/embedded_wallpaper_png.h"
+#include "../proc/embedded_wallpaper_jpg.h"
 
 namespace {
 
@@ -174,6 +175,7 @@ void install_demo_apps()
     install_one("clock", vnu::vgfx::COLOR_LGREEN, IconGlyph::ICON_CLOCK, embedded_clock_elf, embedded_clock_elf_size);
     install_one("play", vnu::vgfx::COLOR_LBLUE, IconGlyph::ICON_MUSIC, embedded_play_elf, embedded_play_elf_size);
     install_one("sticky", vnu::vgfx::COLOR_YELLOW, IconGlyph::ICON_NOTE, embedded_sticky_elf, embedded_sticky_elf_size);
+    install_one("browser", vnu::vgfx::COLOR_LCYAN, IconGlyph::ICON_TERM, embedded_browser_elf, embedded_browser_elf_size);
 
     /* Third-party modules come last, so a module cannot displace a
      * shipped app out of a tile slot the desktop already draws. */
@@ -219,15 +221,16 @@ void install_demo_pics()
      * lives beside the pack instead of inside it. Two copies: the shipped
      * original nobody ever writes to, and the one in use, which the
      * wallpaper picker replaces. gui/wallpaper.cpp decodes the latter
-     * with px.h (BMP/PNG) and stretches it over the desktop. */
+     * with px.h (BMP/PNG/JPEG), quantises it into the display's picture
+     * half of the palette and stretches it over the desktop. */
     const char* const seeds[2] = { VNU_WALLPAPER_SHIPPED, VNU_WALLPAPER };
     for (int i = 0; i < 2; ++i) {
         int wfd = vnu::vfs::open(seeds[i], O_WRONLY | O_CREAT | O_TRUNC);
         if (wfd < 0)
             continue;
-        vnu::vfs::write(wfd, embedded_wallpaper_png_elf, embedded_wallpaper_png_elf_size);
+        vnu::vfs::write(wfd, embedded_wallpaper_jpg_elf, embedded_wallpaper_jpg_elf_size);
         vnu::vfs::close(wfd);
-        vnu::images::add(vnu::images::Resources, embedded_wallpaper_png_elf_size);
+        vnu::images::add(vnu::images::Resources, embedded_wallpaper_jpg_elf_size);
     }
 }
 

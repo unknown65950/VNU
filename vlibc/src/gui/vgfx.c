@@ -682,3 +682,4 @@ int vgfx_poll(vgfx_event_t* ev)
         }
     }
 }
+/* Simple font helpers using tx.h - stub for now; will be expanded */
