@@ -666,69 +666,97 @@ constexpr int SHEBANG_MAX = 128;
 /* How many `#!` indirections this syscall has already followed. */
 static int shebang_depth = 0;
 
-int sys_execve(Registers* trap, const char* path, char* const* argv,
-               char* const* envp)
-{
-    const EmbeddedProg* prog = find_embedded(path);
-
-    /* Snapshot argv strings BEFORE load() overwrites userspace at
-     * 0x400000 - and test the bound before the subscript, on purpose.
-     * Written the other way round the subscript is evaluated at the
-     * limit, so a caller whose list stops exactly there has its element
-     * past the end read before the loop notices it is full - and
-     * argv[] comes from the program being exec'd, so that read is not
-     * one the kernel can vouch for. POSIX says the list is terminated; a
-     * program that gets that wrong is to be refused, not read one entry
-     * further. */
+/* One execve()'s worth of argument, environment and path strings, copied
+ * out of the arrays the calling program handed in before anything can
+ * overwrite them: the load further down replaces userspace at 0x400000,
+ * which is where those arrays live.
+ *
+ * A struct rather than locals because the snapshot has to outlive the call
+ * that took it. The `#!' branch in exec_prepared() recurses and hands the
+ * strings below straight to the recursive call, so they must still be
+ * there when it comes back. The caller holds this for the whole of
+ * exec_prepared(), which is exactly as long as they are needed. */
+struct ExecSnapshot {
     char arg_store[8][96];
     char* arg_ptrs[9];
-    int argc = 0;
-    if (argv) {
-        while (argc < 8 && argv[argc]) {
-            const char* s = argv[argc];
-            int j = 0;
-            for (; s[j] && j < 95; ++j)
-                arg_store[argc][j] = s[j];
-            arg_store[argc][j] = 0;
-            arg_ptrs[argc] = arg_store[argc];
-            ++argc;
-        }
-    }
-    if (argc == 0) {
-        int j = 0;
-        for (; path && path[j] && j < 95; ++j)
-            arg_store[0][j] = path[j];
-        arg_store[0][j] = 0;
-        arg_ptrs[0] = arg_store[0];
-        argc = 1;
-    }
-    arg_ptrs[argc] = 0;
-
-    /* The environment is snapshotted the same way, for the same reason:
-     * the load that follows overwrites the memory argv[] points into. */
+    int argc;
     char env_store[VNU_MAX_ENV][96];
     char* env_ptrs[VNU_MAX_ENV + 1];
-    int envc = 0;
-    if (envp) {
-        while (envc < VNU_MAX_ENV && envp[envc]) {
-            const char* s = envp[envc];
-            int j = 0;
-            for (; s[j] && j < 95; ++j)
-                env_store[envc][j] = s[j];
-            env_store[envc][j] = 0;
-            env_ptrs[envc] = env_store[envc];
-            ++envc;
-        }
-    }
-    env_ptrs[envc] = 0;
-
+    int envc;
     char path_copy[96];
+};
+
+/* Copy argv and envp into `snap`.
+ *
+ * The bound is tested before the subscript, on purpose. Written the other
+ * way round the subscript is evaluated at the limit, so a caller whose
+ * list stops exactly there has its element past the end read before the
+ * loop notices it is full - and argv[] comes from the program being
+ * exec'd, so that read is not one the kernel can vouch for. POSIX says
+ * the list is terminated; a program that gets that wrong is to be
+ * refused, not read one entry further. */
+static void take_snapshot(ExecSnapshot& snap, const char* path,
+                          char* const* argv, char* const* envp)
+{
+    snap.argc = 0;
+    snap.envc = 0;
+
+    /* The path first, because argv[0] falls back to it below. */
     {
         int j = 0;
         for (; path && path[j] && j < 95; ++j)
-            path_copy[j] = path[j];
-        path_copy[j] = 0;
+            snap.path_copy[j] = path[j];
+        snap.path_copy[j] = 0;
     }
+
+    if (argv) {
+        while (snap.argc < 8 && argv[snap.argc]) {
+            const char* s = argv[snap.argc];
+            int j = 0;
+            for (; s[j] && j < 95; ++j)
+                snap.arg_store[snap.argc][j] = s[j];
+            snap.arg_store[snap.argc][j] = 0;
+            snap.arg_ptrs[snap.argc] = snap.arg_store[snap.argc];
+            ++snap.argc;
+        }
+    }
+    /* A caller that named no arguments still gets one, the path, as
+     * POSIX says argv[0] is. It is already a copy of its own. */
+    if (snap.argc == 0) {
+        snap.arg_ptrs[0] = snap.path_copy;
+        snap.argc = 1;
+    }
+    snap.arg_ptrs[snap.argc] = 0;
+
+    /* The environment the same way, for the same reason. */
+    if (envp) {
+        while (snap.envc < VNU_MAX_ENV && envp[snap.envc]) {
+            const char* s = envp[snap.envc];
+            int j = 0;
+            for (; s[j] && j < 95; ++j)
+                snap.env_store[snap.envc][j] = s[j];
+            snap.env_store[snap.envc][j] = 0;
+            snap.env_ptrs[snap.envc] = snap.env_store[snap.envc];
+            ++snap.envc;
+        }
+    }
+    snap.env_ptrs[snap.envc] = 0;
+}
+
+/* execve() with the arguments already in kernel memory: `path` and every
+ * string behind `arg_ptrs` and `env_ptrs` belongs to a frame that outlives
+ * this call, so nothing here copies anything again.
+ *
+ * Separate from sys_execve() so that the `#!' recursion calls *this* and
+ * not the whole thing. Each level of a chain would otherwise put another
+ * 2.3 KiB of arg_store and env_store on the kernel stack - which
+ * arch/i386/boot/boot.s declares as 16 KiB the whole way - for a copy of
+ * strings the level above had already made and is still holding. */
+static int exec_prepared(Registers* trap, const char* path,
+                         char* const* arg_ptrs, int argc,
+                         char* const* env_ptrs, int envc)
+{
+    const EmbeddedProg* prog = find_embedded(path);
 
     /* A file that starts with `#!` is a script, and POSIX says execve()
      * runs its interpreter on it: the interpreter becomes the new image,
@@ -788,7 +816,7 @@ int sys_execve(Registers* trap, const char* path, char* const* argv,
              * argument that is not one. */
             if (sarg[0])
                 sargv[sn++] = sarg;
-            sargv[sn++] = const_cast<char*>(path_copy);
+            sargv[sn++] = const_cast<char*>(path);
             for (int i = 1; i < argc && sn < 8; ++i)
                 sargv[sn++] = arg_ptrs[i];
             sargv[sn] = 0;
@@ -799,7 +827,13 @@ int sys_execve(Registers* trap, const char* path, char* const* argv,
                 --shebang_depth;
                 return -VNU_ENOEXEC;
             }
-            int r = sys_execve(trap, interp, sargv, envp);
+            /* The recursion runs on this frame's own strings - `interp`
+             * out of the line just read, `path` and the arguments below
+             * out of the snapshot - all of which outlive the call, and on
+             * the environment already copied, rather than on the arrays
+             * the original caller passed in. Those are the program's, and
+             * this call is what is about to overwrite them. */
+            int r = exec_prepared(trap, interp, sargv, sn, env_ptrs, envc);
             --shebang_depth;
             return r;
         }
@@ -881,7 +915,7 @@ int sys_execve(Registers* trap, const char* path, char* const* argv,
     p.regs = {};
     p.regs.eip = entry;
     p.regs.eflags = 0x202;
-    setup_user_stack(p, argc, arg_ptrs, path_copy, env_ptrs, envc);
+    setup_user_stack(p, argc, arg_ptrs, path, env_ptrs, envc);
     /* What POSIX says execve does to signals, and why each half is the
      * way it is: the new image is a new program, so what it does about
      * a signal is its own business and every handler goes back to the
@@ -903,6 +937,15 @@ int sys_execve(Registers* trap, const char* path, char* const* argv,
     trap->ebx = trap->ecx = trap->edx = 0;
     trap->esi = trap->edi = trap->ebp = 0;
     return 0;
+}
+
+int sys_execve(Registers* trap, const char* path, char* const* argv,
+               char* const* envp)
+{
+    ExecSnapshot snap;
+    take_snapshot(snap, path, argv, envp);
+    return exec_prepared(trap, snap.path_copy, snap.arg_ptrs, snap.argc,
+                         snap.env_ptrs, snap.envc);
 }
 
 extern "C" void vnu_enter_user(uint32_t entry, uint32_t user_esp);
