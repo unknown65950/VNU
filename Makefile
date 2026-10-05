@@ -200,6 +200,7 @@ doctor: ## check that the host has everything the build and the tests need
 	    printf '  note    no grub-mkrescue — the ISO is built the portable way (xorriso + grub-seed)\n'; \
 	fi; \
 	if [ $$missing -ne 0 ]; then printf '\nsome tools are missing, see README -> Build and run\n'; exit 1; fi; \
+	$(MAKE) --no-print-directory mirrors; \
 	printf '\neverything is in place\n'
 
 size: ## sizes of the built artifacts (the host-side counterpart of `vnu size`)
@@ -215,6 +216,25 @@ size: ## sizes of the built artifacts (the host-side counterpart of `vnu size`)
 	if ls $(KERNEL_DIR)/proc/embedded_*.h >/dev/null 2>&1; then \
 	    printf '  %-28s %s headers\n' "embedded_*.h" "$$(ls $(KERNEL_DIR)/proc/embedded_*.h | wc -l)"; \
 	fi
+
+mirrors: ## check that the headers kept in two places are still identical
+	@bad=0; \
+	for pair in \
+	    '$(KERNEL_DIR)/include/vnu/abi.h vlibc/include/vnu/abi.h' \
+	    '$(KERNEL_DIR)/include/vnu/px.h vnu/userspace/gui/px.h'; do \
+	    set -- $$pair; \
+	    if [ ! -f "$$1" ] || [ ! -f "$$2" ]; then \
+	        printf '  MISSING %s or %s\n' "$$1" "$$2"; bad=1; \
+	    elif cmp -s "$$1" "$$2"; then \
+	        printf '  ok      %s\n' "$$1"; \
+	    else \
+	        printf '  DIFFER  %s\n            vs %s\n' "$$1" "$$2"; bad=1; \
+	    fi; \
+	done; \
+	if [ $$bad -ne 0 ]; then \
+	    printf '\ntwo copies of one header have drifted apart\n'; exit 1; \
+	fi; \
+	printf '\nno mirrored header has drifted\n'
 
 ## @cleaning
 

@@ -485,6 +485,11 @@ static int px_png_decode(const uint8_t* d, unsigned n,
     PngAux aux;
     aux.nplte = 0;
     aux.have_trns = 0;
+    unsigned bitpp = (unsigned)bits * (unsigned)ch;
+    unsigned rowbytes = ((unsigned)width * bitpp + 7u) / 8u;
+    unsigned expected = (unsigned)height * (1u + rowbytes);
+    uint8_t* raw = NULL;
+    unsigned dlen = 0;
     uint8_t* idat = NULL;
     unsigned idat_used = 0, idat_cap = 0;
     unsigned _pos = 8;
@@ -545,19 +550,20 @@ static int px_png_decode(const uint8_t* d, unsigned n,
     }
     if (!got_idat)
         goto fail;
-
-    unsigned bitpp = (unsigned)bits * (unsigned)ch;
-    unsigned rowbytes = ((unsigned)width * bitpp + 7u) / 8u;
-    unsigned expected = (unsigned)height * (1u + rowbytes);
-    uint8_t* raw = (uint8_t*)malloc(expected + 1);
-    if (!raw)
-        goto fail;
+    if (!raw) {
+        /* Declared up here, before the first `goto fail`: C++ forbids a
+         * forward jump that crosses the initialisation of an automatic
+         * variable (px.h is plain C99), so everything the failure path can
+         * skip has to already be in scope. */
+        raw = (uint8_t*)malloc(expected + 1);
+        if (!raw)
+            goto fail;
+    }
     if (idat_used < 4)
         goto fail;
     /* zlib wrapper: CMF/FLG header, then DEFLATE. */
     if (((idat[0] << 8) | idat[1]) % 31 != 0 || (idat[1] & 0x20))
         goto fail;
-    unsigned dlen = 0;
     if (def_inflate(idat + 2, idat_used - 2, raw, expected + 1, &dlen) != 0 ||
         dlen != expected)
         goto fail;
