@@ -595,6 +595,31 @@ SUITE = [
     ("man-sticky-text", "cat /tmp/man-sticky.out",
      [r"^NAME$", r"sticky - a sticky note for the desktop",
       r"^KEYS$", r"^FILES$", r"/root/\.sticky-note"], []),
+    # -- the `#!' line, in the kernel ----------------------------------
+    # A `#!' file is run by the interpreter it names, and POSIX puts one
+    # optional argument on that line between the interpreter and the
+    # script. proc/process.cpp wrote the NUL that ends the interpreter's
+    # path and then scanned for the argument starting on that same byte,
+    # so it read back the NUL it had just written, never advanced, and
+    # left the argument an empty string: `#!/bin/sh -e' ran /bin/sh with
+    # no -e at all. The interpreter here is /bin/echo, which prints its
+    # whole argv, so what arrives is visible without a second program -
+    # and vash does not read `#!' lines itself (there is no such code in
+    # exec.c), so running the script does reach the kernel's parse.
+    ("shebang-write", "echo '#!/bin/echo hello' > /tmp/shebang.sh",
+     [], []),
+    ("shebang-arg", "/tmp/shebang.sh",
+     [r"^hello /tmp/shebang\.sh$"], []),
+    # The script's own arguments still follow its path, so the fix does
+    # not come at the cost of dropping the rest of argv.
+    ("shebang-own-args", "/tmp/shebang.sh one two",
+     [r"^hello /tmp/shebang\.sh one two$"], []),
+    # A line with no argument must not grow an empty argv[1]: an empty
+    # argument is a real argument that is not one.
+    ("shebang-write-noarg", "echo '#!/bin/echo' > /tmp/shebang-noarg.sh",
+     [], []),
+    ("shebang-noarg", "/tmp/shebang-noarg.sh",
+     [r"^/tmp/shebang-noarg\.sh$"], []),
     # -- third-party modules (thams/) ----------------------------------
     # A module lives in thams/, not in vnu/userspace/, and nothing in
     # the system tree was edited to make it a command. These three are

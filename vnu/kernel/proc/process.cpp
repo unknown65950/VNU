@@ -745,22 +745,40 @@ int sys_execve(Registers* trap, const char* path, char* const* argv,
             char* interp = p;
             while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
                 ++p;
-            char saved = *p;
-            *p = 0;
-            while (*p == ' ' || *p == '\t')
-                ++p;
-            char* sarg = p;
-            while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
-                ++p;
-            *p = 0;
             if (!interp[0])
                 return -VNU_ENOEXEC;
+            /* The blank that ended the interpreter path is also where the
+             * argument starts, so both halves of the line want a NUL
+             * written over one of its bytes: the one that ends `interp`,
+             * and the one that ends the argument. Neither may be written
+             * before the scan that still needs that byte has read it -
+             * the scan for the argument starts on the very byte the first
+             * NUL goes on, so writing it first leaves the scan reading
+             * back the NUL it just put there, unable to advance, with
+             * `sarg` on an empty string and the guard below a branch
+             * nothing can reach.
+             *
+             * So both scans run first, each on its own cursor, and the
+             * two terminators are placed only afterwards. */
+            char* arg = p;
+            while (*arg == ' ' || *arg == '\t')
+                ++arg;
+            char* sarg = arg;
+            while (*arg && *arg != ' ' && *arg != '\t' &&
+                   *arg != '\n' && *arg != '\r')
+                ++arg;
+            char* arg_end = arg;
+            *p = 0;
+            *arg_end = 0;
             /* argv: interp, [arg], the script, then the script's own
              * arguments — the ones argv held for this execve. */
             char* sargv[9];
             int sn = 0;
             sargv[sn++] = interp;
-            if (sarg[0] && saved != 0)
+            /* Empty means the line had no argument at all - the blank was
+             * the end of the line - and an empty argv[1] would be a real
+             * argument that is not one. */
+            if (sarg[0])
                 sargv[sn++] = sarg;
             sargv[sn++] = const_cast<char*>(path_copy);
             for (int i = 1; i < argc && sn < 8; ++i)
