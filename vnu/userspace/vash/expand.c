@@ -295,12 +295,30 @@ static char* parse_name(const char* body, const char** name,
 
 static int is_name(const char* s)
 {
-    if (!*s)
+    if (!s || !*s)
         return 0;
-    if ((*s >= '0' && *s <= '9') || *s == '?' || *s == '#' || *s == '@' ||
-        *s == '*' || *s == '$' || *s == '!')
-        return 1;
-    return (*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || *s == '_';
+    /* The one-byte special forms: $? $# $@ $* $$ $! */
+    if (!s[1])
+        return (s[0] >= '0' && s[0] <= '9') || s[0] == '?' || s[0] == '#' ||
+               s[0] == '@' || s[0] == '*' || s[0] == '$' || s[0] == '!';
+    if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || *s == '_'))
+        return 0;
+    const char* p = s + 1;
+    while (*p && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                  (*p >= '0' && *p <= '9') || *p == '_'))
+        ++p;
+    /* A subscript belongs to the name: ${#a[0]} is the element's length.
+     * The scan is written out because vlibc has no strchr, which is one
+     * of the POSIX gaps B26 collects. */
+    if (*p == '[') {
+        const char* close = p + 1;
+        while (*close && *close != ']')
+            ++close;
+        if (!*close || close[1])
+            return 0;
+        p = close + 1;
+    }
+    return *p == 0;
 }
 
 static const char* value_of(const char* name, int idx, int is_at)
@@ -430,10 +448,20 @@ static void expand_brace_body(Exp* e, const char* body, int quoted)
         add_text(e, var_get(named), quoted, 1);
         return;
     }
-    /* ${!prefix*} — every name that starts with `prefix'. */
-    if (body[0] == '!' && body[1] && (body[1] == '*' || body[1] == '@') &&
-        body[2]) {
-        const char* prefix = body + 2;
+    /* ${!prefix*} / ${!prefix@} — every name that starts with `prefix'.
+     * The glob character closes the word, as in ${!P*}, so it is the last
+     * byte of the body. The guard used to look for it straight after the
+     * `!', as in ${!*P}, which is not a form anything writes: no body
+     * could match, so the loop below was unreachable and the expression
+     * fell through to expanding a variable named `!P*'. */
+    int blen = (int)strlen(body);
+    if (body[0] == '!' && blen > 2 && (body[blen - 1] == '*' || body[blen - 1] == '@')) {
+        char prefix[64];
+        int pn = blen - 2; /* one byte for the `!' and one for the glob */
+        if (pn > (int)sizeof(prefix) - 1)
+            pn = (int)sizeof(prefix) - 1;
+        memcpy(prefix, body + 1, (unsigned long)pn);
+        prefix[pn] = 0;
         int sep = sh_ifs ? sh_ifs[0] : ' ';
         int first = 1;
         int n = 0;
@@ -446,6 +474,8 @@ static void expand_brace_body(Exp* e, const char* body, int quoted)
             first = 0;
             add_text(e, names[i], quoted, 1);
         }
+        /* var_names() lends the table's own name pointers; only the array
+         * is ours to release. */
         free(names);
         return;
     }
