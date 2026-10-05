@@ -60,6 +60,22 @@
 
 namespace vnu::fb {
 
+// What one open of the device did to the display. An open has to be able
+// to give back exactly what it took and nothing else, and it has to be
+// able to say which program the display belonged to before it arrived -
+// so the outcome is a value the caller passes back if the open fails
+// part-way through.
+enum class Prep {
+    Refused,   // the display could not be prepared, and nothing was left
+               // behind: this is what an open that gets no frame at all
+               // answers
+    Shared,    // the display was already a frame somebody was presenting,
+               // a desktop or another descriptor on this device, so this
+               // open took nothing and has nothing to give back
+    TookMode,  // this open programmed the mode, so this open is what has
+               // to give it back
+};
+
 // Put the display into a graphics mode if it is not in one already, and
 // leave the frame it takes mapped to nothing in particular. This is what
 // an open does first: a frame in a text-mode card's memory is a picture
@@ -69,12 +85,15 @@ namespace vnu::fb {
 // The mode is the one the last session chose (/etc/vnuconfig/gfx.conf,
 // the same preference the desktop starts from, and a config that cannot
 // be read leaves the driver's own default). A card that will not take a
-// mode, or a pool with nothing left in it, answers false and the open is
-// refused: a picture that is never shown is not worth mapping.
+// mode, or a pool with nothing left in it, answers Prep::Refused and the
+// open is refused: a picture that is never shown is not worth mapping.
 //
-// True also says the display is the caller's own: it stays that way
-// until release(), and nothing else draws on it in between.
-bool ensure_frame();
+// The answer also says whether the display is now the caller's own to
+// give back - Prep::TookMode means it is, and it stays that way until
+// release(). A desktop already presenting the frame is left presenting
+// it: another program on top of the desktop is a windowed app, not a
+// holder of the display.
+Prep ensure_frame();
 
 // True when the display is in a graphics mode and holds a frame, so that
 // what follows has something to answer with. Does not enter one: this is
@@ -87,6 +106,15 @@ bool available();
 // no-op when a desktop is presenting the screen (see release()'s own
 // comments for both halves of that).
 void release();
+
+// Give back what an open took, for an open that then failed: the answer
+// ensure_frame() gave is handed straight back here. This is not release() -
+// it is for an open that never became a descriptor, so there is nothing
+// to end, only an effect on the display to undo. Undoing a Prep::Shared
+// open does nothing at all, which is the whole point: the display it
+// found belongs to whoever was presenting it already, and a failed open
+// must not take the screen away from the program that already had it.
+void undo_open(Prep prep);
 
 // Map the frame into `pgdir_phys` (the address space the caller is
 // running in) if it is not already the one mapped there. Returns false

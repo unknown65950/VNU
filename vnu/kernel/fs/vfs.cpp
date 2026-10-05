@@ -1116,14 +1116,19 @@ int open(const char* path, uint32_t flags)
      * on the screen by anyone, so asking for the display's own pixels is
      * a request for a mode as much as for a mapping. */
     if (nodes[ni].dev == DevKind::Framebuffer) {
-        if (!vnu::fb::ensure_frame())
+        const vnu::fb::Prep prep = vnu::fb::ensure_frame();
+        if (prep == vnu::fb::Prep::Refused)
             return -VNU_ENODEV;
         /* A mapping that could not be made is an open that has to be
          * undone, not one that is merely refused: the mode is programmed
          * by now, the display is this device's, and a program that never
-         * got a frame to draw into has no way to give either back. */
+         * got a frame to draw into has no way to give either back. Only
+         * what this very open took is given back - the display may have
+         * belonged to another program, or to the desktop, before it
+         * started, and undoing more than that would take the screen away
+         * from whoever still has it. */
         if (!vnu::fb::map_for(caller_pgdir())) {
-            vnu::fb::release();
+            vnu::fb::undo_open(prep);
             return -VNU_ENODEV;
         }
     }

@@ -757,8 +757,10 @@ bool desktop_presenting()
 }
 
 /* Whether a program is painting the frame itself (see
- * g_program_presenting). fb::ensure_frame() sets it, the last close of
- * the device clears it. */
+ * g_program_presenting). fb::ensure_frame() sets it when it takes the
+ * display, the last close of the device clears it, and an open that took
+ * a frame somebody else was presenting leaves it alone - in gfx mode one
+ * of the two flags is always set, and the console's pass asks about both. */
 void program_presenting_set(bool on)
 {
     g_program_presenting = on;

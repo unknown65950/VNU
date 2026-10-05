@@ -65,14 +65,18 @@ bool available()
  * change is not ours to put back either. */
 bool g_took_mode = false;
 
-bool ensure_frame()
+Prep ensure_frame()
 {
     if (available()) {
         /* Someone is already presenting the display - a desktop, or
          * another program - and the descriptor that is being opened is
-         * one more thing painting the same frame. */
-        vnu::vgfx::program_presenting_set(true);
-        return true;
+         * one more thing painting the same frame. The console is already
+         * being kept off it by whichever of those two is true, so the
+         * flag is left exactly as it was found: setting it again here is
+         * what makes an open that fails further down leave it set for
+         * good, and the console's own pass stays off long after the
+         * display has been handed back. */
+        return Prep::Shared;
     }
     /* The mode the last session chose, before the card is asked for
      * anything: from text mode there are no registers to program, which
@@ -81,22 +85,39 @@ bool ensure_frame()
      * what a machine with no config file has anyway. */
     (void)vnu::gfxconf::load();
     if (!vnu::vgfx::enter_gfx_mode())
-        return false;
+        return Prep::Refused;
     g_took_mode = true;
     if (!available()) {
         /* A mode without a frame in it is a mode nobody can draw into, so
          * the mode is given back rather than left taken: an open that is
          * refused must not leave the machine in a state the refused open
-         * is what put it in. */
-        release();
-        return false;
+         * is what put it in. Nothing was presenting the display, because
+         * nothing could - there is no frame to present - so only the mode
+         * is at stake here. */
+        g_took_mode = false;
+        if (!vnu::vgfx::desktop_presenting())
+            vnu::vgfx::exit_to_text();
+        return Prep::Refused;
     }
     /* The display is now this program's to paint, and the console's
      * scheduler pass has to keep off it until the descriptor is closed:
      * the console is pixels like anything else, and a pass that redraws
      * a keystroke's row over a picture destroys the picture. */
     vnu::vgfx::program_presenting_set(true);
-    return true;
+    return Prep::TookMode;
+}
+
+void undo_open(Prep prep)
+{
+    /* Only an open that programmed the mode has a mode to give back. One
+     * that joined a frame somebody else was presenting has nothing to
+     * undo: clearing the presenting flag there would hand the console
+     * back while the other program still holds a descriptor and keeps
+     * painting into it, and giving the mode back would take the display
+     * away from it outright. */
+    if (prep != Prep::TookMode)
+        return;
+    release();
 }
 
 void release()
