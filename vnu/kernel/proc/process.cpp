@@ -781,7 +781,19 @@ static int exec_prepared(Registers* trap, const char* path,
             char* interp = p;
             while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
                 ++p;
-            if (!interp[0])
+            /* An interpreter was named only if the scan above moved. That
+             * scan stops at a line end as well as at a blank, so a line
+             * that is `#!` and nothing else leaves `interp` pointing at
+             * the "\n" - non-empty, so a length test passes it - and asking
+             * the VFS for a program by that name answers ENOENT about the
+             * newline instead of ENOEXEC about the script. Deciding on the
+             * cursor covers that and the NUL at the end of the line in one
+             * test, since both leave it where it started.
+             *
+             * The end of the line is the end of the line: an interpreter
+             * named on the next one is not this line's, and skipping to it
+             * would run a program the author did not put on this line. */
+            if (p == interp)
                 return -VNU_ENOEXEC;
             /* The blank that ended the interpreter path is also where the
              * argument starts, so both halves of the line want a NUL
