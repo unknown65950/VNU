@@ -12,12 +12,14 @@
 #include <vlibc/signal.h>
 #include <vlibc/errno.h>
 #include <vlibc/sys/stat.h>
+/* Every other vash translation unit includes this; run_string() and
+ * sh_status used to be hand-declared here instead, and twice each. */
+#include "shell.h"
 
 /* read_line is defined near the bottom (after load_hist); login/session
- * helpers above it need the prototype. */
+ * helpers above it need the prototype. It is the one thing this file
+ * needs that shell.h cannot declare, because it is static to vash.c. */
 static int read_line(char* line, int max);
-int run_string(const char* text, int capture);
-extern int sh_status;
 
 /* The SIGINT handler, which does nothing on purpose: ^C is an event in
  * the line, and only the line editor knows what the line looks like
@@ -28,8 +30,6 @@ static void on_intr(int sig)
 {
     (void)sig;
 }
-int run_string(const char* text, int capture);
-extern int sh_status;
 
 #define HIST 16
 #define LMAX 128
@@ -833,18 +833,6 @@ int main(int argc, char** argv)
         adopt_session();
     else if (do_login() < 0)
         return 0;
-    /* 0x9000: warm-start flag (shared physical mem, no paging). */
-    volatile unsigned* warm = 0;
-    /* skip warm-start in standalone test builds */
-    if (0) {
-        warm = (volatile unsigned*)0x9000;
-        if (warm && !*warm) {
-            w("VNU vash — PATH=");
-            w(path_var);
-            w("\ntype 'help'\n");
-            *warm = 1;
-        }
-    }
     if (argc > 1) {
         if (strcmp(argv[1], "-c") == 0 && argc > 2) {
             run_string(argv[2], 0);
