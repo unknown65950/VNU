@@ -1405,9 +1405,12 @@ THE DEVICE: /dev/fb0\n\
     been sitting in its own cells the whole time, unreadable while the\n\
     card reads a frame, so returning to text mode is what puts those\n\
     characters on the screen again; a desktop that has taken the\n\
-    display over in the meantime keeps it. Closing is also how a\n\
-    program that paints and then exits hands the machine back its\n\
-    prompt.\n\
+    display over in the meantime keeps it. Closing is not what a\n\
+    program has to remember to do: the descriptor is recorded against\n\
+    the process that opened it, and a process that exits or is killed\n\
+    has its descriptors closed for it, so a program that paints and\n\
+    then dies hands the machine its prompt back anyway. Until it\n\
+    does, what is on the screen stays what was drawn into it.\n\
 \n\
     Nothing else draws on the display while the descriptor is open.\n\
     The console redraws itself from a scheduler pass, and it waits for\n\

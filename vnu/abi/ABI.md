@@ -496,8 +496,22 @@ none (virtio-gpu) it would hand the whole scanout back at the console's
 goes back
 only if this device was what took it and no desktop has claimed the display
 in the meantime; a frame the desktop was already showing stays with the
-desktop. Closing is also what a program that draws and exits has to do to
-leave a prompt behind.
+desktop.
+
+Closing is not a program's obligation, though, and a program cannot be
+asked to do it. Every descriptor records the pid that opened it, and when
+a process stops running — `exit()`, or a signal that terminates it — the
+kernel closes what that pid held, through `close()`, so a descriptor on
+this device still gives the display back when its holder dies rather than
+leaving the machine on a black screen with no prompt. A redirection left
+on fd 0/1/2 by a process that died is put back to the console at the same
+time, since the descriptor table is global to the kernel and `> file`
+would otherwise outlive the shell that typed it.
+
+An open that fails part-way does the same for itself: it gives back the
+mode if it was what programmed the mode, and nothing at all if the display
+was already somebody else's, so a program that cannot be given a frame
+does not take the screen away from the program that already has one.
 
 `write(fd, 0, 0)` puts the frame on the screen: the whole frame counts as
 damage and the display is handed it. That is the handshake for a program

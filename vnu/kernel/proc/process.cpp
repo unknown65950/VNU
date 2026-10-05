@@ -912,6 +912,18 @@ void sys_exit(int status)
     Process& p = table[current_idx];
     p.exit_code = status;
 
+    /* The descriptors go with the process, here and now rather than when
+     * the parent gets round to reaping the corpse: a program that exits
+     * cannot close them, and one of them may be the last descriptor on
+     * /dev/fb0, which leaves the display in a graphics mode with the
+     * console's pass suppressed until somebody closes an fd that is not
+     * there any more. A parent that never reaps - which any parent can
+     * do - would leave it that way for good.
+     *
+     * The other place a running process stops running is signal_kill()'s
+     * cross-process death, which cannot come through here. */
+    vnu::vfs::close_all_of(p.pid);
+
     if (p.coro) {
         /* Scheduler-managed process: turn into a zombie for the parent
          * (init) to reap via waitpid, and hand control back to the
@@ -1409,6 +1421,7 @@ int signal_kill(int pid, int sig)
                  * leave it as a zombie for its parent to reap, the same
                  * shape an exit leaves. */
                 p.exit_code = 128 + sig;
+                vnu::vfs::close_all_of(p.pid);
                 p.state = State::Zombie;
                 wake_waiter_of(p.pid);
                 return 0;
@@ -1432,8 +1445,11 @@ int signal_kill(int pid, int sig)
             if (i != current_idx) {
                 /* Another process: the death is its own to have, so
                  * leave it as a zombie for its parent to reap, the same
-                 * shape an exit leaves. */
+                 * shape an exit leaves - and the descriptors it cannot
+                 * close go with it, as they do in sys_exit() above,
+                 * which is the path a signal takes on itself. */
                 p.exit_code = 128 + sig;
+                vnu::vfs::close_all_of(p.pid);
                 p.state = State::Zombie;
                 wake_waiter_of(p.pid);
                 return 0;

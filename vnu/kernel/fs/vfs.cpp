@@ -827,9 +827,9 @@ uint32_t uptime_seconds()
 void init()
 {
     for (int i = 0; i < MAX_FD; ++i)
-        files[i] = {false, 0, 0, -1};
+        files[i] = {false, 0, 0, -1, 0};
     for (int i = 0; i < 3; ++i)
-        files[i] = {true, 0, 0, -1};
+        files[i] = {true, 0, 0, -1, 0};
     for (int i = 0; i < MAX_N; ++i)
         nodes[i] = {};
     copy(cwd, "/", PATH_CAP);
@@ -1137,7 +1137,8 @@ int open(const char* path, uint32_t flags)
      * wintask::GFX_SURFACE_VA), not a descriptor. */
     for (int i = 3; i < MAX_FD; ++i) {
         if (!files[i].used) {
-            files[i] = {true, 0, flags, ni};
+            files[i] = {true, 0, flags, ni,
+                        static_cast<uint32_t>(vnu::proc::current_pid())};
             /* Truncating a character device is meaningless (and would
              * corrupt the "size" we report for it), so only regular
              * files honor O_TRUNC. */
@@ -1155,7 +1156,7 @@ int close(int fd)
     if (fd < 3 || fd >= MAX_FD || !files[fd].used)
         return -VNU_EBADF;
     const bool was_fb = nodes[files[fd].node].dev == DevKind::Framebuffer;
-    files[fd] = {false, 0, 0, -1};
+    files[fd] = {false, 0, 0, -1, 0};
     /* The last descriptor on /dev/fb0 is the end of the picture: whoever
      * mapped the display's frame is finished with it, and if opening the
      * device is what put the display in a graphics mode, this is where it
@@ -1169,6 +1170,31 @@ int close(int fd)
             vnu::fb::release();
     }
     return 0;
+}
+
+void close_all_of(uint32_t pid)
+{
+    /* Closed through close(), lowest slot first, so that a descriptor on
+     * /dev/fb0 which happens to be the last one on the device releases
+     * the display the way a program's own close would - one of them is
+     * the last, the rest see another holder - instead of the whole table
+     * being cleared behind the driver's back. */
+    for (int i = 3; i < MAX_FD; ++i) {
+        if (files[i].used && files[i].owner == pid)
+            (void)close(i);
+    }
+    /* fd 0/1/2 cannot go through close() - they are the standard
+     * descriptors and the console has to come back - so a redirection a
+     * dying process was writing through is put back to the console
+     * instead. Left behind, it would be the next command's stdout: the
+     * table is global, so `> file' would outlive the shell that typed it
+     * and nothing after it would reach the screen. */
+    bool redirected = false;
+    for (int i = 0; i < 3; ++i)
+        redirected = redirected || (files[i].used && files[i].owner == pid &&
+                                    files[i].node >= 0);
+    if (redirected)
+        reset_stdio();
 }
 
 int read(int fd, void* buf, uint32_t count)
@@ -1416,7 +1442,7 @@ bool fd_is_redirected(int fd)
 void reset_stdio()
 {
     for (int i = 0; i < 3; ++i)
-        files[i] = {true, 0, 0, -1};
+        files[i] = {true, 0, 0, -1, 0};
 }
 
 int dup_fd(int fd)
@@ -1426,6 +1452,10 @@ int dup_fd(int fd)
     for (int i = 3; i < MAX_FD; ++i) {
         if (!files[i].used) {
             files[i] = files[fd];
+            /* A copy of another program's descriptor is this program's
+             * descriptor: it is the one that will have to close it, and
+             * close_all_of() finds descriptors by their owner. */
+            files[i].owner = vnu::proc::current_pid();
             return i;
         }
     }
@@ -1441,8 +1471,9 @@ int dup2_fd(int oldfd, int newfd)
     if (oldfd == newfd)
         return newfd;
     if (newfd >= 3 && files[newfd].used)
-        files[newfd] = {false, 0, 0, -1};
+        files[newfd] = {false, 0, 0, -1, 0};
     files[newfd] = files[oldfd];
+    files[newfd].owner = vnu::proc::current_pid();   /* as in dup_fd() above */
     return newfd;
 }
 

@@ -18,6 +18,14 @@ struct File {
     uint32_t position;
     uint32_t flags;
     int node; /* index into node table, -1 = stdio */
+    /* Which process opened it. The table is global to the kernel, so
+     * without this nothing can tell a program's descriptors from anyone
+     * else's and a process that stops running cannot take its own with
+     * it: a /dev/fb0 descriptor left behind holds the display in a
+     * graphics mode with the console's pass suppressed for good, and a
+     * full table of them fails every later open with ENOSPC. See
+     * close_all_of(). */
+    uint32_t owner; /* pid */
 };
 
 /* Directory entry for getdents */
@@ -31,6 +39,12 @@ struct Dirent {
 void init();
 int open(const char* path, uint32_t flags);
 int close(int fd);
+/* Close every descriptor belonging to `pid`, as that process is no
+ * longer running and cannot do it: called when it exits or a signal
+ * takes it. One of them may be the last descriptor on /dev/fb0, so this
+ * goes through close() rather than clearing the table, and a redirection
+ * left on fd 0/1/2 is put back to the console. */
+void close_all_of(uint32_t pid);
 int read(int fd, void* buf, uint32_t count);
 int write(int fd, const void* buf, uint32_t count);
 int lseek(int fd, int32_t offset, int whence);
