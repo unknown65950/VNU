@@ -620,6 +620,22 @@ SUITE = [
      [], []),
     ("shebang-noarg", "/tmp/shebang-noarg.sh",
      [r"^/tmp/shebang-noarg\.sh$"], []),
+    # -- process substitutions: made by this shell, reaped by this shell --
+    # The line typed at the prompt is split on spaces alone, so the
+    # command has to arrive at `vash -c' as one token, and execve keeps
+    # only 95 characters of one — so the substitutions run the `:'
+    # builtin instead of `/bin/true', which would not fit a chain long
+    # enough to prove the point. Nine `<(:)'s in one shell, each leaves a
+    # corpse behind until the next one collects it. A shell that never
+    # reaped them would spend every process slot on its own dead children
+    # before the last substitution could fork, and its output would stop
+    # after the early ones. The `whoami' on the far end of the last one
+    # also proves the pipe carrying its output is really that command's
+    # stdin, not the console.
+    ("procsub-reap",
+     "vash -c cat<(:);cat<(:);cat<(:);cat<(:);cat<(:);cat<(:);"
+     "cat<(:);cat<(:);cat<(:);cat<(/bin/whoami)",
+     [r"^root$"], []),
     # -- third-party modules (thams/) ----------------------------------
     # A module lives in thams/, not in vnu/userspace/, and nothing in
     # the system tree was edited to make it a command. These three are

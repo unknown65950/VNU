@@ -99,8 +99,9 @@ void sh_resolve(const char* cmd, char* out, int outn)
     join_path(out, outn, "/bin", cmd);
 }
 
-/* The shells a process substitution forked are not the command's own
- * children, so they are kept here and collected when the shell waits. */
+/* The shells a process substitution forked are the *shell's* children, so
+ * they are kept here and collected when the shell next waits for one of
+ * them. */
 #define PSUB_MAX 32
 static pid_t procsub_pids[PSUB_MAX];
 static int procsub_n;
@@ -115,18 +116,91 @@ static void procsub_reap(pid_t pid)
         waitpid(pid, 0, 0);
 }
 
+/* Only a child that has actually finished may be forgotten. waitpid()
+ * with WNOHANG answers 0 for one that is still running, and dropping it
+ * anyway loses a live process — which, unreaped, is a slot out of
+ * MAX_PROCS (8) held for the rest of the session.
+ *
+ * The compaction also has to re-examine the slot it just filled: the old
+ * loop moved the last entry down to index i and then let its ++i step
+ * straight over it, so that entry was skipped and could be waited for
+ * twice. Keeping the index still is what makes both halves right. */
 void sh_reap_procsubs(void)
 {
-    for (int i = 0; i < procsub_n; ++i) {
+    int i = 0;
+    while (i < procsub_n) {
         int st = 0;
-        waitpid(procsub_pids[i], &st, WNOHANG);
-        procsub_pids[i] = procsub_pids[--procsub_n];
+        if (waitpid(procsub_pids[i], &st, WNOHANG) > 0)
+            procsub_pids[i] = procsub_pids[--procsub_n];
+        else
+            ++i;
     }
 }
 
 /* --- redirections --- */
 
 #define SAVE_MAX 8
+
+/* A process substitution is a pipe with a shell of its own at the far
+ * end: the list writes to it for `<( )' and reads from it for `>( )'.
+ *
+ * The shell has to be the one that forks it. Doing this inside
+ * apply_redirs() put it in the wrong process: apply_redirs() is called by
+ * exec_child(), which is about to execve() a command, so the shell that
+ * wrote the pid into procsub_pids[] was a process that no longer existed
+ * a moment later, and the prosub's actual parent was the command about to
+ * become /bin/cat. Nothing could wait for it — not the shell, whose table
+ * it was in, and not the command, which never learned the pid. The pid
+ * was recorded into an array that was about to be thrown away.
+ *
+ * So it happens here, in the shell, before the command is forked: the
+ * prosub is a child of the shell, procsub_pids[] is a list of children the
+ * shell really has, and the command inherits the pipe by the fork that
+ * follows. The descriptor is put back afterwards by undo_redirs(), since
+ * for `<( )' it was the shell's own stdin it borrowed.
+ *
+ * `save_fds'/`save_copies'/`nsaved' are the same saving mechanism the rest
+ * of the redirections use; passing null saves nothing, which is what a
+ * child wants and no longer happens here. */
+static int setup_procsubs(Cmd* c, int* save_fds, int* save_copies, int* nsaved)
+{
+    for (Redir* r = c->redirs; r; r = r->next) {
+        if (r->mode != R_PIPE || !r->procsub)
+            continue;
+
+        int to = r->fd >= 0 ? r->fd : 0;
+        if (save_fds && *nsaved < SAVE_MAX) {
+            save_fds[*nsaved] = to;
+            save_copies[*nsaved] = dup(to);
+            ++*nsaved;
+        }
+        int pfd[2];
+        if (pipe(pfd) < 0) {
+            sh_err("vash: pipe failed\n");
+            return -1;
+        }
+        /* `<( )' leaves the reading end to the command and writes into
+         * the pipe itself; `>( )' is the other way round. */
+        int give = r->procsub_out ? pfd[0] : pfd[1];
+        int keep = r->procsub_out ? pfd[1] : pfd[0];
+        pid_t pid = fork();
+        if (pid == 0) {
+            close(keep);
+            dup2(give, r->procsub_out ? 0 : 1);
+            close(give);
+            exit(run_list(r->procsub));
+        }
+        close(give);
+        procsub_reap(pid);
+        /* Before the fork, so the command child inherits the pipe end on
+         * `to' and nothing else: `keep' is closed here, not in the
+         * child, or the command would hold the far end open itself and
+         * the prosub would never see end-of-file. */
+        dup2(keep, to);
+        close(keep);
+    }
+    return 0;
+}
 
 /* `save_fds' collects the descriptors to restore afterwards and
  * `save_copies' the duplicates that keep their old contents; with both
@@ -138,32 +212,11 @@ static int apply_redirs(Cmd* c, int* save_fds, int* save_copies, int* nsaved)
         str_init(&name);
 
         if (r->mode == R_PIPE && r->procsub) {
-            /* A process substitution is a pipe with a shell of its own at
-             * the far end: the list writes to it for `<( )' and reads
-             * from it for `>( )'. */
-            int to = r->fd >= 0 ? r->fd : 0;
-            if (save_fds && *nsaved < SAVE_MAX) {
-                save_fds[*nsaved] = to;
-                save_copies[*nsaved] = dup(to);
-                ++*nsaved;
-            }
-            int pfd[2];
-            if (pipe(pfd) < 0) { sh_err("vash: pipe failed\n"); str_free(&name); return -1; }
-            /* `<( )' leaves the reading end to the command and writes
-             * into the pipe itself; `>( )' is the other way round. */
-            int give = r->procsub_out ? pfd[0] : pfd[1];
-            int keep = r->procsub_out ? pfd[1] : pfd[0];
-            pid_t pid = fork();
-            if (pid == 0) {
-                close(keep);
-                dup2(give, r->procsub_out ? 0 : 1);
-                close(give);
-                exit(run_list(r->procsub));
-            }
-            close(give);
-            procsub_reap(pid);
-            dup2(keep, to);
-            close(keep);
+            /* Already done by setup_procsubs(), in the shell, before this
+             * process existed. The command has the pipe on the descriptor
+             * it wanted by the time it gets here, and `keep' was closed
+             * before the fork, so there is nothing left to open and
+             * nothing to close. */
             continue;
         }
 
@@ -276,7 +329,13 @@ static int apply_redirs(Cmd* c, int* save_fds, int* save_copies, int* nsaved)
 
 static void undo_redirs(int* save_fds, int* save_copies, int nsaved)
 {
-    for (int i = 0; i < nsaved; ++i) {
+    /* Backwards. Several substitutions can borrow the same descriptor —
+     * two `<( )' both take fd 0 — so the last copy saved is the one that
+     * was in place before any of them and has to be the one restored
+     * last. Forwards, the earliest copy would win and the shell would be
+     * left reading from the first substitution's pipe for the rest of the
+     * session. */
+    for (int i = nsaved; i-- > 0;) {
         if (save_copies[i] >= 0) {
             dup2(save_copies[i], save_fds[i]);
             close(save_copies[i]);
@@ -557,10 +616,16 @@ static int run_builtin_for(Cmd* c, const char* name)
     int argc = expand_argv(c, 0, argv, SH_MAX_ARGS, takes_assignments(name));
 
     /* A redirection on a builtin is this shell's own, so the old
-     * descriptors have to go back afterwards. */
+     * descriptors have to go back afterwards. The substitution is made
+     * here too: a builtin runs in the shell, so `read x <(echo hi)' is
+     * one of the cases where the shell is the parent of the prosub. */
     int save_fds[SAVE_MAX];
     int save_copies[SAVE_MAX];
     int nsaved = 0;
+    if (setup_procsubs(c, save_fds, save_copies, &nsaved) < 0) {
+        undo_redirs(save_fds, save_copies, nsaved);
+        return 1;
+    }
     if (apply_redirs(c, save_fds, save_copies, &nsaved) < 0)
         return 1;
 
@@ -653,6 +718,20 @@ static void exec_child(Cmd* c, int pipe_in, int pipe_out, int err_out)
 
 static int spawn_wait(int pipe_in, int pipe_out, int err_out, Cmd* c)
 {
+    /* The shell is about to fork, so this is the moment to collect the
+     * substitutions that have finished since the last time — otherwise
+     * procsub_pids[] grows with every one of them for the whole session.
+     * And the substitutions themselves are forked here, in the shell, so
+     * that the shell is their parent and can wait for them at all. */
+    sh_reap_procsubs();
+    int save_fds[SAVE_MAX];
+    int save_copies[SAVE_MAX];
+    int nsaved = 0;
+    if (setup_procsubs(c, save_fds, save_copies, &nsaved) < 0) {
+        undo_redirs(save_fds, save_copies, nsaved);
+        return 1;
+    }
+
     int pid = fork();
     if (pid == 0)
         exec_child(c, pipe_in, pipe_out, err_out);
@@ -662,10 +741,15 @@ static int spawn_wait(int pipe_in, int pipe_out, int err_out, Cmd* c)
         close(pipe_out);
     if (err_out >= 0)
         close(err_out);
-    if (pid < 0)
+    if (pid < 0) {
+        undo_redirs(save_fds, save_copies, nsaved);
         return -1;
+    }
     int status = 0;
     waitpid(pid, &status, 0);
+    /* The command is done, so nothing is reading or writing the pipe any
+     * more and the shell's own descriptor can go back. */
+    undo_redirs(save_fds, save_copies, nsaved);
     return wait_status(status);
 }
 
@@ -839,11 +923,42 @@ static int run_pipeline(Cmd* c)
     if (n == 1)
         return run_simple(c->left ? c->left : c);
 
-    int fds[16][2];
+    /* Each stage's substitutions are made here, in the shell, before any
+     * stage is forked - for the reason exec_child() cannot do it: the
+     * stage that ran them would be gone the moment it execve()d, taking
+     * the pid of the substitution with it. */
+    sh_reap_procsubs();
+    int psave[16][SAVE_MAX];
+    int pcopy[16][SAVE_MAX];
+    int pnsaved[16];
     int stages = n > 16 ? 16 : n;
-    for (int i = 0; i < stages - 1; ++i)
-        if (pipe(fds[i]) < 0)
+    for (int i = 0; i < stages; ++i) {
+        Cmd* stage = (i == 0) ? c->left : c->list[i - 1];
+        pnsaved[i] = 0;
+        if (setup_procsubs(stage, psave[i], pcopy[i], &pnsaved[i]) < 0) {
+            for (int j = 0; j <= i; ++j)
+                undo_redirs(psave[j], pcopy[j], pnsaved[j]);
             return 127;
+        }
+    }
+
+    int fds[16][2];
+    for (int i = 0; i < stages - 1; ++i) {
+        if (pipe(fds[i]) < 0) {
+            /* The substitutions are already running and their pipes are
+             * already on the shell's descriptors, so the shell has to put
+             * its own back even on this path - otherwise `a | b' with a
+             * full pipe table leaves the shell reading from whatever the
+             * last substitution wrote. */
+            for (int j = 0; j < i; ++j) {
+                close(fds[j][0]);
+                close(fds[j][1]);
+            }
+            for (int j = 0; j < stages; ++j)
+                undo_redirs(psave[j], pcopy[j], pnsaved[j]);
+            return 127;
+        }
+    }
 
     int pids[16];
     int status = 0;
@@ -876,6 +991,10 @@ static int run_pipeline(Cmd* c)
         if (sh_pipefail && st != 0)
             worst = st;
     }
+    /* Every stage is finished, so the shell's own descriptors are the
+     * shell's again. */
+    for (int i = 0; i < stages; ++i)
+        undo_redirs(psave[i], pcopy[i], pnsaved[i]);
     return sh_pipefail ? (worst ? worst : status) : status;
 }
 
@@ -1501,6 +1620,16 @@ int run_string(const char* text, int capture)
 
 int run_subshell(Cmd* c)
 {
+    /* As in spawn_wait(): the shell forks the substitution itself, so that
+     * it is the shell's child, and collects the ones already finished. */
+    sh_reap_procsubs();
+    int save_fds[SAVE_MAX];
+    int save_copies[SAVE_MAX];
+    int nsaved = 0;
+    if (setup_procsubs(c, save_fds, save_copies, &nsaved) < 0) {
+        undo_redirs(save_fds, save_copies, nsaved);
+        return 1;
+    }
     int pid = fork();
     if (pid == 0) {
     if (apply_redirs(c, 0, 0, 0) < 0)
@@ -1517,6 +1646,7 @@ int run_subshell(Cmd* c)
                        : run_string(c->text.p ? str_cstr(&c->text) : "", 1);
     int status = 0;
     waitpid(pid, &status, 0);
+    undo_redirs(save_fds, save_copies, nsaved);
     return wait_status(status);
 }
 
