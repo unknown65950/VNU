@@ -461,7 +461,17 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
     case VNU_SYS_dup2: {
         int oldfd = static_cast<int>(tf->ebx);
         int newfd = static_cast<int>(tf->ecx);
-        if (vnu::pipe::is_pipe_fd(oldfd))
+        bool src_pipe = vnu::pipe::is_pipe_fd(oldfd);
+        /* dup2() closes the target first, and here there are two tables
+         * behind one fd number: VNU_SYS_read/write ask the pipe half
+         * first, so a pipe sitting on `newfd' has to be released before
+         * the VFS half can have the number back. Without this the shell
+         * could not put its own stdin on the console again after a
+         * process substitution, and every later read would come from a
+         * pipe that nobody writes to. */
+        if (!src_pipe && newfd != oldfd && vnu::pipe::is_pipe_fd(newfd))
+            vnu::pipe::close_fd(newfd);
+        if (src_pipe)
             return static_cast<std::uint32_t>(vnu::pipe::dup2_fd(oldfd, newfd));
         return static_cast<std::uint32_t>(vnu::vfs::dup2_fd(oldfd, newfd));
     }

@@ -7,6 +7,7 @@
 #include <vnu/pmm.h>
 #include <vnu/vga_gfx.h>   /* console_tick(): the console on a pixelless display */
 #include <vnu/vfs.h>
+#include <vnu/pipe.h>
 #include <vnu/posix.h>
 #include "embedded_vash.h"
 #include "embedded_hello.h"
@@ -654,6 +655,9 @@ int sys_fork(Registers* trap)
     child.regs.esp = trap->frame + 44; /* where the iret leaves it */
     child.regs.eflags = trap->eflags ? trap->eflags : 0x202;
     copy_str(child.name, parent.name, sizeof(child.name));
+    /* The pipe ends this process holds are the child's too, and its own
+     * references to them — see pipe.h. */
+    vnu::pipe::fork_copy(child.pid);
     return child.pid;
 }
 
@@ -1090,6 +1094,10 @@ void sys_exit(int status)
      * The other place a running process stops running is signal_kill()'s
      * cross-process death, which cannot come through here. */
     vnu::vfs::close_all_of(p.pid);
+    /* And the pipe half, by owner: a reader or writer count that is
+     * never brought down is a pipe that can never report end-of-file to
+     * whoever is waiting on the other end of it. */
+    vnu::pipe::close_all_of(p.pid);
 
     if (p.coro) {
         /* Scheduler-managed process: turn into a zombie for the parent
@@ -1589,6 +1597,7 @@ int signal_kill(int pid, int sig)
                  * shape an exit leaves. */
                 p.exit_code = 128 + sig;
                 vnu::vfs::close_all_of(p.pid);
+                vnu::pipe::close_all_of(p.pid);
                 p.state = State::Zombie;
                 wake_waiter_of(p.pid);
                 return 0;
@@ -1617,6 +1626,7 @@ int signal_kill(int pid, int sig)
                  * which is the path a signal takes on itself. */
                 p.exit_code = 128 + sig;
                 vnu::vfs::close_all_of(p.pid);
+                vnu::pipe::close_all_of(p.pid);
                 p.state = State::Zombie;
                 wake_waiter_of(p.pid);
                 return 0;
