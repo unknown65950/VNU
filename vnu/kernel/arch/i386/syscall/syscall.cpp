@@ -143,6 +143,18 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
                     if (ch == vnu::kbd::K_INTR && vnu::proc::console_signal(VNU_SIGINT))
                         return static_cast<std::uint32_t>(-VNU_EINTR);
                 }
+                /* ^D is the end of the input, not a byte in it. The
+                 * counterpart of the ^C case above: POSIX's VEOF, and
+                 * the only way a program reading the console can be
+                 * told there is nothing more coming. What is handed
+                 * back is the count read so far, which is 0 at the
+                 * start of a line — a read() of 0, the EOF that `cat`
+                 * after `cat > FILE` and every other terminal reader
+                 * has been waiting for. Without it byte 4 fell through
+                 * as data, so no read of this console could ever end
+                 * and the shell never came back. */
+                if (ch == vnu::kbd::K_EOF)
+                    return i;
                 buf[i] = ch;
                 if (ch == '\n')
                     return i + 1;

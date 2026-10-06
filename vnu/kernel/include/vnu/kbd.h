@@ -28,6 +28,14 @@ constexpr int K_F12 = 0x93;
  * the byte is read from, not what the key means. */
 constexpr int K_INTR = 3;
 
+/* Ctrl+D is the end of the input instead of a byte in it: POSIX's VEOF,
+ * the byte 4 that says "there is nothing more coming". The decode is the
+ * same one that gives ^C its 3 — with Ctrl held, `d` becomes 'd' - 'a'
+ * + 1 — and it lands the same place, the tty read in
+ * arch/i386/syscall/syscall.cpp, which is where a read of 0 bytes is
+ * produced for a program waiting for the input to be over. */
+constexpr int K_EOF = 4;
+
 /* The next character typed, waiting for one. The scancodes behind it
  * go through one queue with one decoder state (see kbd.cpp): port 0x60
  * is destructive, and two readers of it lose bytes - and read stale
