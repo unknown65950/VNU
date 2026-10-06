@@ -601,22 +601,6 @@ static int ifs_space(int c)
     return c == ' ' || c == '\t' || c == '\n';
 }
 
-static void dbg_num2(char* buf, int v)
-{
-    char tmp[16];
-    int n = 0;
-    if (v == 0) {
-        buf[0] = '0';
-        buf[1] = 0;
-        return;
-    }
-    while (v > 0 && n < 15)
-        tmp[n++] = (char)('0' + v % 10), v /= 10;
-    for (int i = 0; i < n; ++i)
-        buf[i] = tmp[n - 1 - i];
-    buf[n] = 0;
-}
-
 static int split_ifs(char* line, const char* ifs, Str* fields, int max)
 {
     int n = 0;
@@ -740,18 +724,6 @@ static int b_read(int argc, char** argv)
         copy[text.len] = 0;
     }
     int n = split_ifs(copy, ifs, fields, 64);
-    {
-        char nb[24];
-        dbg_num2(nb, text.len);
-        sh_err("vash: [dbg] read text=[");
-        sh_err(str_cstr(&text));
-        sh_err("] len=");
-        sh_err(nb);
-        dbg_num2(nb, n);
-        sh_err(" n=");
-        sh_err(nb);
-        sh_err("\n");
-    }
     if (use_array) {
         const char* name = arrname ? arrname : "MAPFILE";
         for (int k = 0; k < n; ++k) {

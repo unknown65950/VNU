@@ -74,58 +74,6 @@ static int is_reserved(Word* w, const char* name)
     return strcmp(str_cstr(&w->text), name) == 0;
 }
 
-static void dbg_num(char* buf, int v)
-{
-    char tmp[16];
-    int n = 0;
-    if (v == 0) {
-        buf[0] = '0';
-        buf[1] = 0;
-        return;
-    }
-    if (v < 0) {
-        buf[n++] = '-';
-        v = -v;
-    }
-    while (v > 0 && n < 15)
-        tmp[n++] = (char)('0' + v % 10), v /= 10;
-    for (int i = 0; i < n; ++i)
-        buf[i] = tmp[n - 1 - i];
-    buf[n] = 0;
-}
-
-static void dbg_pos(Lex* lx, const char* what)
-{
-    int start = lx->linepos;
-    while (start > 0 && lx->line[start - 1] != '\n')
-        --start;
-    int stop = start;
-    while (stop < lx->len && lx->line[stop] != '\n')
-        ++stop;
-    sh_err("vash: [dbg] ");
-    sh_err(what);
-    sh_err(" | ");
-    {
-        const Tok* t = PEEK(lx);
-        sh_err(" [tok=");
-        char nb[24];
-        dbg_num(nb, t->type);
-        sh_err(nb);
-        sh_err(",op=");
-        dbg_num(nb, t->op);
-        sh_err(nb);
-        sh_err(",w=");
-        sh_err(t->type == T_WORD && t->word ? str_cstr(&t->word->text)
-                                             : "-");
-        sh_err("]");
-    }
-    int n = stop - start;
-    if (n > 120)
-        n = 120;
-    write(2, lx->line + start, (size_t)n);
-    sh_err("\n");
-}
-
 static void add_redir(Cmd* c, int fd, int mode, Word* target)
 {
     Redir* r = (Redir*)malloc(sizeof(Redir));
@@ -510,7 +458,6 @@ static Cmd* parse_simple(Lex* lx)
                 }
                 if (!is_dup_op(op) || target) {
                     if (!target) {
-                        dbg_pos(lx, "syntax error after");
                         sh_err("vash: syntax error after ");
                         sh_err(tok_op_name(op));
                         sh_err("\n");
@@ -599,7 +546,6 @@ static Cmd* parse_simple(Lex* lx)
             if (!target)
                 target = take_redir_target(lx, op);
             if (!target && !is_dup_op(op)) {
-                dbg_pos(lx, "syntax error after");
                 sh_err("vash: syntax error after ");
                 sh_err(tok_op_name(op));
                 sh_err("\n");
@@ -857,7 +803,6 @@ static Cmd* parse_for(Lex* lx)
 
 static Cmd* parse_case(Lex* lx)
 {
-    dbg_pos(lx, "parse_case");
     Cmd* c = cmd_new(C_CASE);
     const Tok* p = PEEK(lx);
     if (p->type != T_WORD) {
@@ -867,7 +812,6 @@ static Cmd* parse_case(Lex* lx)
     c->name = lex_take(lx);
     lex_next(lx);
     expect_reserved(lx, "in");
-    dbg_pos(lx, "after in");
 
     for (;;) {
         p = PEEK(lx);
@@ -882,7 +826,6 @@ static Cmd* parse_case(Lex* lx)
             lex_next(lx);
             break;
         }
-        dbg_pos(lx, "case item");
         Cmd* item = cmd_new(C_CASE);
         int patterns = 0;
         for (;;) {
@@ -905,8 +848,6 @@ static Cmd* parse_case(Lex* lx)
             }
         }
         if (!patterns) {
-            dbg_pos(lx, "no patterns");
-            sh_err("vash: [dbg] patterns=0\n");
             /* No `)' and no pattern: the list is malformed. Step over one
              * token so the parser cannot sit on it forever. */
             lex_next(lx);
@@ -914,7 +855,6 @@ static Cmd* parse_case(Lex* lx)
             break;
         }
         item->right = parse_list_inner(lx, STOP_DSEMI);
-        dbg_pos(lx, "case body");
         add_list(c, item);
 
         p = PEEK(lx);
@@ -1088,7 +1028,6 @@ static Cmd* parse_and_or(Lex* lx)
         skip_nl(lx);
         Cmd* right = parse_pipeline(lx);
         if (!right) {
-            dbg_pos(lx, "and/or");
             sh_err("vash: syntax error after `");
             sh_err(tok_op_name(failed_op));
             sh_err("'\n");
