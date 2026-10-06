@@ -937,6 +937,20 @@ static int exec_prepared(Registers* trap, const char* path,
     p.regs = {};
     p.regs.eip = entry;
     p.regs.eflags = 0x202;
+    /* The new image gets a new heap, and this is what makes it one. The
+     * slot, its pid and its address space are all inherited from the
+     * program that called execve(), and p.brk was inherited with them:
+     * the previous program's first malloc() had already moved the break
+     * to BRK_MAX, so the new program's first malloc() asked for
+     * BRK_MAX + 1 MiB, was refused, and returned NULL for every size it
+     * would ever ask for. opendir() could not allocate its DIR, ls could
+     * not open a directory, wallpaper could not read /proc/gfx, and vash
+     * could not read a script file — all of it one inherited field.
+     *
+     * spawn() already sets p.brk = BRK_MIN for a process it creates;
+     * execve() replaces the image in place and had no equivalent, so the
+     * one thing that must be fresh was the one thing that was not. */
+    p.brk = BRK_MIN;
     setup_user_stack(p, argc, arg_ptrs, path, env_ptrs, envc);
     /* What POSIX says execve does to signals, and why each half is the
      * way it is: the new image is a new program, so what it does about
