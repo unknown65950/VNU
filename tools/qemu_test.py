@@ -48,7 +48,12 @@ PROMPT_END = re.compile(PROMPT.pattern.rstrip() + "$", re.MULTILINE)
 # commands below (quotes, pipes, semicolons) exactly as a user would.
 KEYMAP = {
     " ": "spc", "\n": "ret", "\t": "tab",
-    "-": "minus", "=": "equal", "[": "bracketleft", "]": "bracketright",
+    # The bracket keys are spelled bracket_left/bracket_right because
+    # that is what QEMU's QKeyCode enum calls them. `bracketleft` is
+    # accepted on its own but not behind a modifier, so `shift-bracketleft`
+    # for `{` is rejected with "invalid parameter" and a source file
+    # containing a brace simply cannot be typed.
+    "-": "minus", "=": "equal", "[": "bracket_left", "]": "bracket_right",
     "\\": "backslash", ";": "semicolon", "'": "apostrophe",
     "`": "grave_accent", ",": "comma", ".": "dot", "/": "slash",
     "!": "shift-1", '"': "shift-apostrophe", "#": "shift-3", "$": "shift-4",
@@ -56,7 +61,7 @@ KEYMAP = {
     "*": "shift-8", "+": "shift-equal", ":": "shift-semicolon",
     "<": "shift-comma", ">": "shift-dot", "?": "shift-slash",
     "@": "shift-2", "^": "shift-6", "_": "shift-minus", "|": "shift-backslash",
-    "{": "shift-bracketleft", "}": "shift-bracketright", "~": "shift-grave_accent",
+    "{": "shift-bracket_left", "}": "shift-bracket_right", "~": "shift-grave_accent",
 }
 for _c in string.digits:
     KEYMAP[_c] = _c
@@ -81,6 +86,10 @@ SPECIAL_KEYS = {
     # into a signal, so it never reaches a program as a byte and there
     # is no KEYMAP entry that could type it as one.
     "<ctrl-c>": "ctrl-c",
+    # Ctrl+D is the other chord a program has to be able to receive: it is
+    # how a `cat > FILE` reading from the terminal is told the input is
+    # over, so anything that stages a file by typing into one needs it.
+    "<ctrl-d>": "ctrl-d",
 }
 
 
