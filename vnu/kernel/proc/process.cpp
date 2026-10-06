@@ -972,6 +972,79 @@ int sys_execve(Registers* trap, const char* path, char* const* argv,
 
 extern "C" void vnu_enter_user(uint32_t entry, uint32_t user_esp);
 
+/* Hand over the children of a process that is on its way out. Linux does
+ * this in exit_notify(); without it an orphan is not merely unreaped but
+ * unreapable, and the reason is exact: sys_waitpid() matches on
+ * `c.ppid != self', so a child whose parent no longer names anything can
+ * never be waited for by anybody, including itself.
+ *
+ * The table is small (MAX_PROCS == 8, one slot of which is the
+ * scheduler), so every leaked child is a slot that never comes back: once
+ * they are gone alloc_slot() fails and fork() answers -VNU_ENOMEM, which
+ * is the end of pipelines, $( ) and process substitution for the rest of
+ * the session. Each one also kept its pgdir_phys, since only sys_waitpid()
+ * and the ppid == 0 adoption below ever destroy an address space, so the
+ * leak was pages as well as slots.
+ *
+ * The adopter is ppid 0, the scheduler, and not init: init is not a
+ * stable pid here. execve() runs the new image in the caller's own slot
+ * and keeps its pid, so the shell holds pid 1 only until the first
+ * external command - forkdemo right after login prints getppid() from
+ * pid 1, the next one from pid 3 - and run_scheduler() respawns init
+ * with next_pid++, which never hands 1 back. An orphan pointed at pid 1
+ * after that points at a name nothing answers to: sys_waitpid() would
+ * need a parent of that pid to ask, and there is none, so the slot would
+ * leak exactly as it did before.
+ *
+ * ppid 0 is the value the kernel already gives a process it spawns
+ * itself (run_program_from_memory() sets p.ppid = 0), and it is the one
+ * the scheduler's `state == Zombie && ppid == 0' site below looks for —
+ * code that was written for exactly this and had no way to be reached,
+ * because nothing ever wrote a 0.
+ *
+ * It has to happen before this process becomes a zombie, or the waiter
+ * is woken (wake_waiter_of() below) while the children still point at a
+ * corpse and blocks again with nothing left to wake it. */
+/* Free the slot a corpse is occupying: the address space with it, since
+ * only a waitpid() or the ppid == 0 adoption below would ever have
+ * released it otherwise. The stack top goes back as well - a slot is
+ * handed out again by the next fork, and it has to come with a stack of
+ * its own. */
+static void reap_slot(int i)
+{
+    Process& p = table[i];
+    vnu::paging::destroy_address_space(p.pgdir_phys);
+    p = {};
+    p.pid = 0;
+    p.state = State::Unused;
+    p.user_stack_top =
+        USER_STACK_BASE + static_cast<uint32_t>((i + 1) * USER_STACK_SIZE);
+}
+
+static void reparent_orphans(int dead_pid)
+{
+    for (int i = 1; i < MAX_PROCS; ++i) {
+        if (i == current_idx)
+            continue;
+        Process& c = table[i];
+        if (c.state == State::Unused || c.ppid != dead_pid)
+            continue;
+        c.ppid = 0;
+        /* It may have died before this process did: a child that
+         * finished while its parent was still alive is a corpse waiting
+         * for a waitpid() that can never come now, and the scheduler
+         * only collects a zombie by running it - run_slice() returns
+         * before that test for anything that is not Runnable, so a
+         * zombie orphaned by its parent's death is never seen again.
+         * MAX_PROCS = 8 counts corpses as processes, and a slot left
+         * standing for ever is what made the shell eventually unable to
+         * fork anything at all. Take it here, while the slot is still
+         * known to belong to the process that is going away. */
+        if (c.state == State::Zombie)
+            reap_slot(i);
+    }
+}
+
 static int enter_program(const char* path)
 {
     const EmbeddedProg* prog = find_embedded(path);
@@ -984,6 +1057,13 @@ void sys_exit(int status)
 {
     Process& p = table[current_idx];
     p.exit_code = status;
+
+    /* The children go first, before anything else of this process is
+     * settled: reparent_orphans() must have run by the time the parent
+     * waiting on this pid is woken below, and the earlier in the exit it
+     * happens the fewer places a dying process's children can be seen
+     * still pointing at it. */
+    reparent_orphans(p.pid);
 
     /* The descriptors go with the process, here and now rather than when
      * the parent gets round to reaping the corpse: a program that exits
@@ -2186,11 +2266,7 @@ void run_slice(int i)
 
     if (p.state == State::Zombie && p.ppid == 0) {
         /* init died with no parent to reap it — the scheduler adopts it. */
-        vnu::paging::destroy_address_space(p.pgdir_phys);
-        p = {};
-        p.pid = 0;
-        p.state = State::Unused;
-        p.user_stack_top = USER_STACK_BASE + static_cast<uint32_t>((i + 1) * USER_STACK_SIZE);
+        reap_slot(i);
     }
 }
 
