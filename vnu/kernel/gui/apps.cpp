@@ -151,12 +151,7 @@ void install_module(const vnu::thams::Module& m)
     }
 }
 
-/* Big enough for the largest embedded binary we ship (picview, ~37 KiB
- * of ELF). The VFS is now growable beyond any per-file cap, so this is
- * purely the launcher's read window; files bigger than it are refused
- * (returned total >= cap) rather than silently truncated. */
-constexpr uint32_t LOAD_BUF_SIZE = 262144;
-uint8_t g_load_buf[LOAD_BUF_SIZE];
+uint8_t g_load_buf[vnu::apps::LOAD_BUF_SIZE];
 
 } // namespace
 
@@ -349,6 +344,19 @@ uint32_t read_bin(const char* name, uint8_t* buf, uint32_t cap)
     }
     vnu::vfs::close(fd);
     return total;
+}
+
+uint32_t bin_size(const char* name)
+{
+    char bin_path[80];
+    char dir[64];
+    join(dir, sizeof(dir), "/apps", name);
+    join(bin_path, sizeof(bin_path), dir, "bin");
+
+    vnu::posix::Stat st;
+    if (vnu::vfs::stat(bin_path, &st) != 0)
+        return 0;
+    return st.size;
 }
 
 int launch(const char* name)

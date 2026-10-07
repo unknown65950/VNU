@@ -9,6 +9,7 @@
 #include <vnu/wallpaper.h>
 #include <vnu/gfxconf.h>
 #include <vnu/abi.h>
+#include <vnu/pmm.h>
 
 /* The freestanding kernel has no <string.h>: the two routines this file
  * needs are declared here, as vga_gfx.cpp declares its memcpy. */
@@ -1124,8 +1125,6 @@ void run(const char* open_app)
     int cascade = 0;
     bool was_gfx[MAX_TASKS] = {};
 
-    static uint8_t load_buf[65536];
-
     auto raise_window = [&](TaskHandle h) {
         int j = -1;
         for (int i = 0; i < order_len; ++i)
@@ -1194,6 +1193,30 @@ void run(const char* open_app)
             focus_top();
     };
 
+    /* The app's binary is copied into the task's own PMM-backed storage
+     * by spawn/spawn_argv, so this read window only has to live for the
+     * duration of that call. It is sized to the exact file (the window
+     * must be strictly bigger than the binary — see read_bin) and drawn
+     * from the PMM pool rather than kernel .bss: a megabyte-scale static
+     * buffer in the kernel image would shrink the pool, which starts
+     * right after __bss_end (see mm/pmm.cpp and linker.ld). */
+    auto spawn_app = [&](const char* name, const char* arg1) -> TaskHandle {
+        const uint32_t want = vnu::apps::bin_size(name) + 1;
+        if (want == 1 || want > vnu::apps::LOAD_BUF_SIZE)
+            return NO_TASK;
+        const uint32_t frames = (want + 4095) / 4096;
+        const uint32_t base = vnu::pmm::alloc_contig(frames);
+        if (!base)
+            return NO_TASK;
+        uint8_t* img = reinterpret_cast<uint8_t*>(base);
+        const uint32_t n = vnu::apps::read_bin(name, img, want);
+        TaskHandle h = (n != 0) ? (arg1 ? vnu::wintask::spawn_argv(name, arg1, img, n, name)
+                                        : vnu::wintask::spawn(name, img, n, name))
+                                : NO_TASK;
+        vnu::pmm::free_contig(base, frames);
+        return h;
+    };
+
     auto spawn_from_icon = [&](int app_idx) {
         const char* name = apps[app_idx].name;
         TaskHandle existing = window_by_title(name);
@@ -1202,10 +1225,7 @@ void run(const char* open_app)
             raise_window(existing);
             return;
         }
-        uint32_t n = vnu::apps::read_bin(name, load_buf, sizeof(load_buf));
-        if (n == 0)
-            return;
-        TaskHandle h = vnu::wintask::spawn(name, load_buf, n, name);
+        TaskHandle h = spawn_app(name, nullptr);
         if (h == NO_TASK)
             return;
         int cx = 36 + (cascade % 6) * 26;
@@ -1242,19 +1262,15 @@ void run(const char* open_app)
         }
         int hit = hit_test_icon(apps, app_count, x, y);
         if (hit >= 0) {
-            uint32_t n = vnu::apps::read_bin(apps[hit].name, load_buf, sizeof(load_buf));
-            if (n != 0) {
-                TaskHandle h = vnu::wintask::spawn_argv(apps[hit].name, drag_path,
-                                                        load_buf, n, apps[hit].name);
-                if (h != NO_TASK) {
-                    int cx = 36 + (cascade % 6) * 26;
-                    int cy = PANEL_H + 8 + (cascade % 6) * 22;
-                    ++cascade;
-                    geom[h] = size_app_window(cx, cy, vnu::wintask::console(h));
-                    clamp_to_desktop(geom[h]);
-                    minimized[h] = false;
-                    raise_window(h);
-                }
+            TaskHandle h = spawn_app(apps[hit].name, drag_path);
+            if (h != NO_TASK) {
+                int cx = 36 + (cascade % 6) * 26;
+                int cy = PANEL_H + 8 + (cascade % 6) * 22;
+                ++cascade;
+                geom[h] = size_app_window(cx, cy, vnu::wintask::console(h));
+                clamp_to_desktop(geom[h]);
+                minimized[h] = false;
+                raise_window(h);
             }
             return;
         }

@@ -18,6 +18,19 @@ namespace vnu::apps {
 constexpr int MAX_APPS = 16;
 constexpr int NAME_CAP = 24;
 
+// Launcher read window for /apps/<name>/bin. Big enough for the largest
+// embedded binary we ship (vash, ~113 KiB of ELF). The VFS is growable
+// beyond any per-file cap, so this is purely the launcher's read window;
+// binaries at or above it are refused (read_bin returns 0) rather than
+// silently truncated. It is the cap both launchers agree on, not a
+// buffer size: the classic one-way handoff keeps a fixed static window
+// (apps.cpp g_load_buf), while the GUI's windowed-task path allocates
+// its read window transiently from the PMM pool, sized to the file, with
+// this constant as the upper bound (kernel globals in .bss shrink the
+// PMM pool, see mm/pmm.cpp — so a megabyte-scale load buffer must not
+// live in the kernel image).
+constexpr uint32_t LOAD_BUF_SIZE = 262144;
+
 // Per-app desktop pictogram, drawn kernel-side (gui/gui.cpp).
 // ICON_LETTER falls back to the app name's first letter.
 enum IconGlyph {
@@ -62,6 +75,10 @@ int list(AppEntry* out, int max);
 // hand to vnu::wintask::spawn() instead of the classic one-way
 // process handoff. Returns the number of bytes read, or 0 on failure.
 uint32_t read_bin(const char* name, uint8_t* buf, uint32_t cap);
+
+// Exact size of /apps/<name>/bin (0 when the app has no binary), so a
+// caller can size its read window to the file instead of guessing.
+uint32_t bin_size(const char* name);
 
 // Reads /apps/<name>/bin into memory and hands off to it. Same
 // non-returning-on-success semantics as vnu::proc::run_program().
