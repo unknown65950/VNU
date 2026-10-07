@@ -184,7 +184,10 @@ static void walk(const char* path, const char* prefix, int depth)
         }
         printf("\n");
 
-        if (!e[i].is_dir || last)
+        /* Every directory is descended into, including the last one:
+         * the connector above already knows whether a sibling follows,
+         * so there is nothing the tail entry is spared here. */
+        if (!e[i].is_dir)
             continue;
 
         char child[MAX_PATH];
