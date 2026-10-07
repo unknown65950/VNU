@@ -406,7 +406,7 @@ void save_palette()
 
 /* The ladder, smallest first: the index is what F12 cycles through and
  * what /proc/gfx lists. DEFAULT_MODE is the entry the desktop starts on
- * (and the one a /etc/vnuconfig/gfx.conf can pick instead). */
+ * (and the one a /etc/vnu/config/gfx.conf can pick instead). */
 const vnu::vgfx::Mode g_modes[vnu::vgfx::MODE_COUNT] = {
     {640, 480},
     {800, 600},
@@ -937,7 +937,7 @@ bool enter_gfx_mode()
 
     /* The framebuffer is taken before the card is programmed and reused
      * if set_resolution() already took one for this mode (the seeded
-     * /etc/vnuconfig/gfx.conf asks for it from text mode, where the
+     * /etc/vnu/config/gfx.conf asks for it from text mode, where the
      * pool is much emptier). A pool with nothing left is the one reason
      * the desktop cannot start, and it is better answered by leaving
      * the console exactly as it was than by entering a mode with
@@ -1024,7 +1024,7 @@ bool set_resolution(int w, int h)
      * pointed at the one the mode being left had. This is where the new
      * size is already on record, which is what the host is told along
      * with the resource. Only inside a session - a mode applied from
-     * /etc/vnuconfig/gfx.conf at boot changes the mode the desktop will
+     * /etc/vnu/config/gfx.conf at boot changes the mode the desktop will
      * come up in, and the console keeps the display until something
      * actually draws. */
     if (g_in_gfx_mode)

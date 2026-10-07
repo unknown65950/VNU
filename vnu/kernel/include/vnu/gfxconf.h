@@ -1,7 +1,7 @@
 #pragma once
 
 // The display mode this machine runs the desktop at, kept in
-// /etc/vnuconfig/gfx.conf.
+// /etc/vnu/config/gfx.conf.
 //
 // Shaped exactly like /etc/hostname: a plain text file is the single
 // source of truth, the desktop reads it before it programs the card and
@@ -24,7 +24,7 @@
 namespace vnu::gfxconf {
 
 // The file itself, inside the settings directory vfs::init() creates.
-constexpr const char* PATH = "/etc/vnuconfig/gfx.conf";
+constexpr const char* PATH = "/etc/vnu/config/gfx.conf";
 
 // Program the mode recorded in the file, when it names one this build
 // supports. Call this before vgfx::enter_gfx_mode(): the card is still

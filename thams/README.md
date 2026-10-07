@@ -29,7 +29,7 @@ Every module is compiled into its own static ELF and mounted at
 $ tree /etc
 etc/
 |-- group
-`-- vnuconfig/
+`-- config/
 
 6 directories
 ```

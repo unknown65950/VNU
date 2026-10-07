@@ -193,7 +193,7 @@ int  vnu_dnd_declare(const char* path);
 
 /* The display mode, in pixels. Both drivers answer the same, whether the
  * mode was reached through vgfx_set_resolution(), the desktop's F12 key
- * or /etc/vnuconfig/gfx.conf on the next boot - so a program can ask
+ * or /etc/vnu/config/gfx.conf on the next boot - so a program can ask
  * where it stands instead of assuming the compile-time default. */
 void vgfx_get_resolution(int* w, int* h);
 
@@ -201,7 +201,7 @@ void vgfx_get_resolution(int* w, int* h);
  * pixel and the driver that owns the display (VNU_GFX_DRIVER_VGA or
  * VNU_GFX_DRIVER_VIRTIO_GPU). Answers the same way whether the mode was
  * reached through vgfx_set_resolution(), the desktop's F12 key or
- * /etc/vnuconfig/gfx.conf, so a program that needs the depth does not
+ * /etc/vnu/config/gfx.conf, so a program that needs the depth does not
  * have to parse /proc/gfx to get it. Returns 0, or -1 with `info`
  * untouched if the kernel is too old to answer. */
 int  vgfx_get_info(struct vnu_gfx_info* info);
@@ -210,7 +210,7 @@ int  vgfx_get_info(struct vnu_gfx_info* info);
  * accepted (the driver's ladder: 640x480, 800x600, 1024x768, 1280x1024);
  * anything else returns 0. Windows are moved back inside the new screen
  * rather than closed, the wallpaper is re-stretched for it, and the
- * choice is recorded in /etc/vnuconfig/gfx.conf. Either pointer of
+ * choice is recorded in /etc/vnu/config/gfx.conf. Either pointer of
  * vgfx_get_resolution() may be null. */
 int  vgfx_set_resolution(int w, int h);
 

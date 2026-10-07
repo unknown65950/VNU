@@ -4,7 +4,7 @@
 #include <vnu/posix.h>
 
 // The display mode the desktop boots into and switches between, as one
-// line of text in /etc/vnuconfig/gfx.conf. See gfxconf.h for the shape
+// line of text in /etc/vnu/config/gfx.conf. See gfxconf.h for the shape
 // of the file and why it is the single source of truth.
 
 namespace vnu::gfxconf {

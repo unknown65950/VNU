@@ -880,24 +880,34 @@ void init()
     }
 
     /* --- machine settings ---
-     * /etc/vnuconfig holds what the kernel keeps for itself: the
+     * /etc/vnu/config holds what the kernel keeps for itself: the
      * display mode in gfx.conf, which the desktop reads before it
      * programs the card and rewrites on every change (vnu::gfxconf),
-     * and, per the roadmap, the vsshd daemon config beside it. Seeded
-     * with the built-in default mode, so a machine that never changed
-     * it still has a readable setting to read. */
-    if (add("/etc/vnuconfig", true)) {
-        char cfg[64];
-        Appender a{cfg, sizeof(cfg), 0};
-        a.str("mode ");
-        a.num(static_cast<uint32_t>(vnu::vgfx::DEFAULT_MODE.width));
-        a.str("x");
-        a.num(static_cast<uint32_t>(vnu::vgfx::DEFAULT_MODE.height));
-        a.str("\n");
-        auto* gc = add("/etc/vnuconfig/gfx.conf", false);
-        if (gc) {
-            node_set_cstr(*gc, cfg);
-            gc->perm = 0644u;
+     * and the vsshd daemon switch in vsshd.conf beside it (vnu set
+     * outsideaccess). The parent /etc/vnu doubles as the media
+     * directory apps.cpp install_demo_pics mkdirs at boot, so seeding
+     * it here makes the settings home real either way. Seeded with the
+     * built-in default mode and the daemon off, so a machine that never
+     * changed them still has readable settings to read. */
+    if (add("/etc/vnu", true)) {
+        if (add("/etc/vnu/config", true)) {
+            char cfg[64];
+            Appender a{cfg, sizeof(cfg), 0};
+            a.str("mode ");
+            a.num(static_cast<uint32_t>(vnu::vgfx::DEFAULT_MODE.width));
+            a.str("x");
+            a.num(static_cast<uint32_t>(vnu::vgfx::DEFAULT_MODE.height));
+            a.str("\n");
+            auto* gc = add("/etc/vnu/config/gfx.conf", false);
+            if (gc) {
+                node_set_cstr(*gc, cfg);
+                gc->perm = 0644u;
+            }
+            auto* vc = add("/etc/vnu/config/vsshd.conf", false);
+            if (vc) {
+                node_set_cstr(*vc, "outsideaccess off\n");
+                vc->perm = 0644u;
+            }
         }
     }
 

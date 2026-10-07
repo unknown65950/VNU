@@ -82,7 +82,7 @@ enum class Prep {
 // nobody can see, since presenting it goes to an address the card is not
 // reading.
 //
-// The mode is the one the last session chose (/etc/vnuconfig/gfx.conf,
+// The mode is the one the last session chose (/etc/vnu/config/gfx.conf,
 // the same preference the desktop starts from, and a config that cannot
 // be read leaves the driver's own default). A card that will not take a
 // mode, or a pool with nothing left in it, answers Prep::Refused and the

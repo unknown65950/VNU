@@ -40,7 +40,7 @@ root@vnu:~$ man ls
   (`/etc/vnu/wallpaper`, set with `wallpaper` or from the prefs Wallpaper
   pane). F12 steps the display through 640x480, 800x600, 1024x768 and
   1280x1024 while the desktop runs; the choice is kept in
-  `/etc/vnuconfig/gfx.conf` and the next `gui` (and the next boot) come up
+  `/etc/vnu/config/gfx.conf` and the next `gui` (and the next boot) come up
   in it.
 - **Disks**: ATA driver + FAT16, syscalls `blkcount`/`install` — the kernel
   can write itself (GRUB + partition) to a disk, together with the host name

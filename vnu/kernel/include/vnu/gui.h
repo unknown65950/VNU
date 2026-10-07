@@ -29,7 +29,7 @@ void dnd_declare(const char* path);
 
 // Syscall-facing (VNU_SYS_gfx_setmode) resolution change, and the
 // desktop-side half of one: the driver programs the card, this records
-// the choice in /etc/vnuconfig/gfx.conf, re-stretches the wallpaper for
+// the choice in /etc/vnu/config/gfx.conf, re-stretches the wallpaper for
 // the new geometry and asks the event loop to move the windows back
 // inside the new screen. Legal with no desktop running, which is how
 // the config file is read at startup. Returns 0, or -VNU_EINVAL for a

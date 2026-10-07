@@ -214,7 +214,7 @@ with `-1` leaves a field unchanged; only root may chown.
   reports it as `modes`. Programs the VBE registers, re-arms the virtio-gpu
   scanout when that driver owns the display, re-stretches the wallpaper,
   moves the desktop's windows back inside the new screen and records the
-  choice in `/etc/vnuconfig/gfx.conf`, which the next boot reads before
+  choice in `/etc/vnu/config/gfx.conf`, which the next boot reads before
   programming the card. Nothing is closed and no window loses its
   contents; a window too big for the new screen shrinks to fit it.
   Returns 0, or `-VNU_EINVAL` for a size that is not in the ladder. The

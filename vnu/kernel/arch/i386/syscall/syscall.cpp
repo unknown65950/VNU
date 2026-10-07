@@ -596,7 +596,7 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
         /* Put the display into the given mode (ebx = width, ecx =
          * height). Only the driver's ladder is accepted; the desktop
          * coordinator does the re-layout, the wallpaper re-stretch and
-         * the /etc/vnuconfig/gfx.conf write around it (see gui.cpp and
+         * the /etc/vnu/config/gfx.conf write around it (see gui.cpp and
          * ABI.md). Returns 0 or -VNU_EINVAL. */
         return static_cast<std::uint32_t>(vnu::gui::set_resolution(
             static_cast<int>(tf->ebx), static_cast<int>(tf->ecx)));

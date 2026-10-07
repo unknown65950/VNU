@@ -1140,7 +1140,7 @@ KEYS\n\
     with every pane and with no window at all: it steps the display\n\
     through 640x480, 800x600, 1024x768 and 1280x1024 while the desktop\n\
     keeps running, moving windows back inside the new screen. The mode\n\
-    is recorded in /etc/vnuconfig/gfx.conf, so the next gui and the\n\
+    is recorded in /etc/vnu/config/gfx.conf, so the next gui and the\n\
     next boot come up in it, and /proc/gfx reports the one in use.\n\
     Like everything else in the RAM filesystem, that file is gone at\n\
     reboot, so a booted ISO starts over from the built-in 1024x768.\n\

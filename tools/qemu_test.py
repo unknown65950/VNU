@@ -1396,7 +1396,7 @@ def run_gfx_resolution(guest, result, verbose, timeout=60.0):
     can reach the feature.
 
     Covered, in the order they would bite a user: the mode really changes
-    on screen; the choice is written to /etc/vnuconfig/gfx.conf; the next
+    on screen; the choice is written to /etc/vnu/config/gfx.conf; the next
     `gui` comes up in it; and a window that no longer fits the new screen
     is still drawn inside it.
     """
@@ -1424,7 +1424,7 @@ def run_gfx_resolution(guest, result, verbose, timeout=60.0):
 
         # A fresh image starts in the built-in default, and says so in
         # the file the desktop reads it from.
-        output, _ = guest.sh("cat /etc/vnuconfig/gfx.conf", timeout)
+        output, _ = guest.sh("cat /etc/vnu/config/gfx.conf", timeout)
         check("mode-config-boot", output, [r"^mode %dx%d$" % MODE_DEFAULT],
               [], result, verbose)
 
@@ -1489,7 +1489,7 @@ def run_gfx_resolution(guest, result, verbose, timeout=60.0):
                   [r"^Graphics +: +%s %sx%s %sbpp$"
                    % (driver.group(1), res.group(1), res.group(2),
                       depth.group(1))], [], result, verbose)
-        output, _ = guest.sh("cat /etc/vnuconfig/gfx.conf", timeout)
+        output, _ = guest.sh("cat /etc/vnu/config/gfx.conf", timeout)
         check("mode-config", output, [r"^mode %dx%d$" % MODE_TOP], [],
               result, verbose)
 
