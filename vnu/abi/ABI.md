@@ -85,6 +85,26 @@ must never be renumbered.
 | 70 | sigraise |
 | 71 | sigpending |
 | 72 | gfx_canvas |
+| 73 | times |
+| 74 | getrusage |
+
+### times(73) and getrusage(74): CPU-time accounting
+
+`times(ebx = struct vnu_tms*)` fills the four `int32` tick fields
+(`utime`, `stime`, `cutime`, `cstime`) and returns the tick count
+since boot, in units of the 100 Hz scheduler clock (`CLK_TCK` 100).
+`getrusage(ebx = who, ecx = struct vnu_rusage*)` fills the i386-shaped
+`rusage` (`who` 0 = `RUSAGE_SELF`, -1 = `RUSAGE_CHILDREN`, which is the
+parent's tally of its waited-for children, accumulated at their exits).
+
+The kernel runs every process at privilege 0 (one address space,
+per-process page tables) and samples no privilege level, so user and
+system time cannot be separated the way Linux separates them: every
+tick a process runs is charged to its `utime`/`ru_utime`, `stime` and
+`cstime` are always 0, and `ru_maxrss`/fault/block-I/O fields are 0
+because the kernel does not do demand paging or block-I/O accounting.
+`ru_nvcsw` counts cooperative yields (blocking on a wait, a pipe, a
+read or a sleep) and `ru_nivcsw` counts timer preemptions.
 
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`

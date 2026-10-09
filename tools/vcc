@@ -143,6 +143,7 @@ build_vlibc() {
         src/string/strlen.c src/string/strcpy.c src/string/strncpy.c
         src/string/strcmp.c src/string/strncmp.c src/string/memcpy.c src/string/memset.c
         src/stdlib/malloc.c src/stdlib/atoi.c src/stdlib/atol.c
+        src/sys/times.c src/sys/getrusage.c
         src/tls/tls.c src/tls/tls_crypto.c src/tls/tls_bn.c src/tls/tls_x509.c
     )
     if [[ ! -f "$PREFIX/lib/libvlibc.a" || ! -f "$PREFIX/lib/crt0.o" ]]; then

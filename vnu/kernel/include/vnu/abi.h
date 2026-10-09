@@ -80,6 +80,56 @@
 #define VNU_SYS_sigraise     70
 #define VNU_SYS_sigpending   71
 #define VNU_SYS_gfx_canvas   72
+#define VNU_SYS_times        73
+#define VNU_SYS_getrusage    74
+
+/* Out-parameter of VNU_SYS_times. All four fields are in units of the
+ * scheduler's 100 Hz tick (CLK_TCK 100); the syscall's return value is
+ * the tick count since boot. The kernel runs every process at privilege
+ * 0 (one address space, per-process page tables) and samples no
+ * privilege level, so user and system time cannot be separated the way
+ * Linux separates them - every tick a process runs is charged to
+ * utime, and stime/cstime are always 0 (the same reason /proc/stat
+ * reports all busy jiffies in its "system" slot). */
+struct vnu_tms {
+    int32_t utime;  /* ticks this process ran (all CPU time; see above) */
+    int32_t stime;  /* always 0: no user/system split */
+    int32_t cutime; /* utime of waited-for children, accumulated at exit */
+    int32_t cstime; /* always 0 */
+};
+
+/* Out-parameter of VNU_SYS_getrusage (ebx = who: 0 for RUSAGE_SELF,
+ * -1 for RUSAGE_CHILDREN; ecx = pointer). Layout mirrors the i386
+ * struct rusage: two timevals followed by fourteen longs. VNU measures
+ * CPU time (charged to ru_utime for the same no-split reason as
+ * vnu_tms) and the two context-switch counters; everything else is
+ * reported as 0 rather than guessed, documented per field. */
+struct vnu_timeval {
+    int32_t tv_sec;
+    int32_t tv_usec;
+};
+
+struct vnu_rusage {
+    struct vnu_timeval ru_utime; /* CPU time (all of it; stime stays 0) */
+    struct vnu_timeval ru_stime; /* always 0 */
+    int32_t ru_maxrss;  /* 0: no resident-set accounting */
+    int32_t ru_ixrss;   /* 0 */
+    int32_t ru_idrss;   /* 0 */
+    int32_t ru_isrss;   /* 0 */
+    int32_t ru_minflt;  /* 0: the kernel allocates eagerly, so minor
+                         * faults do not exist */
+    int32_t ru_majflt;  /* 0 */
+    int32_t ru_nswap;   /* 0 */
+    int32_t ru_inblock; /* 0: no block-I/O accounting */
+    int32_t ru_oublock; /* 0 */
+    int32_t ru_msgsnd;  /* 0: no SysV IPC */
+    int32_t ru_msgrcv;  /* 0 */
+    int32_t ru_nsignals;/* 0: not counted */
+    int32_t ru_nvcsw;   /* voluntary switches: cooperative yields (a
+                         * process blocking on a wait, a pipe, a read
+                         * or a sleep gives the CPU up itself) */
+    int32_t ru_nivcsw;  /* involuntary switches: timer preemptions */
+};
 
 /* Which display driver is in use, as vnu_gfx_info::driver. */
 #define VNU_GFX_DRIVER_VGA        0 /* Bochs VBE, 8bpp indexed */

@@ -80,6 +80,8 @@
 #define VNU_SYS_sigraise     70
 #define VNU_SYS_sigpending   71
 #define VNU_SYS_gfx_canvas   72
+#define VNU_SYS_times        73
+#define VNU_SYS_getrusage    74
 
 /* Which display driver is in use, as vnu_gfx_info::driver. */
 #define VNU_GFX_DRIVER_VGA        0 /* Bochs VBE, 8bpp indexed */

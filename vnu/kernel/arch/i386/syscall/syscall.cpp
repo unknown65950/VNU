@@ -794,6 +794,44 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
         }
         return 0;
 
+    case VNU_SYS_times: {
+        auto* t = reinterpret_cast<vnu_tms*>(tf->ebx);
+        if (!t)
+            return static_cast<std::uint32_t>(-VNU_EFAULT);
+        auto* p = vnu::proc::current();
+        t->utime = static_cast<int32_t>(p ? p->uticks : 0);
+        t->stime = 0;
+        t->cutime = static_cast<int32_t>(p ? p->cuticks : 0);
+        t->cstime = 0;
+        /* POSIX: the number of clock ticks since an arbitrary point —
+         * boot here, the same 100 Hz clock /proc/stat counts. */
+        return static_cast<std::uint32_t>(vnu::proc::now_jiffies());
+    }
+    case VNU_SYS_getrusage: {
+        const int who = static_cast<int>(tf->ebx);
+        auto* r = reinterpret_cast<vnu_rusage*>(tf->ecx);
+        if (!r)
+            return static_cast<std::uint32_t>(-VNU_EFAULT);
+        auto* p = vnu::proc::current();
+        const uint32_t uticks = p ? (who == -1 ? p->cuticks : p->uticks) : 0;
+        const uint32_t nvcsw = p ? (who == -1 ? p->cnvcsw : p->nvcsw) : 0;
+        const uint32_t nivcsw = p ? (who == -1 ? p->cnivcsw : p->nivcsw) : 0;
+        /* One 100 Hz tick is 10 ms: seconds are ticks/100 and the
+         * remaining ticks are whole 10000 µs, so this is exact with no
+         * 64-bit division (the freestanding kernel links no libgcc). */
+        r->ru_utime.tv_sec = static_cast<int32_t>(uticks / 100u);
+        r->ru_utime.tv_usec = static_cast<int32_t>((uticks % 100u) * 10000u);
+        r->ru_stime.tv_sec = 0;
+        r->ru_stime.tv_usec = 0;
+        r->ru_maxrss = r->ru_ixrss = r->ru_idrss = r->ru_isrss = 0;
+        r->ru_minflt = r->ru_majflt = r->ru_nswap = 0;
+        r->ru_inblock = r->ru_oublock = r->ru_msgsnd = r->ru_msgrcv = 0;
+        r->ru_nsignals = 0;
+        r->ru_nvcsw = static_cast<int32_t>(nvcsw);
+        r->ru_nivcsw = static_cast<int32_t>(nivcsw);
+        return 0;
+    }
+
     default:
         return static_cast<std::uint32_t>(-VNU_ENOSYS);
     }

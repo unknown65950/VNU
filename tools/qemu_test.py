@@ -694,6 +694,17 @@ SUITE = [
       r"^forkdemo: parent marker=1, child alive\? yes$",
       r"^forkdemo: parent marker=1 after the child wrote 2$",
       r"^forkdemo: waitpid -> pid=\d+ status=7$"], []),
+    # `rusagedemo` checks the two CPU-time syscalls end to end: a child
+    # burns a few scheduler ticks and the parent must see them as its
+    # own tms_cutime and in getrusage(RUSAGE_CHILDREN). stime/cstime
+    # are always 0 (VNU runs everything at privilege 0 and takes no
+    # user/system split), and so are the parts of rusage the kernel
+    # does not measure; see man rusagedemo.
+    ("rusage-burn", "rusagedemo",
+     [r"^rusagedemo: child burn: utime=[1-9]\d* ticks \(exit status 7\)$",
+      r"^rusagedemo: times after waitpid: utime=\d+ stime=0 cutime=[1-9]\d* cstime=0$",
+      r"^rusagedemo: getrusage self: utime=\d+s \d+us stime=0s 0us nvcsw=\d+ nivcsw=\d+$",
+      r"^rusagedemo: getrusage children: utime=0s [1-9]\d*us stime=0s 0us$"], []),
     ("df", "df", [r"^Filesystem", r"^vfs +\d+ +\d+ +\d+ +\d+% /$"], []),
     ("motd", "cat /etc/motd", [r"Welcome to VNU"], []),
     ("echo", "echo hello world", [r"^hello world$"], []),

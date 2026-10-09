@@ -58,6 +58,7 @@
 #include "embedded_vcc.h"
 #include "embedded_vnu.h"
 #include "embedded_vsshd.h"
+#include "embedded_rusagedemo.h"
 
 extern "C" void vnu_proc_switch(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_proc_trampoline();
@@ -135,6 +136,7 @@ const EmbeddedProg embedded[] = {
     {"/bin/vcc", embedded_vcc_elf, embedded_vcc_elf_size},
     {"/bin/vnu", embedded_vnu_elf, embedded_vnu_elf_size},
     {"/bin/vsshd", embedded_vsshd_elf, embedded_vsshd_elf_size},
+    {"/bin/rusagedemo", embedded_rusagedemo_elf, embedded_rusagedemo_elf_size},
     /* short names for convenience */
     {"hello", embedded_hello_elf, embedded_hello_elf_size},
     {"echo", embedded_echo_elf, embedded_echo_elf_size},
@@ -1102,6 +1104,27 @@ void sys_exit(int status)
      * whoever is waiting on the other end of it. */
     vnu::pipe::close_all_of(p.pid);
 
+    /* Hand the child's CPU time to its parent, the way POSIX means it:
+     * a waited-for child's utime/stime (with its own children folded
+     * in) ends up in the parent's tms_cutime/tms_cstime and in the
+     * children side of getrusage's switch counts. Done here, while the
+     * counts still exist, so a parent that never reaps still collects
+     * them. An orphan (reparented to pid 0) has the scheduler for a
+     * parent and nothing is accumulated; the legacy windowed path has
+     * no coro parent to pay either. */
+    if (p.coro && p.ppid != 0) {
+        for (int i = 0; i < MAX_PROCS; ++i) {
+            Process& par = table[i];
+            if (!par.coro || par.pid != p.ppid)
+                continue;
+            par.cuticks += p.uticks + p.cuticks;
+            par.csticks += p.sticks + p.csticks;
+            par.cnvcsw += p.nvcsw + p.cnvcsw;
+            par.cnivcsw += p.nivcsw + p.cnivcsw;
+            break;
+        }
+    }
+
     if (p.coro) {
         /* Scheduler-managed process: turn into a zombie for the parent
          * (init) to reap via waitpid, and hand control back to the
@@ -2062,6 +2085,11 @@ void yield_current()
     Process& p = table[current_idx];
     if (!p.coro)
         return;
+    /* A voluntary switch: the process gave the CPU up itself (blocked
+     * on a wait, a pipe, a read or a sleep), so it counts against its
+     * getrusage ru_nvcsw. Preemptions are counted at the park site in
+     * vnu_timer_tick instead. */
+    ++p.nvcsw;
     switch_to_scheduler(true);
 }
 
@@ -2176,6 +2204,14 @@ extern "C" uint32_t vnu_timer_tick(uint32_t frame_esp)
     if (!cur.coro)
         return 0;
 
+    /* Charge the tick to whoever was running. The kernel executes every
+     * process at privilege 0 (one address space, per-process page
+     * tables) and samples no privilege level, so user and system time
+     * cannot be told apart the way Linux tells them apart — the same
+     * reason /proc/stat piles every busy jiffy into its system slot.
+     * Every tick lands in uticks, and sticks stays 0 (ABI.md). */
+    ++cur.uticks;
+
     /* An alarm that ran out raises SIGALRM, and the tick is the only
      * thing that ever notices the deadline passing: nothing in userspace
      * is running, let alone asking what time it is. raise_not_self()
@@ -2238,6 +2274,7 @@ extern "C" uint32_t vnu_timer_tick(uint32_t frame_esp)
      * next return path to consume it. */
     cur.coro_esp = frame_esp;
     cur.preempted = true;
+    ++cur.nivcsw; /* the timer seized the CPU: an involuntary switch */
     vnu_proc_new_pd = g_sched_pgdir;
     vnu_proc_preempt(g_sched_esp);
     return 0; /* not reached */

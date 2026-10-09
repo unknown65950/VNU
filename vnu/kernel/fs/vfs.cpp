@@ -950,6 +950,7 @@ void init()
     add("/bin/vedit", false);
     add("/bin/ttytest", false);
     add("/bin/forkdemo", false);
+    add("/bin/rusagedemo", false);
     add("/bin/wc", false);
     add("/bin/head", false);
     add("/bin/tail", false);

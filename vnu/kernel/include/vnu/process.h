@@ -90,6 +90,24 @@ struct Process {
                               * sigreturn puts that context back */
     uint32_t alarm_at;       /* the jiffy SIGALRM is raised at, 0 when no
                               * alarm is set; see sys_alarm */
+    /* --- CPU-time accounting (times(2), getrusage(2)) ------------------
+     * uticks/sticks are the ticks charged to this process while it was
+     * the one running; cuticks/csticks are what its waited-for children
+     * accumulated (folded in at their exit, recursively), and the
+     * cnvcsw/cnivcsw pair carries their context-switch counts the same
+     * way. VNU executes everything at privilege 0, so user and system
+     * time cannot be separated: every tick lands in uticks and sticks
+     * stays 0 (see vnu_rusage in <vnu/abi.h>). Forked children start
+     * with all of these zeroed (sys_fork zeroes the struct); execve
+     * keeps them, as POSIX requires. */
+    uint32_t uticks;
+    uint32_t sticks;   /* always 0 (no user/system split) */
+    uint32_t cuticks;  /* children's uticks + their own cuticks */
+    uint32_t csticks;  /* always 0 */
+    uint32_t nvcsw;    /* voluntary switches (cooperative yields) */
+    uint32_t nivcsw;   /* involuntary switches (timer preemptions) */
+    uint32_t cnvcsw;   /* children's nvcsw + their cnvcsw */
+    uint32_t cnivcsw;  /* children's nivcsw + their cnivcsw */
 };
 
 void init();

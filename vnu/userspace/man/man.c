@@ -1564,6 +1564,38 @@ EXIT STATUS\n\
 SEE ALSO\n\
     ttytest(1), man(1)\n"
 
+#define RUSAGEDEMO_PAGE "NAME\n\
+    rusagedemo - what times(2) and getrusage(2) report\n\
+\n\
+SYNOPSIS\n\
+    rusagedemo\n\
+\n\
+DESCRIPTION\n\
+    Forks once and prints the caller's CPU-time accounting from\n\
+    times(2) and getrusage(2), for the process itself and for the\n\
+    child it waited for. The child burns a few ticks of the 100 Hz\n\
+    scheduler clock in a busy loop and exits with status 7; the\n\
+    kernel folds its time into the parent's tms_cutime and into\n\
+    getrusage(RUSAGE_CHILDREN) at the exit, which is what the demo\n\
+    then shows. Every line printed is a claim about the accounting\n\
+    the kernel does, so this doubles as the regression test for the\n\
+    two syscalls.\n\
+\n\
+    VNU executes all code at privilege 0 with per-process page tables\n\
+    and does not sample a privilege level, so user and system time\n\
+    are not separated the way Linux separates them: every tick a\n\
+    process runs is charged to utime, and stime/cstime are always 0\n\
+    (see ABI.md and <vnu/abi.h>). The demo prints those zeros rather\n\
+    than hiding them. getrusage's unmeasurable fields (maxrss, page\n\
+    faults, block I/O, ...) are likewise reported as 0.\n\
+\n\
+EXIT STATUS\n\
+    0 when the child burned its ticks and was reaped with status 7;\n\
+    1 when fork() or waitpid() misbehaved.\n\
+\n\
+SEE ALSO\n\
+    times(2), getrusage(2), forkdemo(1), ttytest(1), man(1)\n"
+
 #define TTYTEST_PAGE "NAME\n\
     ttytest - POSIX compatibility smoke test\n\
 \n\
@@ -1868,6 +1900,8 @@ static const struct Page pages[] = {
      TTYTEST_PAGE},
     {"forkdemo", "fork(2) demonstration program",
      FORKDEMO_PAGE},
+    {"rusagedemo", "resource-usage (times/getrusage) demonstration program",
+     RUSAGEDEMO_PAGE},
     {"tlsdemo",  "TLS 1.2 client demo",
      TLSDEMO_PAGE},
     {"echoserver", "TCP echo server demo",
