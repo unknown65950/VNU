@@ -421,6 +421,7 @@ DESCRIPTION\n\
 \n\
         echo true false pwd cat ls mkdir rm touch uname clear\n\
         wc head tail grep sort cp mv basename dirname seq df ping\n\
+        nohup\n\
 \n\
     There is no 'coreutils' program on the image any more; this\n\
     page is kept as an index of the set. Run 'man <name>' for a\n\
@@ -682,6 +683,36 @@ DESCRIPTION\n\
     Prints integers from FIRST (default 1) up to LAST, counting\n\
     by STEP (default 1), one per line. A negative STEP counts\n\
     downwards. Unrepresentable values are printed as 0.\n"
+
+#define NOHUP_PAGE "NAME\n\
+    nohup - run a command immune to hangups\n\
+\n\
+SYNOPSIS\n\
+    nohup COMMAND [ARG...]\n\
+\n\
+DESCRIPTION\n\
+    Runs COMMAND with SIGHUP set to be ignored, so it keeps running\n\
+    when the terminal that started it goes away instead of being\n\
+    killed with the session. Because that output would otherwise be\n\
+    lost with the terminal, the command's standard output - when it\n\
+    is a terminal - is appended to nohup.out in the current\n\
+    directory, created with mode 0600 if it does not exist, and its\n\
+    standard error is sent to the same place; standard input, when\n\
+    it is a terminal, is redirected from /dev/null. A short note on\n\
+    standard error says what was redirected.\n\
+\n\
+    nohup then replaces itself with the command (execve(2)), so the\n\
+    shell sees the command's own exit status. A name without a slash\n\
+    is looked up in /bin; there is no PATH search and no\n\
+    $HOME/nohup.out fallback.\n\
+\n\
+EXIT STATUS\n\
+    The command's status. nohup returns 125 if it could not set up\n\
+    (bad usage, nohup.out not creatable) and 127 if the command\n\
+    could not be executed at all.\n\
+\n\
+SEE ALSO\n\
+    coreutils(1), sh(1), man(1)\n"
 
 #define DF_PAGE "NAME\n\
     df - report file system space usage\n\
@@ -1862,6 +1893,8 @@ static const struct Page pages[] = {
      DIRNAME_PAGE},
     {"seq",      "print a sequence of numbers",
      SEQ_PAGE},
+    {"nohup",    "run a command immune to hangups",
+     NOHUP_PAGE},
 {"df",       "report file system space usage",
      DF_PAGE},
     {"ping",     "send ICMP echo requests (network test)",

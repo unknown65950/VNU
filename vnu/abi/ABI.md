@@ -450,6 +450,15 @@ never sees character 3 from the real console (a windowed console, whose
 keys come from the GUI rather than the controller, still delivers the
 byte — both are `3`, and what differs is where the key was read).
 
+`execve()` gives the new program a clean slate for the signals it
+handles itself: every caught signal's action returns to the default,
+since the old handler's address means nothing in the new image. Two
+dispositions belong to the process and survive instead — the blocked
+mask, and any signal whose action was `VNU_SIG_IGN`. The ignore is what
+`nohup(1)` is built on: it sets `SIGHUP` to be ignored and then
+`execve`s the command, so the command starts with the hangup already
+ignored.
+
 ### Removed
 
 Not applicable — numbers are never reused; old gaps stay reserved.

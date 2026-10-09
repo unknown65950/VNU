@@ -59,6 +59,7 @@
 #include "embedded_vnu.h"
 #include "embedded_vsshd.h"
 #include "embedded_rusagedemo.h"
+#include "embedded_nohup.h"
 
 extern "C" void vnu_proc_switch(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_proc_trampoline();
@@ -137,6 +138,7 @@ const EmbeddedProg embedded[] = {
     {"/bin/vnu", embedded_vnu_elf, embedded_vnu_elf_size},
     {"/bin/vsshd", embedded_vsshd_elf, embedded_vsshd_elf_size},
     {"/bin/rusagedemo", embedded_rusagedemo_elf, embedded_rusagedemo_elf_size},
+    {"/bin/nohup", embedded_nohup_elf, embedded_nohup_elf_size},
     /* short names for convenience */
     {"hello", embedded_hello_elf, embedded_hello_elf_size},
     {"echo", embedded_echo_elf, embedded_echo_elf_size},
@@ -965,12 +967,19 @@ static int exec_prepared(Registers* trap, const char* path,
      * way it is: the new image is a new program, so what it does about
      * a signal is its own business and every handler goes back to the
      * default action (a handler address in the old image is not even a
-     * valid address in the new one) - but the mask is the process's,
-     * not the program's, and stays. The alarm belongs to the old
-     * program and its deadline goes with it, and no handler is running
-     * across the image change, so there is no frame to give back. */
-    for (int i = 0; i < VNU_NSIG; ++i)
+     * valid address in the new one) - but two things are the process's
+     * and not the program's and stay: the mask, and a signal that was
+     * set to be ignored. The latter is what nohup(1) is built on: it
+     * ignores SIGHUP and execs the command, and POSIX keeps SIG_IGN
+     * across execve so the command starts with SIGHUP already ignored.
+     * The alarm belongs to the old program and its deadline goes with
+     * it, and no handler is running across the image change, so there
+     * is no frame to give back. */
+    for (int i = 0; i < VNU_NSIG; ++i) {
+        if (p.sig_action[i].handler == VNU_SIG_IGN)
+            continue;
         p.sig_action[i] = {};
+    }
     p.sig_frame = 0;
     p.sig_saved_mask = 0;
     p.alarm_at = 0;

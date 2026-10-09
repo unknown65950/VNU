@@ -705,6 +705,27 @@ SUITE = [
       r"^rusagedemo: times after waitpid: utime=\d+ stime=0 cutime=[1-9]\d* cstime=0$",
       r"^rusagedemo: getrusage self: utime=\d+s \d+us stime=0s 0us nvcsw=\d+ nivcsw=\d+$",
       r"^rusagedemo: getrusage children: utime=0s [1-9]\d*us stime=0s 0us$"], []),
+    # nohup: with the console behind it, the command's output is a
+    # terminal's and would be lost with the session, so nohup appends it
+    # to nohup.out and says so. The command still runs - execve keeps the
+    # SIGHUP ignore nohup set - and its own output goes to the file, not
+    # the terminal, which is the whole point of the redirection.
+    ("nohup-out", "nohup echo from-nohup",
+     [r"^nohup: ignoring input and appending output to 'nohup\.out'$"],
+     [r"from-nohup"]),
+    ("nohup-file", "cat nohup.out", [r"^from-nohup$"], []),
+    # When the caller has already redirected standard output, nohup has
+    # nothing to append and only sends standard error the same way; the
+    # note changes and the command's output lands where the caller put it.
+    ("nohup-stderr", "nohup echo err-note > /tmp/nohup-x",
+     [r"^nohup: ignoring input and redirecting stderr to stdout$"],
+     [r"err-note"]),
+    ("nohup-stderr-file", "cat /tmp/nohup-x", [r"^err-note$"], []),
+    ("man-nohup", "man nohup > /tmp/man-nohup.out", [],
+     [r"press h for help"]),
+    ("man-nohup-text", "cat /tmp/man-nohup.out",
+     [r"^NAME$", r"nohup - run a command immune to hangups",
+      r"^EXIT STATUS$"], []),
     ("df", "df", [r"^Filesystem", r"^vfs +\d+ +\d+ +\d+ +\d+% /$"], []),
     ("motd", "cat /etc/motd", [r"Welcome to VNU"], []),
     ("echo", "echo hello world", [r"^hello world$"], []),
