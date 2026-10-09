@@ -20,6 +20,8 @@
 #include <vlibc/string.h>
 #include <vlibc/stdlib.h>
 #include <vlibc/fcntl.h>
+#include <vlibc/signal.h>
+#include <vlibc/sys/wait.h>
 #include <vlibc/time.h>
 #include <vlibc/sys/utsname.h>
 #include <vlibc/sys/syscall.h>
@@ -38,6 +40,20 @@ static void w(const char* s) { write(1, s, strlen(s)); }
 static void we(const char* s) { write(2, s, strlen(s)); }
 
 /* ---- tiny helpers vlibc does not provide -------------------------- */
+
+/* vlibc has no memcmp (its string.h is strings only). */
+static int memcmp(const void* a, const void* b, unsigned long n)
+{
+    const unsigned char* x = (const unsigned char*)a;
+    const unsigned char* y = (const unsigned char*)b;
+    while (n--) {
+        if (x[0] != y[0])
+            return (int)x[0] - (int)y[0];
+        ++x;
+        ++y;
+    }
+    return 0;
+}
 
 static char* find_ch(const char* s, char c)
 {
@@ -454,6 +470,111 @@ static int cmd_size(void)
     return 0;
 }
 
+/* vnu set outsideaccess [on|off] - the SSH daemon switch. Reading the
+ * current setting takes no argument; on/off records the choice in
+ * /etc/vnu/config/vsshd.conf and starts (forks /bin/vsshd) or stops
+ * (signals the pid in /tmp/vsshd.pid) the daemon. */
+#define VSSHD_CONF "/etc/vnu/config/vsshd.conf"
+#define VSSHD_PID "/tmp/vsshd.pid"
+
+static int read_switch(char* out, int cap)
+{
+    int fd = open(VSSHD_CONF, O_RDONLY);
+    if (fd < 0)
+        return -1;
+    long n = read(fd, out, cap - 1);
+    close(fd);
+    if (n <= 0)
+        return -1;
+    out[n] = 0;
+    return 0;
+}
+
+static void write_switch(const char* value)
+{
+    int fd = open(VSSHD_CONF, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd >= 0) {
+        write(fd, value, strlen(value));
+        close(fd);
+    }
+}
+
+static int switch_is_on(const char* v)
+{
+    return v && memcmp(v, "outsideaccess on", 16) == 0;
+}
+
+static int cmd_set(int argc, char** argv)
+{
+    if (argc < 1 || strcmp(argv[0], "outsideaccess") != 0) {
+        we("vnu: set: only `outsideaccess on|off` is understood\n");
+        return 1;
+    }
+    char cur[64];
+    int have = read_switch(cur, sizeof(cur)) == 0;
+
+    if (argc < 2) {
+        w("outsideaccess: ");
+        w(switch_is_on(have ? cur : 0) ? "on\n" : "off\n");
+        return 0;
+    }
+    const char* want = argv[1];
+
+    if (strcmp(want, "on") == 0) {
+        if (have && switch_is_on(cur))
+            w("outsideaccess: already on\n");
+        else
+            write_switch("outsideaccess on\n");
+        /* fork the daemon; a second instance finds port 22 taken and
+         * leaves quietly, keeping the pid file of the running one */
+        int pid = fork();
+        if (pid < 0) {
+            we("vnu: set: fork failed\n");
+            return 1;
+        }
+        if (pid == 0) {
+            char* av[] = {"/bin/vsshd", 0};
+            execve("/bin/vsshd", av, 0);
+            exit(127); /* exec failed; the daemon never ran */
+        }
+        return 0;
+    }
+
+    if (strcmp(want, "off") == 0) {
+        write_switch("outsideaccess off\n");
+        int fd = open(VSSHD_PID, O_RDONLY);
+        char pb[16];
+        long n = fd >= 0 ? read(fd, pb, sizeof(pb) - 1) : -1;
+        if (fd >= 0)
+            close(fd);
+        if (n <= 0) {
+            w("outsideaccess: off (no daemon running)\n");
+            return 0;
+        }
+        pb[n] = 0;
+        int pid = atoi(pb);
+        if (pid > 0 && kill(pid, SIGTERM) == 0) {
+            int st = 0;
+            /* The daemon also watches the switch file and may take an
+             * accept timeout to notice it; and a signal racing the wait
+             * makes waitpid return EINTR before the zombie is ready, so
+             * wait until the daemon is really reaped. */
+            int r;
+            do {
+                r = waitpid(pid, &st, 0);
+            } while (r == -VNU_EINTR);
+            w("outsideaccess: off\n");
+        } else {
+            w("outsideaccess: off (daemon not running)\n");
+        }
+        unlink(VSSHD_PID);
+        return 0;
+    }
+
+    we("vnu: set: outsideaccess takes on or off\n");
+    return 1;
+}
+
 static void usage(void)
 {
     w("Usage: vnu [COMMAND]...\n");
@@ -461,6 +582,8 @@ static void usage(void)
     w("  fetch     overview of the running system (default)\n");
     w("  version   version block: OS, kernel, compiler, ABI, build date\n");
     w("  size      how much of what the system image is made of\n");
+    w("  set       outsideaccess: on|off|(none to read) - start or stop\n");
+    w("            the SSH daemon and record the choice in vsshd.conf\n");
     w("  install   install VNU onto a disk: no arguments opens the\n");
     w("            wizard, or DRIVE HOSTNAME [SIZE_MIB] does it\n");
     w("            without asking\n");
@@ -481,6 +604,8 @@ int main(int argc, char** argv)
         return cmd_version();
     if (strcmp(cmd, "size") == 0)
         return cmd_size();
+    if (strcmp(cmd, "set") == 0)
+        return cmd_set(argc - 2, argv + 2);
     if (strcmp(cmd, "install") == 0)
         return vnu_install(argc - 1, argv + 1);
     if (strcmp(cmd, "--help") == 0 || strcmp(cmd, "-h") == 0) {

@@ -791,12 +791,28 @@ COMMANDS\n\
               build date\n\
     size      image size per component (kernel, userspace, libraries,\n\
               fonts, resources) with the number of objects in each\n\
+    set       read or flip the outside-access switch, see 'vnu set'\n\
+              below: outsideaccess on starts the SSH daemon, off stops it\n\
     install   install VNU onto a disk, see 'vnu install' below\n\
 \n\
     The remaining options are:\n\
 \n\
         --help    display this help and exit\n\
         --version output version information and exit\n\
+\n\
+VNU SET\n\
+    set outsideaccess    print whether remote login is allowed\n\
+    set outsideaccess on     allow it: record 'outsideaccess on' in\n\
+        /etc/vnu/config/vsshd.conf and start the SSH daemon vsshd(1)\n\
+    set outsideaccess off    forbid it: flip the config file and stop\n\
+        the daemon (it notices the flip within a second and exits;\n\
+        SIGTERM to the pid in /tmp/vsshd.pid is only the fast path)\n\
+\n\
+    Turning outside access on forks /bin/vsshd, which binds port 22 and\n\
+    accepts SSH-2 connections: RSA host key, diffie-hellman-group14\n\
+    key exchange, password login against /etc/passwd, and on success a\n\
+    session running /bin/vash. A second 'vnu set outsideaccess on' finds\n\
+    the port taken and leaves the running daemon alone.\n\
 \n\
 VNU INSTALL\n\
     With no argument, install opens a full-screen wizard in the style of\n\
@@ -828,6 +844,8 @@ EXAMPLES\n\
     vnu fetch      the Graphics line: driver, WxH and depth\n\
     vnu version\n\
     vnu size\n\
+    vnu set outsideaccess    is remote login allowed?\n\
+    vnu set outsideaccess on start the SSH daemon\n\
     vnu install           the wizard\n\
     vnu install 0 mybox   disk 0, named mybox, whole disk\n\
 \n\
@@ -837,6 +855,8 @@ FILES\n\
     /proc/boot     root file system, install state, session shell\n\
     /proc/images   per-component image sizes\n\
     /etc/hostname  the name of this machine\n\
+    /etc/vnu/config/vsshd.conf  the outside-access switch\n\
+    /tmp/vsshd.pid  the pid of the running SSH daemon\n\
 \n\
 EXIT STATUS\n\
     0 on success, 1 when the requested information cannot be read, or\n\
@@ -1642,6 +1662,48 @@ EXAMPLES\n\
 SEE ALSO\n\
     ping(1), tlsdemo, echoserver, man hosts\n"
 
+#define VSSHD_PAGE "NAME\n\
+    vsshd - the SSH-2 server daemon\n\
+\n\
+SYNOPSIS\n\
+    vsshd\n\
+\n\
+DESCRIPTION\n\
+    Serves SSH-2 remote logins on port 22: an RSA-2048 host key (the\n\
+    fixed device key embedded at build time, see hostkey.h),\n\
+    diffie-hellman-group14-sha256 key exchange, aes128-ctr with\n\
+    hmac-sha2-256, password authentication checked against /etc/passwd\n\
+    exactly the way the console login checks it, and on success a\n\
+    single session channel running the machine's own /bin/vash. No pty\n\
+    is emulated: vash edits and echoes its own lines, so the session\n\
+    is two plain byte pipes against the shell.\n\
+\n\
+    The daemon is normally started and stopped by 'vnu set\n\
+    outsideaccess on|off' (see man vnu), which also records the choice\n\
+    in /etc/vnu/config/vsshd.conf. Run directly only to debug: the\n\
+    daemon refuses to start unless that file says 'outsideaccess on'.\n\
+    It writes its pid to /tmp/vsshd.pid, forks a process per accepted\n\
+    connection, and reaps the children as they finish. It stops within\n\
+    a second of the switch file flipping to off (SIGTERM is only the\n\
+    fast path), removing the pid file and exiting.\n\
+\n\
+    From the host, run.sh forwards guest port 22 to host loopback\n\
+    10022, so 'ssh -p 10022 root@127.0.0.1' reaches it over the real\n\
+    NIC (slirp hostfwd) when QEMU runs with the SSH port mapped.\n\
+\n\
+FILES\n\
+    /etc/vnu/config/vsshd.conf  the outside-access switch\n\
+    /tmp/vsshd.pid     the daemon's pid\n\
+    /tmp/.session      the session identity handed to /bin/vash\n\
+    /tmp/.ssh_out      the session's stdout/stderr drain file\n\
+\n\
+EXIT STATUS\n\
+    0 when shutting down cleanly; 1 when the switch file forbids it or\n\
+    the socket cannot be bound.\n\
+\n\
+SEE ALSO\n\
+    vnu(1) (the set command), vash(1), man passwd\n"
+
 #define SH_PAGE "NAME\n\
     sh - the standard shell (synonym for vash)\n\
 \n\
@@ -1684,6 +1746,8 @@ static const struct Page pages[] = {
      VCC_PAGE},
     {"vnu",     "report what system you are running on",
      VNU_PAGE},
+    {"vsshd",   "the SSH-2 server daemon",
+     VSSHD_PAGE},
     {"vash",     "VNU login shell",
      VASH_PAGE},
     {"sh",       "the standard shell (synonym for vash)",

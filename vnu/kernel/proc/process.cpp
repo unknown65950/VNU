@@ -6,6 +6,7 @@
 #include <vnu/paging.h>
 #include <vnu/pmm.h>
 #include <vnu/vga_gfx.h>   /* console_tick(): the console on a pixelless display */
+#include <vnu/net.h>       /* service_rx(): reap inbound frames while idle */
 #include <vnu/vfs.h>
 #include <vnu/pipe.h>
 #include <vnu/posix.h>
@@ -56,6 +57,7 @@
 #include "embedded_forkdemo.h"
 #include "embedded_vcc.h"
 #include "embedded_vnu.h"
+#include "embedded_vsshd.h"
 
 extern "C" void vnu_proc_switch(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_proc_trampoline();
@@ -132,6 +134,7 @@ const EmbeddedProg embedded[] = {
     {"/bin/forkdemo", embedded_forkdemo_elf, embedded_forkdemo_elf_size},
     {"/bin/vcc", embedded_vcc_elf, embedded_vcc_elf_size},
     {"/bin/vnu", embedded_vnu_elf, embedded_vnu_elf_size},
+    {"/bin/vsshd", embedded_vsshd_elf, embedded_vsshd_elf_size},
     /* short names for convenience */
     {"hello", embedded_hello_elf, embedded_hello_elf_size},
     {"echo", embedded_echo_elf, embedded_echo_elf_size},
@@ -2342,6 +2345,14 @@ int run_scheduler(const char* primary, const char* fallback)
          * on a keystroke is the state a console is in most of the time.
          * Free on a display with a text mode of its own. */
         vnu::vgfx::console_tick();
+
+        /* The same "the scheduler is the one thing that runs" argument
+         * as the console: inbound frames are normally drained by the
+         * process waiting on a socket, and an idle machine (a shell
+         * parked on a keystroke) drains nothing — a SYN for a closed
+         * port or a ping would sit in the NIC's ring until somebody
+         * next touches the network. Service it here, once per pass. */
+        vnu::net::service_rx();
 
         if (init_slot < 0 || table[init_slot].state == State::Unused) {
             /* A previous session may have left a redirection (> file) on

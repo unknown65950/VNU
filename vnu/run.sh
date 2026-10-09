@@ -115,7 +115,8 @@ fi
 #   17778 -> 7778  echoserver (nc 127.0.0.1 17778)
 #   17779 -> 7779  tlsserver (openssl s_client -connect 127.0.0.1:17779)
 #   14433 -> 14433 tlsdemo against openssl s_server on the host
-QEMU_NET_ARGS=(-netdev user,id=n0,hostfwd=tcp::17778-:7778,hostfwd=tcp::17779-:7779,hostfwd=tcp::14433-:14433 -device e1000,netdev=n0)
+#   10022 -> 22    vsshd (ssh -p 10022 root@127.0.0.1)
+QEMU_NET_ARGS=(-netdev user,id=n0,hostfwd=tcp::17778-:7778,hostfwd=tcp::17779-:7779,hostfwd=tcp::14433-:14433,hostfwd=tcp::10022-:22 -device e1000,netdev=n0)
 
 # QEMU's AC'97 sound card (PCI 8086:2415) backs the audio_* syscalls;
 # the kernel's ac97 driver does a short playback self-test at boot.

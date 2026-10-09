@@ -1003,6 +1003,11 @@ long resolve_host(const char* name, uint32_t* out)
     return last;
 }
 
+void service_rx()
+{
+    ::rx_drain();
+}
+
 void get_info(Info* out)
 {
     if (!out)

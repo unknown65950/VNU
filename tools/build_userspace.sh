@@ -79,6 +79,8 @@ done
 "$VCC" "$ROOT/vnu/userspace/vcc/vcc.c" -o "$ROOT/sysroot/bin/vcc"
 # system information: what machine am I on (fetch/version/size).
 "$VCC" "$ROOT/vnu/userspace/vnu/vnu.c" -o "$ROOT/sysroot/bin/vnu"
+# the SSH daemon: transport/auth/connection layers plus the entry point.
+"$VCC" "$ROOT/vnu/userspace/vsshd/transport.c" "$ROOT/vnu/userspace/vsshd/auth.c" "$ROOT/vnu/userspace/vsshd/conn.c" "$ROOT/vnu/userspace/vsshd/vsshd.c" -o "$ROOT/sysroot/bin/vsshd"
 # account tools: one separate binary per command. The disk installer is
 # not here any more: it is `vnu install`, part of the vnu binary.
 for c in id whoami groups useradd passwd su; do
@@ -125,6 +127,7 @@ embed "$ROOT/sysroot/bin/man" man
 embed "$ROOT/sysroot/bin/vibecommander" vibecommander
 embed "$ROOT/sysroot/bin/vcc" vcc
 embed "$ROOT/sysroot/bin/vnu" vnu
+embed "$ROOT/sysroot/bin/vsshd" vsshd
 # the guest compiler's link inputs (mounted as /lib/crt0.o, /lib/libvlibc.a).
 embed "$ROOT/sysroot/lib/crt0.o" lib_crt0
 embed "$ROOT/sysroot/lib/libvlibc.a" lib_vlibc

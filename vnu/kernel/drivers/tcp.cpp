@@ -1,5 +1,6 @@
 #include <vnu/tcp.h>
 #include <vnu/abi.h>
+#include <vnu/process.h>
 #include <stdint.h>
 
 #include "netcore.h"
@@ -31,7 +32,6 @@
 extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
 extern "C" void* memmove(void* dst, const void* src, unsigned long count);
 extern "C" int memcmp(const void* a, const void* b, unsigned long count);
-extern "C" void vnu_debug_putc(char c);
 
 
 namespace {
@@ -63,6 +63,21 @@ enum {
     FLAG_PSH = 0x08,
     FLAG_ACK = 0x10,
 };
+
+/* Every blocking socket op waits by looping over rx_drain() until the
+ * network makes progress. That loop must hand the CPU back to the
+ * cooperative scheduler while it waits, exactly as the console and pipe
+ * reads do: a background daemon (vsshd's listener in accept()) is often
+ * the *only* runnable process, and a wait that never yields keeps the
+ * scheduler from ever running its bookkeeping pass — so the console
+ * shell, which the scheduler respawns there, would never come back.
+ * Coro processes yield; legacy/windowed callers (no scheduler behind
+ * them) keep the old pure busy-wait. */
+static void net_yield()
+{
+    if (vnu::proc::can_yield())
+        vnu::proc::yield_current();
+}
 
 struct TcpSock {
     bool used = false;
@@ -470,6 +485,21 @@ void handle_syn_ack(TcpSock& s, uint32_t seq, uint32_t ackno,
     tcp_send_ack(s);
 }
 
+/* RFC 793 reset processing: a SYN for a port nobody is listening on is
+ * answered with a bare RST (sequence 0, ACK set to the SYN's seq + 1 --
+ * the incoming segment carries no ACK), so the peer sees ECONNREFUSED
+ * instead of retrying a silently dropped SYN forever. */
+static void send_reset(uint32_t rip, const uint8_t* src_mac,
+                       uint16_t dport, uint16_t sport, uint32_t syn_seq)
+{
+    TcpSock rst = TcpSock{};
+    rst.rip = rip;
+    memcpy(rst.dst_mac, src_mac, 6);
+    rst.lport = dport;
+    rst.rport = sport;
+    tcp_send_seg(rst, 0, syn_seq + 1u, FLAG_RST | FLAG_ACK, false, nullptr, 0);
+}
+
 /* Server side of the handshake: an inbound SYN for a LISTEN socket.
  * Spawns a child socket in ST_SYN_RCVD, seeds its sequence windows from
  * the SYN and answers with a SYN-ACK. `src_mac` is the peer's MAC from
@@ -490,8 +520,10 @@ void handle_incoming_syn(uint32_t src_ip, const uint8_t* src_mac,
     }
 
     int lst = find_listener(dport);
-    if (lst < 0)
-        return; /* nothing listening: drop, like other unknown 4-tuples */
+    if (lst < 0) {
+        send_reset(src_ip, src_mac, dport, sport, seq);
+        return; /* nothing listening: refuse the connection */
+    }
     if (listener_pending(lst) >= g_socks[lst].backlog)
         return; /* backlog full: drop so the peer's retries land later */
 
@@ -706,6 +738,7 @@ long socket_connect(int sock, uint32_t ip_be, uint16_t port, uint32_t timeout_ms
         if (s.err_reset)
             return -VNU_ECONNREFUSED;
         tcp_retransmit(s, vnu::netcore::now_ms());
+        net_yield();
     }
     return -VNU_ETIMEDOUT;
 }
@@ -732,6 +765,7 @@ long socket_send(int sock, const void* buf, uint32_t len, uint32_t timeout_ms)
                 return -VNU_ECONNRESET;
             if (static_cast<int32_t>(vnu::netcore::now_ms() - deadline) >= 0)
                 return -VNU_ETIMEDOUT;
+            net_yield(); /* back-pressure: let others run until an ACK frees room */
         }
         uint32_t chunk = todo;
         if (chunk > SEND_CAP - s.snd_used)
@@ -753,11 +787,13 @@ long socket_send(int sock, const void* buf, uint32_t len, uint32_t timeout_ms)
 long socket_recv(int sock, void* buf, uint32_t len, uint32_t timeout_ms)
 {
     TcpSock* sp = nullptr;
-    if (!valid_handle(sock, &sp))
+    if (!valid_handle(sock, &sp)) {
         return -VNU_EBADF;
+    }
     TcpSock& s = *sp;
-    if (s.state == ST_CLOSED && !s.fin_rcvd)
+    if (s.state == ST_CLOSED && !s.fin_rcvd) {
         return -VNU_ENOTCONN;
+    }
     if (!buf || len == 0)
         return 0;
 
@@ -786,6 +822,7 @@ long socket_recv(int sock, void* buf, uint32_t len, uint32_t timeout_ms)
 
         if (static_cast<int32_t>(vnu::netcore::now_ms() - deadline) >= 0)
             return -VNU_ETIMEDOUT;
+        net_yield(); /* idle: hand the CPU back until a segment arrives */
     }
 }
 
@@ -909,6 +946,8 @@ long socket_accept(int sock, uint32_t* ip_be_out, uint16_t* port_out,
         }
         if (static_cast<int32_t>(vnu::netcore::now_ms() - deadline) >= 0)
             return -VNU_ETIMEDOUT;
+        net_yield(); /* no connection yet: let the scheduler (and the
+                      * console shell it respawns) have a turn */
     }
 }
 

@@ -60,6 +60,15 @@ long dns_query(uint32_t server, const char* name, uint32_t* out,
 // *out big-endian, or a negative errno (same set as dns_query).
 long resolve_host(const char* name, uint32_t* out);
 
+// Services the NIC's receive ring once, draining everything that has
+// arrived since the last call. The scheduler calls this from its idle
+// path so inbound frames are handled even while no process is waiting
+// on a socket: without it a SYN for a port nobody is listening on (or
+// a ping, or any other unsolicited frame) sits in the ring unread
+// until some program next touches the network, and a caller that
+// should get a reset instead retries into a silent machine.
+void service_rx();
+
 void get_info(Info* out);
 
 /* Fills `out` with the interface counters. Zeroes it and returns when

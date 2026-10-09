@@ -978,6 +978,7 @@ void init()
     add("/bin/tlsserver", false);
     add("/bin/vcc", false);
     add("/bin/vnu", false);
+    add("/bin/vsshd", false);
     add("/tmp", true);
     auto* tmp = find_index("/tmp") >= 0 ? &nodes[find_index("/tmp")] : nullptr;
     if (tmp)
