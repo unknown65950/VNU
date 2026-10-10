@@ -6,6 +6,7 @@
 namespace {
 
 constexpr const char* HOSTNAME_F = "/etc/hostname";
+constexpr const char* DOMAINNAME_F = "/etc/domainname";
 
 bool is_alnum(char c)
 {
@@ -115,6 +116,46 @@ bool load()
         vnu::tty::write_cstr("hostname: cannot write /etc/hostname\n");
         return false;
     }
+    return true;
+}
+
+/* Same shape as name(), a second file: the domain has no default to
+ * invent, only the traditional "(none)" for "not set". */
+char g_domain[MAX];
+
+const char* domain()
+{
+    char buf[MAX];
+    int got = vnu::vfs::read_path(DOMAINNAME_F, buf, sizeof(buf) - 1);
+    buf[got > 0 ? got : 0] = 0;
+    trim(buf);
+    int i = 0;
+    for (; buf[i] && i < MAX - 1; ++i)
+        g_domain[i] = buf[i];
+    g_domain[i] = 0;
+    if (g_domain[0] == 0) {
+        const char* none = "(none)";
+        int j = 0;
+        for (; none[j] && j < MAX - 1; ++j)
+            g_domain[j] = none[j];
+        g_domain[j] = 0;
+    }
+    return g_domain;
+}
+
+bool set_domain(const char* s)
+{
+    if (!valid(s))
+        return false;
+    char line[MAX];
+    int i = 0;
+    for (; s[i] && i < MAX - 2; ++i)
+        line[i] = s[i];
+    line[i] = '\n';
+    line[i + 1] = 0;
+    if (vnu::vfs::set_path(DOMAINNAME_F, line,
+                           static_cast<uint32_t>(i + 1)) != 0)
+        return false;
     return true;
 }
 

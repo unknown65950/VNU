@@ -279,11 +279,6 @@ Func* func_find(const char* name);
 void func_define(const char* name, Cmd* body);
 int func_undef(const char* name);
 
-/* --- regular expressions (regex.c) ---
- * `[[ text =~ pattern ]]' takes an unanchored match, the way bash does:
- * 1 when the pattern matches somewhere in the text, 0 when it does not. */
-int sh_regex_match(const char* pattern, const char* text);
-
 /* --- pattern matching (fnmatch.c) --- */
 int sh_pattern(const char* pat, const char* str);
 int sh_strip_prefix(const char* str, const char* pat, int longest, char* out, int outn);

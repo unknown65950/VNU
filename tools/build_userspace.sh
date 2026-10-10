@@ -36,7 +36,7 @@ python3 "$ROOT/tools/thams.py" generate
 
 echo "==> userspace"
 # Build vash (multi-file)
-VASH_SRC="$ROOT/vnu/userspace/vash/strbuf.c $ROOT/vnu/userspace/vash/cmd.c $ROOT/vnu/userspace/vash/lex.c $ROOT/vnu/userspace/vash/vars.c $ROOT/vnu/userspace/vash/fnmatch.c $ROOT/vnu/userspace/vash/expand.c $ROOT/vnu/userspace/vash/regex.c $ROOT/vnu/userspace/vash/parse.c $ROOT/vnu/userspace/vash/exec.c $ROOT/vnu/userspace/vash/arith.c $ROOT/vnu/userspace/vash/builtins.c $ROOT/vnu/userspace/vash/vash.c"
+VASH_SRC="$ROOT/vnu/userspace/vash/strbuf.c $ROOT/vnu/userspace/vash/cmd.c $ROOT/vnu/userspace/vash/lex.c $ROOT/vnu/userspace/vash/vars.c $ROOT/vnu/userspace/vash/fnmatch.c $ROOT/vnu/userspace/vash/expand.c $ROOT/vnu/userspace/vash/parse.c $ROOT/vnu/userspace/vash/exec.c $ROOT/vnu/userspace/vash/arith.c $ROOT/vnu/userspace/vash/builtins.c $ROOT/vnu/userspace/vash/vash.c"
 # Nothing is piped through tail here, and that is the point. This is the
 # longest compile in the tree, so its output was cut to the last 30 lines
 # to keep it readable - which throws away the first diagnostic of a run of
@@ -84,7 +84,7 @@ done
 "$VCC" "$ROOT/vnu/userspace/vsshd/transport.c" "$ROOT/vnu/userspace/vsshd/auth.c" "$ROOT/vnu/userspace/vsshd/conn.c" "$ROOT/vnu/userspace/vsshd/vsshd.c" -o "$ROOT/sysroot/bin/vsshd"
 # account tools: one separate binary per command. The disk installer is
 # not here any more: it is `vnu install`, part of the vnu binary.
-for c in id whoami groups useradd passwd su; do
+for c in id whoami groups useradd passwd su sysctl; do
   "$VCC" "$ROOT/vnu/userspace/usertools/$c.c" -o "$ROOT/sysroot/bin/$c"
 done
 
@@ -138,7 +138,7 @@ for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wallpaper imagine nohup; do
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
-for c in id whoami groups useradd passwd su; do
+for c in id whoami groups useradd passwd su sysctl; do
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
 echo "==> done"

@@ -55,7 +55,12 @@ constexpr int PATH_CAP = 64;
  * on every open() rather than stored, so a reader always sees current
  * values; the generated text lands in the node's normal data buffer so
  * read()/lseek() work on it unchanged. */
-enum class SynthKind : uint8_t { None = 0, Version, CpuInfo, MemInfo, SelfStatus, Mounts, Uptime, Disks, DfStat, Images, Gfx, Boot, Stat, NetDev };
+enum class SynthKind : uint8_t { None = 0, Version, CpuInfo, MemInfo, SelfStatus, Mounts, Uptime, Disks, DfStat, Images, Gfx, Boot, Stat, NetDev,
+                                 /* /proc/sys/kernel/*: the sysctl(8)
+                                  * name/value pairs. All regenerate on
+                                  * open; the last two are also
+                                  * writable (see the write() path). */
+                                 SysOstype, SysOsrelease, SysOsrevision, SysVersion, SysHostname, SysDomainname };
 
 struct Node {
     bool used;
@@ -491,6 +496,30 @@ void regen_synth(Node& n)
         a.str("abi " VNU_STRINGIFY(VNU_ABI_VERSION) "\n");
         a.str("built " VNU_BUILD_STAMP "\n");
         break;
+    case SynthKind::SysOstype:
+        /* The `/proc/sys/kernel' keys sysctl(8) serves. Values match
+         * what uname(2) reports, so a tool and a script agree: ostype
+         * is the sysname, osrelease the kernel release, version the
+         * build string, and osrevision the user-visible OS revision. */
+        a.str("VNU\n");
+        break;
+    case SynthKind::SysOsrelease:
+        a.str(VNU_KERNEL_VERSION "\n");
+        break;
+    case SynthKind::SysOsrevision:
+        a.str(VNU_VERSION "\n");
+        break;
+    case SynthKind::SysVersion:
+        a.str(VNU_CODENAME " " VNU_BUILD_STAMP "\n");
+        break;
+    case SynthKind::SysHostname:
+        a.str(vnu::host::name());
+        a.str("\n");
+        break;
+    case SynthKind::SysDomainname:
+        a.str(vnu::host::domain());
+        a.str("\n");
+        break;
     case SynthKind::CpuInfo: {
         char vendor[13];
         cpu_vendor(vendor);
@@ -859,6 +888,16 @@ void init()
         hn->perm = 0644u;
     }
 
+    /* The NIS domain name, the pair of kernel.hostname that sysctl(8)
+     * reports as kernel.domainname. It has no default to invent, so an
+     * empty or missing file reads back as the traditional "(none)"; the
+     * file is what a `sysctl -w kernel.domainname=...' rewrites. */
+    auto* dn = add("/etc/domainname", false);
+    if (dn) {
+        node_set_cstr(*dn, "(none)\n");
+        dn->perm = 0644u;
+    }
+
     /* --- name resolution ---
      * /etc/hosts: static `ip addr [name ...]` mappings, consulted
      * before DNS. /etc/resolv.conf: `nameserver a.b.c.d` lines tried
@@ -976,6 +1015,7 @@ void init()
     add("/bin/useradd", false);
     add("/bin/passwd", false);
     add("/bin/su", false);
+    add("/bin/sysctl", false);
     add("/bin/echoserver", false);
     add("/bin/tlsserver", false);
     add("/bin/vcc", false);
@@ -1046,6 +1086,18 @@ void init()
     add_synth("/proc/net/dev", SynthKind::NetDev);
     add("/proc/self", true);
     add_synth("/proc/self/status", SynthKind::SelfStatus);
+
+    /* /proc/sys/kernel: the sysctl(8) tree. kernel.hostname and
+     * kernel.domainname are writable (the write path in this file
+     * intercepts them); the rest are read-only facts. */
+    add("/proc/sys", true);
+    add("/proc/sys/kernel", true);
+    add_synth("/proc/sys/kernel/ostype", SynthKind::SysOstype);
+    add_synth("/proc/sys/kernel/osrelease", SynthKind::SysOsrelease);
+    add_synth("/proc/sys/kernel/osrevision", SynthKind::SysOsrevision);
+    add_synth("/proc/sys/kernel/version", SynthKind::SysVersion);
+    add_synth("/proc/sys/kernel/hostname", SynthKind::SysHostname);
+    add_synth("/proc/sys/kernel/domainname", SynthKind::SysDomainname);
 
     /* --- FHS: remaining conventional directories --- */
     add("/usr", true);
@@ -1277,6 +1329,32 @@ int read(int fd, void* buf, uint32_t count)
     return static_cast<int>(take);
 }
 
+/* Set a writable sysctl string node (`/proc/sys/kernel/hostname' and
+ * `.domainname'): the bytes of one write are the new value, with a
+ * trailing newline (as `echo' leaves) trimmed off. A write split into
+ * chunks would be read as several successive values; both the shell and
+ * sysctl(8) write the whole string at once, which is what this serves.
+ * Returns the byte count, or -VNU_EINVAL when the value is not an
+ * acceptable name. */
+int set_sysctl_name(const char* in, uint32_t count, bool as_host)
+{
+    if (count == 0 || count >= vnu::host::MAX)
+        return -VNU_EINVAL;
+    char val[vnu::host::MAX];
+    uint32_t n = count;
+    while (n > 0 && (in[n - 1] == '\n' || in[n - 1] == '\r' ||
+                     in[n - 1] == ' ' || in[n - 1] == '\t'))
+        --n;
+    if (n == 0)
+        return -VNU_EINVAL;
+    for (uint32_t i = 0; i < n; ++i)
+        val[i] = in[i];
+    val[n] = 0;
+    if (as_host ? !vnu::host::set(val) : !vnu::host::set_domain(val))
+        return -VNU_EINVAL;
+    return static_cast<int>(count);
+}
+
 int write(int fd, const void* buf, uint32_t count)
 {
     if (fd < 0 || fd >= MAX_FD || !files[fd].used)
@@ -1328,9 +1406,16 @@ int write(int fd, const void* buf, uint32_t count)
             break;
         }
     }
-    /* /proc is read-only. */
-    if (n.synth != SynthKind::None)
+    /* /proc is generated, so a write only means something on the two
+     * nodes that name a writable piece of system state; everything
+     * else there is read-only. */
+    if (n.synth != SynthKind::None) {
+        if (n.synth == SynthKind::SysHostname)
+            return set_sysctl_name(in, count, true);
+        if (n.synth == SynthKind::SysDomainname)
+            return set_sysctl_name(in, count, false);
         return -VNU_EACCES;
+    }
 
     if (files[fd].flags & vnu::posix::O_APPEND)
         files[fd].position = n.size;

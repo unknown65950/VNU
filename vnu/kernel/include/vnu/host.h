@@ -38,6 +38,15 @@ bool valid(const char* s);
 // file is gone.
 bool set(const char* s);
 
+// The NIS/domain name, the second half of what `uname -n` and the
+// sysctl(8) pair kernel.hostname/kernel.domainname report. It lives in
+// /etc/domainname under the same rule: the file is the truth and an
+// empty or missing one reads back as the traditional "(none)". There
+// is no default domain to fall back to, so `valid()` (the hostname
+// rule) guards what may be written.
+const char* domain();
+bool set_domain(const char* s);
+
 // Adopt the hostname stored on an installed disk, if there is one.
 // Called once at boot, after ata::init() has found the disks; a live CD
 // session keeps the default. Returns true when a name was adopted.

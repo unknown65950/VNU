@@ -10,6 +10,7 @@
  * command with redirections.
  */
 #include "shell.h"
+#include "../libregex/regex.h"
 #include <vlibc/sys/wait.h>
 #include <vlibc/sys/stat.h>
 
@@ -1397,7 +1398,7 @@ static int test_cmp(Test* t)
                         : !sh_pattern(str_cstr(&right), str_cstr(&left));
             break;
         case 2:
-            r = sh_regex_match(str_cstr(&right), str_cstr(&left)) == 1;
+            r = re_match(str_cstr(&right), str_cstr(&left)) == 1;
             break;
         case 3:
             r = strcmp(str_cstr(&left), str_cstr(&right)) < 0;

@@ -1,6 +1,6 @@
 /*
- * regex.c — a backtracking matcher for the POSIX extended regular
- * expressions a shell script actually writes.
+ * regex.h — a backtracking matcher for the POSIX extended regular
+ * expressions a Unix program actually writes.
  *
  * The whole language is here: anchors, `.', the three repetition
  * operators, alternation, groups and bracket expressions, with `\'
@@ -12,11 +12,19 @@
  * pattern can match anywhere in the text. A `^' at the front pins it to
  * the start, a `$' at the end pins it to the end.
  *
- * Everything is plain C with nothing but string.h and stdlib.h, so the
- * matcher can be lifted into any other program as it stands.
+ * This is a header so that any program can carry the matcher by
+ * including it — every VNU binary is built from its own sources, and a
+ * shared capability lives in a header as `static' code rather than in a
+ * library that has to be installed alongside. It needs nothing but
+ * string.h and stdlib.h, so a host program can drop it in unchanged.
+ * On an empty pattern the match is empty and matches everything, as
+ * POSIX says.
  */
-#include "shell.h"
+#ifndef VNU_REGEX_H
+#define VNU_REGEX_H
+
 #include <vlibc/string.h>
+#include <vlibc/stdlib.h>
 
 enum {
     N_CHAR,
@@ -349,7 +357,10 @@ static const char* rx_match(Node* n, const char* s, const char* start,
     }
 }
 
-int sh_regex_match(const char* pattern, const char* text)
+/* Unanchored match, the way `[[ text =~ pattern ]]' reads in bash: 1 when
+ * `pattern' matches somewhere in `text', 0 when it does not (or the
+ * pattern is broken, or memory ran out). */
+static int re_match(const char* pattern, const char* text)
 {
     if (!pattern || !text)
         return 0;
@@ -380,3 +391,5 @@ int sh_regex_match(const char* pattern, const char* text)
     free(r.pool);
     return matched;
 }
+
+#endif /* VNU_REGEX_H */

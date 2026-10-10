@@ -408,6 +408,51 @@ DESCRIPTION\n\
     it starts a fresh /bin/vash as the target user.\n\
     Standalone binary in /bin.\n"
 
+#define SYSCTL_PAGE "NAME\n\
+    sysctl - read and write kernel parameters\n\
+\n\
+SYNOPSIS\n\
+    sysctl [OPTION...] [VARIABLE[=VALUE]]...\n\
+\n\
+DESCRIPTION\n\
+    Reads or writes a runtime kernel parameter. Every parameter is a\n\
+    small file under /proc/sys, and the name it is known by is the\n\
+    path with '.' (or '/') where the path has '/': `kernel.hostname'\n\
+    is /proc/sys/kernel/hostname. With no operand, nothing is done.\n\
+\n\
+    An operand with an '=' assigns a value (`sysctl -w a=b' is the\n\
+    same as `sysctl a=b'); one without reads the parameter and prints\n\
+    `name = value'. VNU carries a small /proc/sys/kernel: ostype,\n\
+    osrelease, osrevision and version are read-only facts (the same\n\
+    values uname(2) reports), and hostname and domainname may also be\n\
+    written. Changing hostname is the same as rewriting\n\
+    /etc/hostname; changing domainname rewrites /etc/domainname.\n\
+\n\
+OPTIONS\n\
+    -a, --all           display every parameter in /proc/sys\n\
+    -b, --binary        print a value without its trailing newline\n\
+    -e, --ignore        ignore errors about unknown keys\n\
+    -N, --names         list only the parameter names\n\
+    -n, --values        list only the values\n\
+    -q, --quiet         do not echo `name = value' when writing\n\
+    -w, --write         the operands are name=value assignments\n\
+    -p, --load[=FILE]   read assignments from FILE\n\
+                        (/etc/sysctl.conf when none is given)\n\
+    -r, --pattern ERE   with -a, show only names matching the\n\
+                        POSIX extended regular expression ERE\n\
+    -h, --help          show this help\n\
+    -V, --version       show the version\n\
+\n\
+    FILE has one `name = value' per line; blank lines and lines whose\n\
+    first non-blank character is '#' are ignored.\n\
+\n\
+EXIT STATUS\n\
+    0 when every operand was handled, 1 when any read, write or load\n\
+    failed.\n\
+\n\
+SEE ALSO\n\
+    uname(1), man(1)\n"
+
 #define COREUTILS_PAGE "NAME\n\
     coreutils - the standard command set (index)\n\
 \n\
@@ -1849,6 +1894,8 @@ static const struct Page pages[] = {
      PASSWD_PAGE},
     {"su",       "switch the session to another user",
      SU_PAGE},
+    {"sysctl",   "read and write kernel parameters",
+     SYSCTL_PAGE},
     {"coreutils", "the standard command set (index)",
      COREUTILS_PAGE},
     {"echo",     "write its arguments to standard output",

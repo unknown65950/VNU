@@ -60,6 +60,7 @@
 #include "embedded_vsshd.h"
 #include "embedded_rusagedemo.h"
 #include "embedded_nohup.h"
+#include "embedded_sysctl.h"
 
 extern "C" void vnu_proc_switch(uint32_t* old_esp_out, uint32_t new_esp);
 extern "C" void vnu_proc_trampoline();
@@ -129,6 +130,7 @@ const EmbeddedProg embedded[] = {
     {"/bin/useradd", embedded_useradd_elf, embedded_useradd_elf_size},
     {"/bin/passwd", embedded_passwd_elf, embedded_passwd_elf_size},
     {"/bin/su", embedded_su_elf, embedded_su_elf_size},
+    {"/bin/sysctl", embedded_sysctl_elf, embedded_sysctl_elf_size},
     {"/bin/vprobe", embedded_vprobe_elf, embedded_vprobe_elf_size},
     {"/bin/tlsdemo", embedded_tlsdemo_elf, embedded_tlsdemo_elf_size},
     {"/bin/echoserver", embedded_echoserver_elf, embedded_echoserver_elf_size},
