@@ -615,26 +615,28 @@ int sys_fork(Registers* trap)
 
     const uint32_t stack_base = parent.user_stack_top - USER_STACK_SIZE;
     const uint32_t stack_pages = USER_STACK_SIZE / vnu::paging::PAGE_SIZE;
-    const uint32_t heap_pages = (BRK_MAX - BRK_MIN) / vnu::paging::PAGE_SIZE;
-    /* vlibc's malloc() claims the whole 1 MiB in one brk() on its
-     * first call, so a break past BRK_MIN means the whole heap region
-     * is the parent's to hand over. A process that never allocated
-     * forks for its app pages and its stack alone (64 KiB), not 1.1 MiB. */
-    const uint32_t heap_in_use = (parent.brk > BRK_MIN) ? heap_pages : 0;
-    vnu::paging::MapRange ranges[3] = {
+    /* The heap is mapped lazily, so the child gets only the pages the
+     * parent's break actually reached - not a whole pre-reserved
+     * region. A process that never allocated copies no heap at all. */
+    const uint32_t heap_in_use =
+        (parent.brk > BRK_MIN)
+            ? (parent.brk - BRK_MIN + vnu::paging::PAGE_SIZE - 1) / vnu::paging::PAGE_SIZE
+            : 0;
+    vnu::paging::MapRange ranges[2] = {
         {0x00400000, parent.app_pages},
         {stack_base, stack_pages},
-        {BRK_MIN, heap_in_use},
     };
-    uint32_t pgdir = vnu::paging::create_address_space(ranges, heap_in_use ? 3 : 2);
+    uint32_t pgdir = vnu::paging::create_address_space(ranges, 2);
     if (!pgdir)
         return -VNU_ENOMEM;
 
     const uint32_t src = parent.pgdir_phys;
     bool ok = vnu::paging::copy_pages(pgdir, src, 0x00400000, parent.app_pages) &&
-              vnu::paging::copy_pages(pgdir, src, stack_base, stack_pages) &&
-              (heap_in_use == 0 ||
-               vnu::paging::copy_pages(pgdir, src, BRK_MIN, heap_in_use));
+              vnu::paging::copy_pages(pgdir, src, stack_base, stack_pages);
+    if (ok && heap_in_use) {
+        ok = vnu::paging::extend_address_space(pgdir, BRK_MIN, heap_in_use) &&
+             vnu::paging::copy_pages(pgdir, src, BRK_MIN, heap_in_use);
+    }
     if (!ok) {
         vnu::paging::destroy_address_space(pgdir);
         return -VNU_ENOMEM;
@@ -955,16 +957,18 @@ static int exec_prepared(Registers* trap, const char* path,
     /* The new image gets a new heap, and this is what makes it one. The
      * slot, its pid and its address space are all inherited from the
      * program that called execve(), and p.brk was inherited with them:
-     * the previous program's first malloc() had already moved the break
-     * to BRK_MAX, so the new program's first malloc() asked for
-     * BRK_MAX + 1 MiB, was refused, and returned NULL for every size it
-     * would ever ask for. opendir() could not allocate its DIR, ls could
-     * not open a directory, wallpaper could not read /proc/gfx, and vash
-     * could not read a script file — all of it one inherited field.
+     * the previous program's allocator had already grown the break, so
+     * the new program's first malloc() would have carried on from the
+     * old program's break. opendir() could not allocate its DIR, ls
+     * could not open a directory, wallpaper could not read /proc/gfx, and
+     * vash could not read a script file — all of it one inherited field.
      *
      * spawn() already sets p.brk = BRK_MIN for a process it creates;
      * execve() replaces the image in place and had no equivalent, so the
-     * one thing that must be fresh was the one thing that was not. */
+     * one thing that must be fresh was the one thing that was not. The
+     * heap pages already mapped into the space stay mapped (they are
+     * owned by the space) and are simply handed to the new program as it
+     * grows the break again. */
     p.brk = BRK_MIN;
     setup_user_stack(p, argc, arg_ptrs, path, env_ptrs, envc);
     /* What POSIX says execve does to signals, and why each half is the
@@ -1862,12 +1866,32 @@ uint32_t brk_current()
 
 uint32_t brk_set(uint32_t requested)
 {
-    if (table[current_idx].coro) {
-        table[current_idx].brk = requested;
-        return requested;
+    if (requested > BRK_MAX)
+        return static_cast<uint32_t>(-VNU_ENOMEM);
+
+    const uint32_t prev = brk_current();
+    if (requested > prev) {
+        /* Map whatever new pages the raised break reaches. The heap is
+         * mapped lazily: the span already covered (rounded up to a page)
+         * is already backed, and only the new tail needs frames. Both
+         * ends are page-aligned here so the whole span maps cleanly. */
+        const uint32_t mapped =
+            (prev - BRK_MIN + vnu::paging::PAGE_SIZE - 1) & ~(vnu::paging::PAGE_SIZE - 1);
+        const uint32_t want =
+            (requested - BRK_MIN + vnu::paging::PAGE_SIZE - 1) & ~(vnu::paging::PAGE_SIZE - 1);
+        uint32_t pgdir = table[current_idx].pgdir_phys;
+        if (!pgdir)
+            pgdir = vnu::paging::current_pgdir();
+        if (want > mapped &&
+            !vnu::paging::extend_address_space(
+                pgdir, BRK_MIN + mapped, (want - mapped) / vnu::paging::PAGE_SIZE))
+            return static_cast<uint32_t>(-VNU_ENOMEM);
     }
-    g_brk = requested;
-    return g_brk;
+    if (table[current_idx].coro)
+        table[current_idx].brk = requested;
+    else
+        g_brk = requested;
+    return requested;
 }
 
 int run_program_from_memory(const char* argv0_path, const uint8_t* data, uint32_t size)
@@ -1880,30 +1904,22 @@ int run_program_from_memory(const char* argv0_path, const uint8_t* data, uint32_
 
     /* Give this process its own private view of the app-image region
      * (0x400000, code+data - 24 pages/96 KiB, comfortably more than any of
-     * our current binaries need, see VIBEGRAPHICS_CHANGES.md), its own
-     * stack slot, AND its own heap (0x700000, matching
-     * vnu::proc::BRK_MIN/BRK_MAX) - all backed by freshly allocated
-     * physical frames. Heap and stack/code sit in the *same* page
-     * directory entry (0x400000-0x7FFFFF is one 4 MiB PDE), so once
-     * that PDE is privatized, anything in its span that isn't
-     * explicitly listed here goes from "shared identity mapping" to
-     * "not present" - the heap must be listed too, or it silently
-     * vanishes and the first malloc() page-faults (every command that
-     * never touches the heap - cat/echo/mkdir - worked fine, but `ls`,
-     * the one thing that calls opendir(), which mallocs a DIR, crashed
-     * immediately, until the heap was added here too). Everything else
-     * (kernel, VFS, etc.) stays on the shared identity map - see
-     * kernel/include/vnu/paging.h. This is what actually fixes
-     * "graphics breaks"/only-one-app-at-a-time: two processes' virtual
-     * 0x400000 (and heap, and stack) are physically different memory,
-     * instead of all racing to use the same RAM. */
+     * our current binaries need, see VIBEGRAPHICS_CHANGES.md) and its own
+     * stack slot, both backed by freshly allocated physical frames. The
+     * heap is deliberately not mapped here: it lives above the 32 MiB
+     * identity map at BRK_MIN/BRK_MAX and brk_set() adds its pages lazily
+     * as malloc() asks for them, so a program that never allocates never
+     * pays for a heap. Everything else (kernel, VFS, etc.) stays on the
+     * shared identity map - see kernel/include/vnu/paging.h. This is what
+     * fixes "graphics breaks"/only-one-app-at-a-time: two processes'
+     * virtual 0x400000 (and heap, and stack) are physically different
+     * memory, instead of all racing to use the same RAM. */
     uint32_t app_pages = elf_need_pages(data, size);
-    vnu::paging::MapRange ranges[3] = {
+    vnu::paging::MapRange ranges[2] = {
         {0x00400000, app_pages},
         {stack_base, USER_STACK_SIZE / vnu::paging::PAGE_SIZE},
-        {BRK_MIN, (BRK_MAX - BRK_MIN) / vnu::paging::PAGE_SIZE},
     };
-    uint32_t pgdir = vnu::paging::create_address_space(ranges, 3);
+    uint32_t pgdir = vnu::paging::create_address_space(ranges, 2);
     if (!pgdir)
         return -VNU_ENOMEM;
 
@@ -2048,12 +2064,11 @@ int sys_spawn(const char* path)
 
     uint32_t stack_base = USER_STACK_BASE + static_cast<uint32_t>(slot * USER_STACK_SIZE);
     uint32_t app_pages = elf_need_pages(prog->data, prog->size);
-    vnu::paging::MapRange ranges[3] = {
+    vnu::paging::MapRange ranges[2] = {
         {0x00400000, app_pages},
         {stack_base, USER_STACK_SIZE / vnu::paging::PAGE_SIZE},
-        {BRK_MIN, (BRK_MAX - BRK_MIN) / vnu::paging::PAGE_SIZE},
     };
-    uint32_t pgdir = vnu::paging::create_address_space(ranges, 3);
+    uint32_t pgdir = vnu::paging::create_address_space(ranges, 2);
     if (!pgdir)
         return -VNU_ENOMEM;
 

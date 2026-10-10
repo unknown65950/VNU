@@ -43,25 +43,21 @@ alignas(4096) uint32_t g_dev_pt[1024];
 uint32_t g_current_pgdir = 0;
 
 constexpr int MAX_ADDRESS_SPACES = 16;
-/* Frames pinned per private address space: app region (64 pages) +
- * stack (16) + heap (BRK 1 MiB = 256) = 336, with a little headroom.
+/* Frames pinned per private address space. Recycled on destroy, and the
+ * heap is now mapped lazily so only the pages a program really touches
+ * are counted, but the ceiling still has to cover the worst case: an
+ * 8 MiB heap (2048), an app image up to 1 MiB (256) and a stack (16).
  * Each entry is a 4-byte frame number, so the meta table below stays
- * well under a page. */
-/* Per-space frame budget. The app-image region is sized from the ELF
- * (up to 1 MiB -> 256 frames), the heap is 1 MiB (256) and the stack 16:
- * bigger guest binaries (a guest C compiler!) need the headroom. */
-constexpr int MAX_FRAMES_PER_SPACE = 1024;
-/* Every address space needs one private table for the app region, since
- * the image at 0x400000, the canvas at 0x500000, the stack slots at
- * 0x600000 and the heap at 0x700000 all fall inside the one 4 MiB window
- * from 0x400000 to 0x7FFFFF. The framebuffer a program borrows through
- * /dev/fb0 is mapped above the 32 MiB identity map instead, and a 5 MiB
- * frame at the top mode (1280x1024 at 32bpp) spans two windows of its
- * own there, each of which has to be a private copy of a shared identity
- * entry. Three is what the largest mode costs; the rest is headroom for
- * a mapping nobody has needed yet, and the cost of being wrong is 4 KiB
- * of kernel memory per space. */
-constexpr int MAX_PRIVATE_PDES_PER_SPACE = 6;
+ * well under a page per space. */
+constexpr int MAX_FRAMES_PER_SPACE = 2560;
+/* Every address space needs a private table for each 4 MiB window it
+ * privatizes: the app image at 0x400000, the canvas at 0x500000, the
+ * stack slots at 0x600000 (all inside one window), the heap at
+ * 0x03000000 (up to two windows for 8 MiB), and the /dev/fb0 window at
+ * 0x02000000 (up to two more for a 5 MiB top-mode frame). The rest is
+ * headroom, and the cost of being wrong is 4 KiB of kernel memory per
+ * space. */
+constexpr int MAX_PRIVATE_PDES_PER_SPACE = 8;
 
 struct AddrSpaceMeta {
     bool used = false;

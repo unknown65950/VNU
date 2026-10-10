@@ -307,22 +307,24 @@ const uint8_t* find_embedded_data(const char* path, uint32_t& out_size);
 int run_program_from_memory(const char* argv0_path, const uint8_t* data, uint32_t size);
 bool schedule();
 
-/* Per-"process" brk/heap bump allocator (see kernel/proc/process.cpp).
- * There's a single flat address space and no paging yet, so this is a
- * single fixed-size region reused by whichever program is currently
- * running — brk_reset() is called for every fresh process launch so
- * each one starts with its own empty heap, the same way its .bss
- * starts freshly zeroed. Without that reset, the first program to
- * call malloc() would permanently claim the whole region and every
- * later malloc() in any later program would fail forever. */
-constexpr uint32_t BRK_MIN = 0x00700000;
-constexpr uint32_t BRK_MAX = 0x00800000; // vlibc's malloc() always grows the
-                                          // heap by exactly 1 MiB on its very
-                                          // first call (see vlibc/src/stdlib/
-                                          // malloc.c) regardless of how much
-                                          // was actually requested, so this
-                                          // must stay a full MiB above
-                                          // BRK_MIN or malloc() fails outright.
+/* Per-process brk/heap (see kernel/proc/process.cpp). Every process and
+ * every GUI task has its own break pointer, backed by private physical
+ * frames in its own address space, and brk_reset() gives each freshly
+ * launched program an empty heap the same way its .bss starts zeroed.
+ *
+ * The region sits above the 32 MiB identity map on purpose: below it,
+ * every virtual address already belongs to the shared kernel/VFS
+ * mapping unless a space deliberately privatizes it, and the app, stack
+ * and /dev/fb0 windows have already claimed the gaps. Above the
+ * identity map there is nothing to collide with, so the heap can be as
+ * large as it needs to be.
+ *
+ * Pages are mapped lazily: brk_set() adds frames only for the span the
+ * break actually reaches, and fork() copies only the span the parent
+ * used. A program that never allocates never pays for a heap at all,
+ * and growing the region costs nothing until something asks for it. */
+constexpr uint32_t BRK_MIN = 0x03000000; // 48 MiB, above the identity map
+constexpr uint32_t BRK_MAX = 0x03800000; // 8 MiB of growable heap
 void brk_reset();
 uint32_t brk_current();
 uint32_t brk_set(uint32_t requested);

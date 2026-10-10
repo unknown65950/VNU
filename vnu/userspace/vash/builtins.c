@@ -733,6 +733,23 @@ static int b_read(int argc, char** argv)
         }
     } else if (i >= argc) {
         var_set("REPLY", str_cstr(&text));
+    } else if (argc - i == 1) {
+        /* One name takes the whole line with only the IFS whitespace at
+         * either end removed. Field splitting must not be used here:
+         * rejoining the split fields with single spaces would throw away
+         * the separators that are part of the value — `read -rd '' config'
+         * is how neofetch reads its whole default config, newlines and
+         * all, and it has to come back byte for byte. */
+        const char* s = str_cstr(&text);
+        int b = 0, e = text.len;
+        while (b < e && in_set(ifs, s[b]) && ifs_space((unsigned char)s[b]))
+            ++b;
+        while (e > b && in_set(ifs, s[e - 1]) && ifs_space((unsigned char)s[e - 1]))
+            --e;
+        char save = text.p[e];
+        text.p[e] = 0;
+        var_set(argv[i], text.p + b);
+        text.p[e] = save;
     } else {
         for (int k = i; k < argc; ++k) {
             const char* name = argv[k];
@@ -1106,12 +1123,60 @@ static int b_mapfile(int argc, char** argv)
     return 0;
 }
 
+/* --- eval / source ----------------------------------------------------
+ * `eval' joins its arguments with spaces and runs the result as shell
+ * input in this shell, so a variable or a function it defines stays
+ * defined afterwards. `source' (and the POSIX spelling `.') does the
+ * same for the text of a file. Both are how a script installs a config:
+ * neofetch reads its default config into a variable and `eval's it. */
+
+static int b_eval(int argc, char** argv)
+{
+    Str code;
+    str_init(&code);
+    for (int i = 1; i < argc; ++i) {
+        if (i > 1)
+            str_addc(&code, ' ');
+        str_adds(&code, argv[i]);
+    }
+    int r = run_string(str_cstr(&code), 0);
+    str_free(&code);
+    return r;
+}
+
+int builtin_source_file(const char* path)
+{
+    char* text = read_whole_file(path);
+    if (!text)
+        return -1;
+    int r = run_string(text, 0);
+    free(text);
+    return r;
+}
+
+static int b_source(int argc, char** argv)
+{
+    int r = 0;
+    for (int i = 1; i < argc; ++i) {
+        if (builtin_source_file(argv[i]) < 0) {
+            sh_err("vash: ");
+            sh_err(argv[i]);
+            sh_err(": no such file or directory\n");
+            r = 1;
+        }
+    }
+    return r;
+}
+
 struct Builtin {
     const char* name;
     int (*fn)(int, char**);
 };
 
 static struct Builtin builtins[] = {
+    {"eval", b_eval},
+    {"source", b_source},
+    {".", b_source},
     {"echo", b_echo},
     {":", b_colon},
     {"printf", b_printf},

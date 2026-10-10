@@ -421,11 +421,11 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
     }
     case VNU_SYS_brk: {
         std::uint32_t req = tf->ebx;
-        /* Windowed tasks get their own pre-mapped heap slice
-         * (BRK_MIN..BRK_MAX, see wintask.cpp's spawn ranges), so track
-         * the break per task instead of through the shared process
-         * heap — otherwise every windowed app would stomp the single
-         * g_brk that classic processes share. */
+        /* Windowed tasks get their own heap (BRK_MIN..BRK_MAX, mapped
+         * lazily into the task's address space), so track the break per
+         * task instead of through the shared process heap — otherwise
+         * every windowed app would stomp the single g_brk that classic
+         * processes share. */
         if (vnu::wintask::current_is_task())
             return vnu::wintask::task_brk(req);
         if (req == 0)

@@ -841,26 +841,32 @@ int main(int argc, char** argv)
     sa.sa_flags = 0;
     sa.sa_restorer = 0; /* sigaction() fills the restorer itself */
     sigaction(SIGINT, &sa, 0);
-    /* First time in a boot: login. Later respawns (after an external
-     * command execve()d over us) re-adopt the /tmp/.session identity. */
-    if (access_session_exists())
-        adopt_session();
-    else if (do_login() < 0)
-        return 0;
-    if (argc > 1) {
-        if (strcmp(argv[1], "-c") == 0 && argc > 2) {
-            run_string(argv[2], 0);
+    /* `-n' reads and parses without running anything, so it needs no
+     * identity: it is the syntax check of `sh -n script'. */
+    int argi = 1;
+    if (argc > argi && strcmp(argv[argi], "-n") == 0) {
+        sh_noexec = 1;
+        ++argi;
+    }
+    if (!sh_noexec) {
+        /* First time in a boot: login. Later respawns (after an external
+         * command execve()d over us) re-adopt the /tmp/.session identity. */
+        if (access_session_exists())
+            adopt_session();
+        else if (do_login() < 0)
+            return 0;
+    }
+    if (argc > argi) {
+        if (strcmp(argv[argi], "-c") == 0 && argc > argi + 1) {
+            run_string(argv[argi + 1], 0);
             return sh_status;
         }
-        /* script file */
-        int fd = open(argv[1], O_RDONLY);
+        /* script file. The buffer is one allocation the size the file
+         * reports. read(2) is only promised to return *some* of what is
+         * asked, so it is looped until EOF rather than trusted to hand
+         * the whole file back in one call. */
+        int fd = open(argv[argi], O_RDONLY);
         if (fd >= 0) {
-            /* The script belongs in the heap, not on the stack: a script
-             * is not shy about being a few hundred kilobytes of shell,
-             * a process stack is 64 KiB, and a stack buffer here would
-             * run off the end of it on the first line of a long script.
-             * The heap takes what the file actually holds, so nothing is
-             * lost to a fixed limit either. */
             struct stat st;
             unsigned long cap = 65536;
             if (fstat(fd, &st) == 0 && st.st_size > 0)
@@ -868,14 +874,19 @@ int main(int argc, char** argv)
             char* buf = (char*)malloc(cap);
             if (!buf) {
                 w("vash: out of memory reading ");
-                w(argv[1]);
+                w(argv[argi]);
                 w("\n");
                 close(fd);
                 return 1;
             }
-            long n = read(fd, buf, cap - 1);
+            unsigned long n = 0;
+            while (n < cap - 1) {
+                long r = read(fd, buf + n, (unsigned long)(cap - 1 - n));
+                if (r <= 0)
+                    break;
+                n += (unsigned long)r;
+            }
             close(fd);
-            if (n < 0) n = 0;
             buf[n] = 0;
             run_string(buf, 0);
             free(buf);

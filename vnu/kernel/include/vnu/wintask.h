@@ -279,8 +279,9 @@ uint32_t task_gfx_surface();
  * request is about, where the other hooks answer on its behalf. */
 Console* console_of_current();
 
-/* Per-task heap break. The task's heap is pre-mapped (BRK_MIN..BRK_MAX),
- * so this is just bookkeeping for vlibc's malloc(). Called from the
+/* Per-task heap break. The task's heap lives at BRK_MIN..BRK_MAX and is
+ * mapped lazily, so raising the break extends the task's own address
+ * space by exactly the pages the new break reaches. Called from the
  * SYS_brk handler while a windowed task is executing. */
 uint32_t task_brk(uint32_t req);
 

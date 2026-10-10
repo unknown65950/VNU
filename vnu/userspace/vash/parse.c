@@ -351,6 +351,130 @@ static int is_redir_op(const Tok* t)
     }
 }
 
+/* Redirections that hang off a compound command: `done < file',
+ * `} > log', `fi 2>&1'. They belong to the whole command and are saved
+ * on it the same way a simple command's are; the caller has just eaten
+ * the closing keyword (or brace), so nothing but redirections and the
+ * end of the command can follow. */
+static void parse_trailing_redirs(Lex* lx, Cmd* c)
+{
+    for (;;) {
+        const Tok* p = PEEK(lx);
+        char num[8];
+        int have_fd = 0;
+        int fd = 1;
+        int op;
+        if (p->type == T_WORD &&
+            number_prefix(p->word, num, sizeof(num)) > 0) {
+            Word* w = lex_take(lx);
+            lex_next(lx);
+            const Tok* op_tok = PEEK(lx);
+            if (!is_redir_op(op_tok)) {
+                /* The number was a word after all, and a compound
+                 * command takes no operands: leave it for the parser to
+                 * report. */
+                word_free(w);
+                return;
+            }
+            op = op_tok->op;
+            have_fd = 1;
+            fd = atoi(num);
+            lex_next(lx);
+        } else if (is_redir_op(p)) {
+            op = p->op;
+            lex_next(lx);
+        } else {
+            return;
+        }
+
+        int mode;
+        if (have_fd) {
+            int ignored;
+            mode = redir_mode_of(op, &ignored);
+        } else {
+            mode = redir_mode_of(op, &fd);
+        }
+        if (mode < 0)
+            return;
+
+        /* `<<- word' drops the tabs off the front of the body. */
+        int strip_tabs = 0;
+        Word* target = 0;
+        if (mode == R_HEREDOC && op == OP_DLT) {
+            const Tok* d = PEEK(lx);
+            if (d->type == T_WORD && d->word && d->word->kind == W_LIT &&
+                !d->word->quoted && d->word->text.len > 0 &&
+                d->word->text.p[0] == '-') {
+                strip_tabs = 1;
+                Word* dw = lex_take(lx);
+                lex_next(lx);
+                Word* rest = word_new(W_LIT);
+                if (rest) {
+                    str_addn(&rest->text, str_cstr(&dw->text) + 1,
+                             dw->text.len - 1);
+                    target = rest;
+                }
+                word_free(dw);
+            }
+        }
+
+        /* `<( list )' and `>( list )', on their own or as what a `<' or
+         * `>' points at. */
+        int psub_op = 0;
+        if (op == OP_PSUB_IN || op == OP_PSUB_OUT) {
+            psub_op = op;
+        } else {
+            const Tok* pt = PEEK(lx);
+            if (pt->type == T_OP &&
+                (pt->op == OP_PSUB_IN || pt->op == OP_PSUB_OUT)) {
+                psub_op = pt->op;
+                lex_next(lx);
+            }
+        }
+        if (psub_op) {
+            if (!parse_procsub_target(lx, c, fd, psub_op))
+                return;
+            continue;
+        }
+        if (!target)
+            target = take_redir_target(lx, op);
+        if (!target && !is_dup_op(op)) {
+            sh_err("vash: syntax error after ");
+            sh_err(tok_op_name(op));
+            sh_err("\n");
+            return;
+        }
+
+        if (op == OP_TLT) {
+            /* `<<< word' is the word itself and a newline. */
+            add_redir(c, fd, R_HEREDOC, target);
+            continue;
+        } else if (mode == R_HEREDOC) {
+            Str delim;
+            str_init(&delim);
+            if (target)
+                expand_word_one(target, &delim);
+            word_free(target);
+            Redir* r = (Redir*)malloc(sizeof(Redir));
+            if (!r) {
+                str_free(&delim);
+                return;
+            }
+            memset(r, 0, sizeof(*r));
+            r->fd = fd;
+            r->mode = R_HEREDOC;
+            r->next = c->redirs;
+            c->redirs = r;
+            lex_push_hdoc(lx, r, str_cstr(&delim), strip_tabs);
+            str_free(&delim);
+            continue;
+        } else if (target) {
+            add_redir(c, fd, mode, target);
+            continue;
+        }
+    }
+}
+
 static Cmd* parse_function(Lex* lx, const char* name)
 {
     /* Past the name: `(' has been seen, so step over `)' next. */
@@ -589,14 +713,14 @@ static Cmd* parse_simple(Lex* lx)
 
         if (p->type == T_WORD) {
             /* `name() { ... }' is a function definition and `arr=(one
-             * two)' is an array assignment, and both start where a
-             * command would otherwise start. */
-            int assign_start = !saw_word && c->argc == 0 &&
-                               p->word->kind == W_LIT && !p->word->quoted &&
-                               p->word->text.len > 0 &&
-                               str_cstr(&p->word->text)[p->word->text.len - 1] == '=';
-            if (assign_start || (!saw_word && c->argc == 0 &&
-                                 word_is_name(p->word))) {
+             * two)' is an array assignment. A function definition only
+             * starts a command, but an array assignment is also an
+             * argument to a builtin, as in `local arr=()'. */
+            int ends_eq = p->word->kind == W_LIT && !p->word->quoted &&
+                          p->word->text.len > 0 &&
+                          str_cstr(&p->word->text)[p->word->text.len - 1] == '=';
+            if (ends_eq || (!saw_word && c->argc == 0 &&
+                            word_is_name(p->word))) {
                 Word* w = lex_take(lx);
                 lex_next(lx);
                 const Tok* q = PEEK(lx);
@@ -605,7 +729,7 @@ static Cmd* parse_simple(Lex* lx)
                 /* The word ends in `=', so the `(' opens an element
                  * instead of a parameter list. */
                 const char* head = str_cstr(&w->text);
-                int arrayish = assign_start &&
+                int arrayish = ends_eq &&
                                q->type == T_OP && q->op == OP_LPAREN;
                 if (is_def && !arrayish) {
                     Str nm;
@@ -627,8 +751,14 @@ static Cmd* parse_simple(Lex* lx)
                     int depth = 1;
                     while (depth > 0) {
                         const Tok* el = PEEK(lx);
-                        if (el->type == T_EOF || el->type == T_NEWLINE)
+                        if (el->type == T_EOF)
                             break;
+                        if (el->type == T_NEWLINE) {
+                            /* Elements may be one per line, as they are
+                             * in `arr=(\n a\n b\n)'. */
+                            lex_next(lx);
+                            continue;
+                        }
                         if (el->type == T_OP && el->op == OP_LPAREN) {
                             ++depth;
                             lex_next(lx);
@@ -733,6 +863,7 @@ static Cmd* parse_if_tail(Lex* lx)
         c->init = parse_list_inner(lx, STOP_BODY);
     }
     expect_reserved(lx, "fi");
+    parse_trailing_redirs(lx, c);
     return c;
 }
 
@@ -745,10 +876,29 @@ static Cmd* parse_while(Lex* lx, int until)
     expect_reserved(lx, "do");
     c->right = parse_list_inner(lx, STOP_BODY);
     expect_reserved(lx, "done");
+    parse_trailing_redirs(lx, c);
     return c;
 }
 
 /* --- for --- */
+
+/* bash lets a `for' loop take a brace group where `do ... done' would
+ * stand: `for i in a b; { echo "$i"; }'. The `{' is consumed here and
+ * the body runs until its `}'. */
+static int for_brace_body(Lex* lx, Cmd* c)
+{
+    const Tok* q = PEEK(lx);
+    if (q->type != T_OP || q->op != OP_LBRACE)
+        return 0;
+    lex_next(lx);
+    c->right = parse_list_inner(lx, STOP_ANY);
+    q = PEEK(lx);
+    if (q->type == T_OP && q->op == OP_RBRACE)
+        lex_next(lx);
+    else
+        sh_err("vash: expected `}'\n");
+    return 1;
+}
 
 static Cmd* parse_for(Lex* lx)
 {
@@ -763,9 +913,15 @@ static Cmd* parse_for(Lex* lx)
             read_arith_body(lx, c, 1);
             if (PEEK(lx)->type == T_OP && PEEK(lx)->op == OP_SEMI)
                 lex_next(lx);
+            skip_nl(lx);
+            if (for_brace_body(lx, c)) {
+                parse_trailing_redirs(lx, c);
+                return c;
+            }
             expect_reserved(lx, "do");
             c->right = parse_list_inner(lx, STOP_BODY);
             expect_reserved(lx, "done");
+            parse_trailing_redirs(lx, c);
             return c;
         }
         sh_err("vash: `(' after `for'\n");
@@ -793,9 +949,15 @@ static Cmd* parse_for(Lex* lx)
     }
     if (PEEK(lx)->type == T_OP && PEEK(lx)->op == OP_SEMI)
         lex_next(lx);
+    skip_nl(lx);
+    if (for_brace_body(lx, c)) {
+        parse_trailing_redirs(lx, c);
+        return c;
+    }
     expect_reserved(lx, "do");
     c->right = parse_list_inner(lx, STOP_BODY);
     expect_reserved(lx, "done");
+    parse_trailing_redirs(lx, c);
     return c;
 }
 
@@ -861,6 +1023,7 @@ static Cmd* parse_case(Lex* lx)
         if (p->type == T_OP && (p->op == OP_DUP || p->op == OP_SEMI))
             lex_next(lx);
     }
+    parse_trailing_redirs(lx, c);
     return c;
 }
 
@@ -938,7 +1101,8 @@ static Cmd* parse_command(Lex* lx)
     }
     if (p->type == T_OP && p->op == OP_LBRACE) {
         /* `{ list }' is a command of its own, and only its exit status
-         * says anything: no new scope, no new redirections. */
+         * says anything: no new scope. Redirections after the `}'
+         * belong to it, though, as they do in bash. */
         lex_next(lx);
         Cmd* c = cmd_new(C_GROUP);
         c->left = parse_list_inner(lx, STOP_ANY);
@@ -947,6 +1111,7 @@ static Cmd* parse_command(Lex* lx)
             lex_next(lx);
         else
             sh_err("vash: expected `}'\n");
+        parse_trailing_redirs(lx, c);
         return c;
     }
     if (p->type == T_OP && p->op == OP_LPAREN) {
@@ -965,6 +1130,7 @@ static Cmd* parse_command(Lex* lx)
             lex_next(lx);
         else
             sh_err("vash: expected `)\'\n");
+        parse_trailing_redirs(lx, c);
         return c;
     }
     return parse_simple(lx);

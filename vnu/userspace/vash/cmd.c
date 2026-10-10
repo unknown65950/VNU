@@ -61,7 +61,12 @@ void cmd_free(Cmd* c)
             free(r);
             r = rn;
         }
-        cmd_free(c->left);
+        /* A function definition's body belongs to the function table,
+         * not to the command node: the same tree is what a later call
+         * runs, and a redefinition frees the old one there. Freeing it
+         * here would leave the table with a dangling body. */
+        if (c->type != C_FUNC)
+            cmd_free(c->left);
         cmd_free(c->right);
         cmd_free(c->init);
         if (c->words) {

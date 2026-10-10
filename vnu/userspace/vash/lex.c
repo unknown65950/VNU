@@ -94,7 +94,6 @@ static int lc_peek_at(Lex* lx, int n)
     int save_pos = lx->pos;
     int save_nr = lx->linenr;
     int save_gen = lx->linegen;
-    int start = lx->pos - lx->linepos;
     char saved[SH_LINE_MAX];
     memcpy(saved, lx->line, sizeof(saved));
     int c = -1;
@@ -113,8 +112,10 @@ static int lc_peek_at(Lex* lx, int n)
         /* The look-ahead crossed into the next line. That line holds the
          * characters it read and must stay, so the cached line is
          * dropped instead of restored and the reader is put back where
-         * the look-ahead started. */
-        lx->pos = start;
+         * the current token started. `save_pos' is past the cached
+         * buffer, so the buffer's first byte is `save_pos - save_len'
+         * and the cursor inside it is that plus `save_line'. */
+        lx->pos = save_pos - save_len + save_line;
         lx->len = 0;
         lx->linepos = 0;
     }
@@ -273,6 +274,18 @@ static void read_quoted_raw(Lex* lx, Str* out, char end, char end2)
         int c = lc_get(lx);
         if (c < 0)
             return;
+        if (c == '\\' && end == '"') {
+            /* Inside double quotes a backslash escapes the quote, so
+             * `"[\",/]"' is one string and not a string ending at the
+             * backslash's quote. Keep both characters for the nested
+             * read to interpret. */
+            str_addc(out, (char)c);
+            int n = lc_get(lx);
+            if (n < 0)
+                return;
+            str_addc(out, (char)n);
+            continue;
+        }
         if (c == end)
             return;
         if (end2 && c == end2 && lc_peek(lx) == end2) {

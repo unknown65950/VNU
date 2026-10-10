@@ -342,13 +342,11 @@ TaskHandle spawn_common(const char* argv0_path, const char* arg1, const uint8_t*
     for (uint32_t i = 0; i < size; ++i)
         *reinterpret_cast<uint8_t*>(root_base + i) = data[i];
 
-    vnu::paging::MapRange ranges[3] = {
+    vnu::paging::MapRange ranges[2] = {
         {APP_BASE, APP_PAGES},
         {STACK_BASE, STACK_SIZE / vnu::paging::PAGE_SIZE},
-        {vnu::proc::BRK_MIN,
-         (vnu::proc::BRK_MAX - vnu::proc::BRK_MIN) / vnu::paging::PAGE_SIZE},
     };
-    uint32_t pgdir = vnu::paging::create_address_space(ranges, 3);
+    uint32_t pgdir = vnu::paging::create_address_space(ranges, 2);
     if (!pgdir) {
         vnu::pmm::free_contig(root_base, root_pages);
         return NO_TASK;
@@ -870,6 +868,18 @@ uint32_t task_brk(uint32_t req)
         return t.brk;
     if (req < vnu::proc::BRK_MIN || req > vnu::proc::BRK_MAX)
         return static_cast<uint32_t>(-VNU_ENOMEM);
+    /* The heap is mapped lazily, exactly as for a scheduled process:
+     * extend the task's own address space only over the pages the new
+     * break reaches. */
+    if (req > t.brk) {
+        const uint32_t page = vnu::paging::PAGE_SIZE;
+        uint32_t mapped = (t.brk - vnu::proc::BRK_MIN + page - 1) & ~(page - 1);
+        uint32_t need = (req - vnu::proc::BRK_MIN + page - 1) & ~(page - 1);
+        if (need > mapped &&
+            !vnu::paging::extend_address_space(t.pgdir, vnu::proc::BRK_MIN + mapped,
+                                               (need - mapped) / page))
+            return static_cast<uint32_t>(-VNU_ENOMEM);
+    }
     t.brk = req;
     return req;
 }

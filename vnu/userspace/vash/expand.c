@@ -29,6 +29,8 @@ static void exp_init(Exp* e)
     e->p = (char*)malloc((unsigned long)e->cap);
     e->q = (char*)malloc((unsigned long)e->cap);
     e->len = 0;
+    if (e->p)
+        e->p[0] = 0;
 }
 
 static void exp_free(Exp* e)
@@ -42,10 +44,10 @@ static void exp_free(Exp* e)
 
 static void exp_room(Exp* e, int n)
 {
-    if (e->len + n <= e->cap)
+    if (e->len + n + 1 <= e->cap)
         return;
     int cap = e->cap ? e->cap : 64;
-    while (cap < e->len + n)
+    while (cap < e->len + n + 1)
         cap *= 2;
     char* np = (char*)malloc((unsigned long)cap);
     char* nq = (char*)malloc((unsigned long)cap);
@@ -71,6 +73,7 @@ static void exp_add(Exp* e, const char* t, int n, int flags)
     for (int i = 0; i < n; ++i)
         e->q[e->len + i] = (char)flags;
     e->len += n;
+    e->p[e->len] = 0;
 }
 
 static void exp_addc(Exp* e, char c, int flags)
@@ -79,6 +82,7 @@ static void exp_addc(Exp* e, char c, int flags)
     e->p[e->len] = c;
     e->q[e->len] = (char)flags;
     ++e->len;
+    e->p[e->len] = 0;
 }
 
 /* --- the pieces an expansion can produce --- */
@@ -234,17 +238,30 @@ static void expand_arith_dollars(const char* expr, Str* out)
 
 static void expand_word_parts(Word* w, Exp* e, int quoted);
 
-/* Lex one word out of a raw string and expand it — the inner half of
- * `${x:-$y}' and friends. */
+/* Expand the word an operator carries, the inner half of `${x:-$y}'
+ * and friends. The word is the whole text up to the closing brace and
+ * bash keeps it whole: `${2:+: $2}' is one value, `: distro', not the
+ * single word `:' with the rest dropped. The lexer still reads it in
+ * words, so the words are expanded and put back together with one space
+ * between them — no splitting, no globbing. */
 static void expand_sub_text(Exp* e, const char* text, int quoted)
 {
     if (!text)
         return;
     Lex lx;
     lex_init_str(&lx, text, (int)strlen(text));
-    lex_next(&lx);
-    if (lx.tok.type == T_WORD)
+    int first = 1;
+    for (;;) {
+        lex_next(&lx);
+        if (lx.tok.type == T_EOF)
+            break;
+        if (lx.tok.type != T_WORD)
+            continue; /* a newline or a stray operator: a separator */
+        if (!first)
+            exp_addc(e, ' ', 0);
+        first = 0;
         expand_word_parts(lx.tok.word, e, quoted);
+    }
     lex_free(&lx);
 }
 
@@ -267,10 +284,21 @@ static char* parse_name(const char* body, const char** name,
 {
     const char* p = body;
     const char* s = p;
-    while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-           (*p >= '0' && *p <= '9') || *p == '_' || *p == '@' || *p == '*' ||
-           *p == '#' || *p == '?' || *p == '$' || *p == '!')
+    /* A lone special parameter — ${?}, ${#}, ${@}, ${*}, ${!}, ${$} —
+     * is one character wide. After a normal name `#', `%' and `/` are
+     * operators, not part of the name: ${x#pat} cuts a prefix. */
+    if ((*p == '?' || *p == '$' || *p == '!' || *p == '#') &&
+        (p[1] == 0 || p[1] == '['))
         ++p;
+    else if (*p == '@' || *p == '*')
+        /* `$@' and `$*' are always one parameter wide: an operator may
+         * follow them, as in a parameter expansion with a substitution,
+         * and neither character can continue a name anyway. */
+        ++p;
+    else
+        while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+               (*p >= '0' && *p <= '9') || *p == '_')
+            ++p;
     *name = s;
     *nend = p;
     *idx = -1;
@@ -297,10 +325,13 @@ static int is_name(const char* s)
 {
     if (!s || !*s)
         return 0;
-    /* The one-byte special forms: $? $# $@ $* $$ $! */
+    /* A single-character name: a one-letter variable or one of the
+     * special parameters $? $# $@ $* $$ $!. */
     if (!s[1])
-        return (s[0] >= '0' && s[0] <= '9') || s[0] == '?' || s[0] == '#' ||
-               s[0] == '@' || s[0] == '*' || s[0] == '$' || s[0] == '!';
+        return (s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z') ||
+               (s[0] >= '0' && s[0] <= '9') || s[0] == '_' || s[0] == '?' ||
+               s[0] == '#' || s[0] == '@' || s[0] == '*' || s[0] == '$' ||
+               s[0] == '!';
     if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || *s == '_'))
         return 0;
     const char* p = s + 1;
@@ -323,18 +354,23 @@ static int is_name(const char* s)
 
 static const char* value_of(const char* name, int idx, int is_at)
 {
+    const char* v;
     if (idx >= 0 && arr_len(name) > 0) {
-        char key[24];
-        if (is_at)
-            return arr_get(name, "0");
-        Str s;
-        str_init(&s);
-        sh_itoa(idx, &s);
-        const char* v = arr_get(name, str_cstr(&s));
-        str_free(&s);
-        return v;
+        if (is_at) {
+            v = arr_get(name, "0");
+        } else {
+            Str s;
+            str_init(&s);
+            sh_itoa(idx, &s);
+            v = arr_get(name, str_cstr(&s));
+            str_free(&s);
+        }
+    } else {
+        v = var_lookup_word(name);
     }
-    return var_lookup_word(name);
+    /* An unset variable or a missing array element reads as empty, the
+     * way bash spells it; callers walk the string without a NULL check. */
+    return v ? v : "";
 }
 
 /* The real one: returns a malloc'd copy of `text' case-converted. */
@@ -503,18 +539,42 @@ static void expand_brace_body(Exp* e, const char* body, int quoted)
     char* word = 0;
 
     /* ${name:-default}, ${name:=default}, ${name:?message},
-     * ${name:+alternate} — and the same without the colon. */
-    if ((op[0] == '-' && op[1] == ':') || (op[0] == '-' && op[1] == 0) ||
-        (op[0] == '=' && op[1] == ':') || (op[0] == '=' && op[1] == 0) ||
-        (op[0] == '?' && op[1] == ':') || (op[0] == '?' && op[1] == 0) ||
-        (op[0] == '+' && op[1] == ':') || (op[0] == '+' && op[1] == 0)) {
-        char kind = op[0];
-        colon = (op[1] == ':');
+     * ${name:+alternate} — and the same without the colon. The colon
+     * leads in the `:' forms (`:-', not `-:'), and it is what widens the
+     * test: without it only an unset parameter counts, with it an empty
+     * one does too. */
+    char kind = 0;
+    if ((op[0] == '-' || op[0] == '=' || op[0] == '?' || op[0] == '+') &&
+        op[1] == 0) {
+        kind = op[0];
+    } else if (op[0] == ':' &&
+               (op[1] == '-' || op[1] == '=' || op[1] == '?' ||
+                op[1] == '+')) {
+        kind = op[1];
+        colon = 1;
+    }
+    if (kind) {
         word = sub_text_of(op + 1 + colon, quoted);
         const char* v = value_of(nbuf, idx, 0);
-        int empty = (idx >= 0 && arr_len(nbuf) > 0) ? (v[0] == 0)
-                                                     : (v[0] == 0);
-        int unset = (var_find(nbuf) == 0 && !(idx >= 0 && arr_len(nbuf) > 0));
+        int empty = (v[0] == 0);
+        int unset;
+        if (idx >= 0 && arr_len(nbuf) > 0) {
+            unset = 0;
+        } else if (nbuf[0] && !nbuf[1]) {
+            /* The shell's own parameters have no table entry, so
+             * var_find() would call every `$1' unset. Ask the running
+             * state instead: a positional parameter is set when its
+             * number is within $#. */
+            char s = nbuf[0];
+            if (s >= '1' && s <= '9')
+                unset = (s - '0') > sh_argc;
+            else if (s == '*' || s == '@')
+                unset = (sh_argc == 0);
+            else
+                unset = 0;
+        } else {
+            unset = (var_find(nbuf) == 0);
+        }
         /* Without the colon only an unset variable counts; with it an
          * empty value does too. */
         int bad = colon ? (unset || empty) : unset;
@@ -593,41 +653,58 @@ static void expand_brace_body(Exp* e, const char* body, int quoted)
         return;
     }
 
-    /* ${name#pat}, ${name##pat}, ${name%pat}, ${name%%pat} */
-    if ((op[0] == '#' && op[1] == '#') || (op[0] == '#' && op[1] == 0) ||
-        (op[0] == '%' && op[1] == '%') || (op[0] == '%' && op[1] == 0)) {
-        char* pat = sub_text_of(op + 1 + (op[1] ? 1 : 0), quoted);
+    /* ${name#pat}, ${name##pat}, ${name%pat}, ${name%%pat} — cut the
+     * shortest or longest match of `pat' off one end. */
+    if (op[0] == '#' || op[0] == '%') {
+        int longest = (op[1] == op[0]);
+        char* pat = sub_text_of(op + 1 + (longest ? 1 : 0), quoted);
         char out[SH_LINE_MAX];
-        int stripped = 0;
-        if (op[0] == '#')
-            stripped = sh_strip_prefix(v, pat, op[1] == '#', out, sizeof(out));
-        else
-            stripped = sh_strip_suffix(v, pat, op[1] == '%', out, sizeof(out));
+        int stripped = op[0] == '#'
+                           ? sh_strip_prefix(v, pat, longest, out, sizeof(out))
+                           : sh_strip_suffix(v, pat, longest, out, sizeof(out));
         add_text(e, stripped ? out : v, quoted, 1);
         free(pat);
         free(nbuf);
         return;
     }
 
-    /* ${name/pat/rep} and its `//', `#' and `%' variants. */
-    if ((op[0] == '/' || op[0] == '#' || op[0] == '%') &&
-        (op[1] == '/' || (op[0] == '#' && op[1] == 0) ||
-         (op[0] == '%' && op[1] == 0))) {
-        char* pat = sub_text_of(op + 1, quoted);
-        char* rep = sub_text_of(op + 2, quoted);
+    /* ${name/pat/rep}, ${name//pat/rep}, ${name/#pat/rep},
+     * ${name/%pat/rep} — replace a match of `pat' with `rep'. The
+     * operator opens with `/'; a `/`, `#' or `%' right after it means
+     * every match, a match at the front, or one at the back. The pattern
+     * runs to the next `/', which starts the replacement. */
+    if (op[0] == '/') {
+        int all = (op[1] == '/');
+        int anchor_front = (op[1] == '#');
+        int anchor_back = (op[1] == '%');
+        const char* pstart =
+            op + 1 + ((all || anchor_front || anchor_back) ? 1 : 0);
+        const char* sep = pstart;
+        while (*sep && *sep != '/')
+            ++sep;
+        char patbuf[SH_LINE_MAX];
+        int pn = (int)(sep - pstart);
+        if (pn > SH_LINE_MAX - 1)
+            pn = SH_LINE_MAX - 1;
+        memcpy(patbuf, pstart, (size_t)pn);
+        patbuf[pn] = 0;
+        char* pat = sub_text_of(patbuf, quoted);
+        char* rep = sub_text_of(*sep ? sep + 1 : "", quoted);
         Str out;
         str_init(&out);
-        int all = (op[1] == '/');
-        int anchor_front = (op[0] == '#');
-        int anchor_back = (op[0] == '%');
         if (anchor_front || anchor_back) {
             char tmp[SH_LINE_MAX];
             int hit = anchor_front
                           ? sh_strip_prefix(v, pat, 0, tmp, sizeof(tmp))
                           : sh_strip_suffix(v, pat, 0, tmp, sizeof(tmp));
             if (hit) {
-                str_adds(&out, rep);
-                str_adds(&out, tmp);
+                if (anchor_front) {
+                    str_adds(&out, rep);
+                    str_adds(&out, tmp);
+                } else {
+                    str_adds(&out, tmp);
+                    str_adds(&out, rep);
+                }
             } else {
                 str_adds(&out, v);
             }
@@ -635,12 +712,15 @@ static void expand_brace_body(Exp* e, const char* body, int quoted)
             int from = 0;
             int once = all ? 0 : 1;
             for (;;) {
-                int at = sh_find_sub(v + from, pat, 0);
+                int mlen = 0;
+                int at = sh_find_sub(v + from, pat, 0, &mlen);
                 if (at < 0)
                     break;
                 str_addn(&out, v + from, at);
                 str_adds(&out, rep);
-                from += at + (int)strlen(pat);
+                from += at + mlen;
+                if (mlen == 0)
+                    break; /* an empty match would repeat forever */
                 if (once)
                     break;
             }

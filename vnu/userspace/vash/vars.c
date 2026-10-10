@@ -186,6 +186,23 @@ const char* var_lookup_word(const char* name)
             Str t; str_init(&t); sh_itoa((long)getpid(), &t); strncpy(buf, str_cstr(&t), sizeof(buf)-1); buf[sizeof(buf)-1]=0; str_free(&t); return buf;
         }
     }
+    /* `$*' and `$@' as one word: the positional parameters joined by the
+     * first character of IFS. `$*' is special-cased in the word expander,
+     * but a parameter expansion operator reaches this through value_of(),
+     * so the joined form has to be answerable here too. */
+    if (strcmp(name, "*") == 0 || strcmp(name, "@") == 0) {
+        const char sep = (sh_ifs && sh_ifs[0]) ? sh_ifs[0] : ' ';
+        int len = 0;
+        for (int n = 1; n <= sh_argc && sh_argv; ++n) {
+            if (n > 1 && len < (int)sizeof(buf) - 1)
+                buf[len++] = sep;
+            const char* a = sh_argv[n] ? sh_argv[n] : "";
+            while (*a && len < (int)sizeof(buf) - 1)
+                buf[len++] = *a++;
+        }
+        buf[len] = 0;
+        return buf;
+    }
     if (strcmp(name, "-") == 0) {
         {
             Str t;

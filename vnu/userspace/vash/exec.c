@@ -25,6 +25,7 @@ char* sh_ifs = 0;
 int sh_set_e = 0;
 int sh_nounset = 0;
 int sh_pipefail = 0;
+int sh_noexec = 0;
 
 void sh_out(const char* s)
 {
@@ -654,10 +655,16 @@ void sh_set_params(char** argv, int argc)
         free(store[i]);
         store[i] = 0;
     }
-    if (!store[0])
+    /* $0 is the shell's own name and never changes, so it is copied
+     * once. Copying it on every call would read from store[0] into
+     * store[0] — `sh_argv' is usually `store' by then, and strcpy with
+     * overlapping ranges is not defined. */
+    if (!store[0]) {
+        const char* z = (sh_argv && sh_argv[0]) ? sh_argv[0] : "vash";
         store[0] = (char*)malloc(SH_PATH_MAX);
-    if (store[0])
-        strcpy(store[0], sh_argv && sh_argv[0] ? sh_argv[0] : "vash");
+        if (store[0])
+            strcpy(store[0], z);
+    }
     sh_argv = store;
     sh_argc = n;
 }
@@ -1240,7 +1247,10 @@ static void test_text(Word* w, Str* out)
     str_reset(out);
     for (; w; w = w->next) {
         if (w->kind == W_VAR) {
-            const char* v = var_get(str_cstr(&w->text));
+            /* The shell's own names have to answer here too: `[[ $1 ]]'
+             * and `[[ $? == 0 ]]' ask about positional parameters and
+             * status, not just ordinary variables. */
+            const char* v = var_lookup_word(str_cstr(&w->text));
             if (v)
                 str_adds(out, v);
         } else if (w->kind == W_CMDSUB) {
@@ -1613,7 +1623,7 @@ int run_string(const char* text, int capture)
     Lex lx;
     lex_init_str(&lx, text, (int)strlen(text));
     Cmd* c = parse_list(&lx, 0);
-    int r = run_command_list(c);
+    int r = sh_noexec ? 0 : run_command_list(c);
     cmd_free(c);
     lex_free(&lx);
     return r;
@@ -1715,14 +1725,38 @@ char* run_capture(const char* text)
 }
 int call_function(const char* name, Cmd* call)
 {
-    (void)call;
     Func* f = func_find(name);
     if (!f || !f->body)
         return 127;
+
+    /* A function gets its own positional parameters: `$1' inside it is
+     * the call's first argument, and whatever the caller had comes back
+     * when the function returns. The saved copy is deep, because
+     * sh_set_params() reuses one static table. */
+    char* save[SH_MAX_ARGS];
+    int save_argc = sh_argc;
+    for (int i = 0; i < SH_MAX_ARGS; ++i)
+        save[i] = 0;
+    if (sh_argv)
+        for (int i = 0; i <= save_argc && i < SH_MAX_ARGS; ++i)
+            save[i] = sh_argv[i] ? sh_strdup(sh_argv[i]) : 0;
+
+    char* args[SH_MAX_ARGS];
+    int n = call ? expand_argv(call, 1, args, SH_MAX_ARGS, 0) : 0;
+    sh_set_params(args, n);
+
     sh_locals_begin();
     int r = run_command_list(f->body);
     /* What `local' shadowed comes back when the function returns. */
     sh_locals_end();
+
+    /* Hand the caller's parameters back, then drop both copies. */
+    sh_set_params(save + 1, save_argc);
+    for (int i = 0; i < SH_MAX_ARGS; ++i)
+        free(save[i]);
+    for (int i = 0; i < n; ++i)
+        free(args[i]);
+
     /* `return n' comes back as the value of the call, and the loop the
      * function ran in — if any — is none of its business. */
     if (sh_flow == FLOW_RETURN) {

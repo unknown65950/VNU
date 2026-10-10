@@ -283,7 +283,7 @@ int func_undef(const char* name);
 int sh_pattern(const char* pat, const char* str);
 int sh_strip_prefix(const char* str, const char* pat, int longest, char* out, int outn);
 int sh_strip_suffix(const char* str, const char* pat, int longest, char* out, int outn);
-int sh_find_sub(const char* str, const char* pat, int from);
+int sh_find_sub(const char* str, const char* pat, int from, int* mlen);
 
 /* --- expansion -------------------------------------------------------- */
 void expand_word(Word* w, Vec* out);           /* split + glob */
@@ -309,6 +309,7 @@ extern char* sh_ifs;       /* $IFS */
 extern int sh_set_e;       /* set -e */
 extern int sh_nounset;     /* set -u */
 extern int sh_pipefail;    /* set -o pipefail */
+extern int sh_noexec;      /* set -n: read and parse, do not run */
 
 int run_command_list(Cmd* c);
 int run_string(const char* text, int capture);

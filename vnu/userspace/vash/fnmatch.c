@@ -101,11 +101,13 @@ int sh_strip_prefix(const char* str, const char* pat, int longest, char* out,
                     int outn)
 {
     int slen = (int)strlen(str);
-    int plen = (int)strlen(pat);
-    for (int take = longest ? plen : 0; take <= slen;
-         take += longest ? -1 : 1) {
+    /* `take' is how much of the front is cut away: the longest match
+     * first for `##', the shortest for `#'. */
+    for (int take = longest ? slen : 0;; take += longest ? -1 : 1) {
+        if (take < 0 || take > slen)
+            break;
         char head[SH_LINE_MAX];
-        if (take > slen)
+        if (take >= SH_LINE_MAX)
             continue;
         for (int i = 0; i < take; ++i)
             head[i] = str[i];
@@ -119,8 +121,6 @@ int sh_strip_prefix(const char* str, const char* pat, int longest, char* out,
             out[n] = 0;
             return 1;
         }
-        if (plen == 0)
-            break;
     }
     return 0;
 }
@@ -129,9 +129,12 @@ int sh_strip_suffix(const char* str, const char* pat, int longest, char* out,
                     int outn)
 {
     int slen = (int)strlen(str);
-    int plen = (int)strlen(pat);
-    for (int take = longest ? slen : 0; take >= 0;
-         take += longest ? -1 : 1) {
+    /* `take' is how much of the front is kept, so the matched tail is
+     * slen - take: the longest tail first for `%%', the shortest for
+     * `%'. */
+    for (int take = longest ? 0 : slen;; take += longest ? 1 : -1) {
+        if (take < 0 || take > slen)
+            break;
         char tail[SH_LINE_MAX];
         int n = slen - take;
         if (n > SH_LINE_MAX - 1)
@@ -140,29 +143,64 @@ int sh_strip_suffix(const char* str, const char* pat, int longest, char* out,
             tail[i] = str[take + i];
         tail[n] = 0;
         if (match_here(pat, tail)) {
-            if (take > outn - 1)
-                take = outn - 1;
-            for (int i = 0; i < take; ++i)
+            int keep = take;
+            if (keep > outn - 1)
+                keep = outn - 1;
+            for (int i = 0; i < keep; ++i)
                 out[i] = str[i];
-            out[take] = 0;
+            out[keep] = 0;
             return 1;
         }
-        if (plen == 0)
-            break;
     }
     return 0;
 }
 
 /* The first match of `pat' in `str' at or after `from', for ${x/pat/y}
  * and `[[ x == pat ]]'. Returns the offset, or -1. */
-int sh_find_sub(const char* str, const char* pat, int from)
+/* Does a pattern contain a character that makes it more than a literal
+ * string? `\\' quotes the one after it. */
+static int has_glob(const char* p)
+{
+    for (; *p; ++p) {
+        if (*p == '\\' && p[1]) {
+            ++p;
+            continue;
+        }
+        if (*p == '*' || *p == '?' || *p == '[')
+            return 1;
+    }
+    return 0;
+}
+
+int sh_find_sub(const char* str, const char* pat, int from, int* mlen)
 {
     int slen = (int)strlen(str);
     int plen = (int)strlen(pat);
-    if (plen == 0)
+    *mlen = plen;
+    if (plen == 0) {
+        *mlen = 0;
         return from <= slen ? from : -1;
-    for (int i = from; i <= slen - plen; ++i)
-        if (match_here(pat, str + i))
-            return i;
+    }
+    /* A pattern with no glob characters matches exactly plen bytes, so
+     * a plain scan finds the leftmost one. */
+    if (!has_glob(pat)) {
+        for (int i = from; i <= slen - plen; ++i)
+            if (sh_starts(str + i, pat))
+                return i;
+        return -1;
+    }
+    /* Otherwise try every length of substring at each position,
+     * shortest first, so the leftmost smallest match wins. */
+    for (int i = from; i <= slen; ++i) {
+        for (int L = 0; i + L <= slen && L < SH_LINE_MAX; ++L) {
+            char buf[SH_LINE_MAX];
+            memcpy(buf, str + i, (size_t)L);
+            buf[L] = 0;
+            if (match_here(pat, buf)) {
+                *mlen = L;
+                return i;
+            }
+        }
+    }
     return -1;
 }

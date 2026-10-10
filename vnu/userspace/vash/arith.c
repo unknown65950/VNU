@@ -427,8 +427,12 @@ static long ar_assign(Ar* a)
         static const char* ops[] = {"<<=", ">>=", "+=", "-=", "*=", "/=",
                                     "%=",  "&=",  "^=", "|=", "=", 0};
         for (int i = 0; ops[i]; ++i) {
-            /* A `==' is a comparison, not an assignment. */
-            if (ops[i][0] == '=' && ops[i][1] == 0 && a->p[1] == '=')
+            /* A `==' is a comparison, not an assignment. The first byte is
+             * checked before the second: when the expression is a bare
+             * name, read_name() has left `a->p' on the terminator, and
+             * looking one past it would read outside the string. */
+            if (ops[i][0] == '=' && ops[i][1] == 0 &&
+                a->p[0] == '=' && a->p[1] == '=')
                 continue;
             if (!take_op(a, ops[i]))
                 continue;
