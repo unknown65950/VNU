@@ -56,7 +56,7 @@ constexpr int PATH_CAP = 64;
  * values; the generated text lands in the node's normal data buffer so
  * read()/lseek() work on it unchanged. */
 enum class SynthKind : uint8_t { None = 0, Version, CpuInfo, MemInfo, SelfStatus, Mounts, Uptime, Disks, DfStat, Images, Gfx, Boot, Stat, NetDev,
-                                 /* /proc/sys/kernel/*: the sysctl(8)
+                                 /* The /proc/sys/kernel keys: the sysctl(8)
                                   * name/value pairs. All regenerate on
                                   * open; the last two are also
                                   * writable (see the write() path). */
@@ -836,6 +836,81 @@ void regen_synth(Node& n)
 
 namespace vnu::vfs {
 
+/* --- per-user storage quotas ---
+ *
+ * A small fixed table of (uid, limit) pairs is enough for the handful
+ * of accounts /etc/passwd holds; a user with no entry of their own is
+ * held to the default. `used` is not accounted as writes happen — it is
+ * summed from the node table whenever it is asked for, which is O(MAX_N)
+ * and always current, the same way /proc is regenerated rather than
+ * kept. Only regular files count: a directory has no bytes, a device
+ * has no extent of its own, and a /proc page is generated on read, not
+ * stored on the user's behalf. */
+constexpr int QUOTA_USERS = 32;
+
+struct QuotaEntry {
+    bool used;
+    uint32_t uid;
+    uint32_t limit;
+};
+
+static QuotaEntry quota_entries[QUOTA_USERS];
+static uint32_t quota_default_bytes = 0;
+
+uint32_t quota_used(uint32_t uid)
+{
+    uint32_t total = 0;
+    for (int i = 0; i < MAX_N; ++i) {
+        const Node& n = nodes[i];
+        if (!n.used || n.dir || n.dev != DevKind::None ||
+            n.synth != SynthKind::None)
+            continue;
+        if (n.uid != uid)
+            continue;
+        if (n.size > UINT32_MAX - total)
+            return UINT32_MAX;
+        total += n.size;
+    }
+    return total;
+}
+
+uint32_t quota_limit(uint32_t uid)
+{
+    for (int i = 0; i < QUOTA_USERS; ++i)
+        if (quota_entries[i].used && quota_entries[i].uid == uid)
+            return quota_entries[i].limit;
+    return quota_default_bytes;
+}
+
+int quota_set(uint32_t uid, uint32_t limit)
+{
+    int free = -1;
+    for (int i = 0; i < QUOTA_USERS; ++i) {
+        if (quota_entries[i].used && quota_entries[i].uid == uid) {
+            quota_entries[i].limit = limit;
+            return 0;
+        }
+        if (free < 0 && !quota_entries[i].used)
+            free = i;
+    }
+    if (free < 0)
+        return -VNU_ENOSPC;
+    quota_entries[free].used = true;
+    quota_entries[free].uid = uid;
+    quota_entries[free].limit = limit;
+    return 0;
+}
+
+uint32_t quota_default()
+{
+    return quota_default_bytes;
+}
+
+void quota_set_default(uint32_t limit)
+{
+    quota_default_bytes = limit;
+}
+
 /* RTC-backed wall clock (seconds since local midnight) and the
  * monotonic-ish boot clock derived from it. With no timer interrupt the
  * RTC is the only clock in the machine; both helpers run at one-second
@@ -1016,6 +1091,7 @@ void init()
     add("/bin/passwd", false);
     add("/bin/su", false);
     add("/bin/sysctl", false);
+    add("/bin/quota", false);
     add("/bin/echoserver", false);
     add("/bin/tlsserver", false);
     add("/bin/vcc", false);
@@ -1425,6 +1501,21 @@ int write(int fd, const void* buf, uint32_t count)
      * allocation (zero if the position is already past cap). */
     if (count > UINT32_MAX - pos)
         count = UINT32_MAX - pos;
+    /* A write that grows the file is charged to the file's owner's
+     * quota: the owner's whole usage already includes this file's
+     * current size, so the growth must fit in what is left of the
+     * limit. A limit of 0 is no limit; otherwise the write is refused
+     * whole with -VNU_EDQUOT rather than taken in part, which is what
+     * makes the quota a hard one. */
+    if (pos + count > n.size) {
+        uint32_t limit = quota_limit(n.uid);
+        if (limit != 0) {
+            uint32_t used = quota_used(n.uid);
+            uint32_t grow = (pos + count) - n.size;
+            if (used >= limit || grow > limit - used)
+                return -VNU_EDQUOT;
+        }
+    }
     if (!node_reserve(n, pos + count)) {
         uint32_t room = pos < n.cap ? n.cap - pos : 0;
         if (count > room)

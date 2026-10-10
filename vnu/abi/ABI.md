@@ -87,6 +87,7 @@ must never be renumbered.
 | 72 | gfx_canvas |
 | 73 | times |
 | 74 | getrusage |
+| 75 | quota |
 
 ### times(73) and getrusage(74): CPU-time accounting
 
@@ -109,6 +110,32 @@ read or a sleep) and `ru_nivcsw` counts timer preemptions.
 `stat`/`fstat` report owner/group and permission bits: `st_uid`, `st_gid`,
 and the low 9 bits of `st_mode` are the `rwx` bits. `chown(path, uid, gid)`
 with `-1` leaves a field unchanged; only root may chown.
+
+### quota(75): per-user storage quotas
+
+`quota(ebx = command, ecx = struct vnu_quota*)` reads and writes the
+per-user storage quota, the ceiling on how many bytes of regular files
+a user id may own in the VFS. A user's usage is the sum of the sizes of
+the regular files with that `st_uid`; a directory, a device node and a
+generated `/proc` page count for nothing, because none of them is a
+stored extent of its own. `limit` 0 means unlimited.
+
+`VNU_QUOTA_GET` (0) fills in `used` and `limit` for `uid`;
+`VNU_QUOTA_SET` (1) writes `limit` for `uid` and is root's.
+`VNU_QUOTA_GET_DEFAULT` (2) and `VNU_QUOTA_SET_DEFAULT` (3) read and
+write the limit a user with no entry of their own is held to (setting
+it is root's; `uid` and `used` are ignored). The call returns 0, or a
+negative errno (`-VNU_EFAULT` for a null struct, `-VNU_EPERM` for a
+non-root set, `-VNU_EINVAL` for an unknown command, `-VNU_ENOSPC` when
+the kernel's small per-user table is full).
+
+Enforcement is at the point of growth: a `write()` that would make a
+file longer charges the growth to the file's owner and, if it would
+cross that owner's limit, is refused whole with `-VNU_EDQUOT` rather
+than taken in part. A write that overwrites bytes already inside the
+file's length is never charged, and shortening a file (`O_TRUNC`,
+`lseek`-back-`write`) gives the bytes back, since usage is recomputed
+from the node table rather than accumulated.
 
 ### Notes on argument shapes
 - `fork()` — returns the child's pid in the parent, 0 in the child. The
@@ -582,6 +609,9 @@ same change as the `ping`/`netinfo` syscalls; values match Linux's.
 `VNU_EADDRINUSE` (98) was added with `bind`; value matches Linux's.
 `VNU_ENODEV` (19) was added with the audio syscalls to report missing
 sound hardware; value matches Linux's.
+`VNU_EDQUOT` (122) was added with the `quota` syscall to report a write
+that would take a file's owner past their storage quota; value matches
+Linux's.
 
 ## Interrupt gate
 Vector `0x80`, selector `0x08`, DPL=3, present 32-bit interrupt gate (`0xEE`).

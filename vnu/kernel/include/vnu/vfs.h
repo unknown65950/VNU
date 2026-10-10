@@ -69,6 +69,19 @@ int getcwd(char* buf, uint32_t size);
 int chmod(const char* path, uint32_t mode);
 int chown(const char* path, uint32_t uid, uint32_t gid);
 
+/* Per-user storage quota, backing VNU_SYS_quota and the `quota`
+ * command. A user's usage is the sum of the sizes of the regular files
+ * it owns in the VFS; `limit` is a hard ceiling on that sum, 0 meaning
+ * unlimited. write() charges a growing write to the file's owner and
+ * refuses the whole write with -VNU_EDQUOT when it would cross the
+ * limit. `quota_set` returns 0 or a negative errno (the small per-user
+ * table can be full); the caller enforces "root only". */
+uint32_t quota_used(uint32_t uid);
+uint32_t quota_limit(uint32_t uid);
+int quota_set(uint32_t uid, uint32_t limit);
+uint32_t quota_default();
+void quota_set_default(uint32_t limit);
+
 /* DevKind::None for anything that isn't an open fd on a /dev
  * character device. */
 DevKind fd_dev_kind(int fd);

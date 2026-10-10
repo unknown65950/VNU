@@ -759,6 +759,29 @@ SUITE = [
     ("man-sysctl-text", "cat /tmp/man-sysctl.out",
      [r"^NAME$", r"sysctl - read and write kernel parameters",
       r"^EXIT STATUS$"], []),
+    # quota caps how many bytes of files one user may own. Root starts
+    # unlimited; setting a one-byte limit and then trying to grow a file
+    # shows the write refused whole (the file stays empty) with EDQUOT
+    # under the hood. The limit goes back to 0 right away, since every
+    # later case writes files as root, and the default is exercised on
+    # its own before the man page.
+    ("quota-show", "quota",
+     [r"^quota: user=root used=\d+ limit=unlimited$"], []),
+    ("quota-set", "quota -s 1",
+     [r"^quota: user=root used=\d+ limit=1$"], []),
+    ("quota-over", "echo no-room > /tmp/quota-test", [], []),
+    ("quota-over-size", "wc /tmp/quota-test", [r"^0 0 0 /tmp/quota-test$"], []),
+    ("quota-reset", "quota -s 0",
+     [r"^quota: user=root used=\d+ limit=unlimited$"], []),
+    ("quota-default", "quota -D", [r"^quota: default limit=unlimited$"], []),
+    ("quota-default-set", "quota -d 1", [r"^quota: default limit=1$"], []),
+    ("quota-default-reset", "quota -d 0", [r"^quota: default limit=unlimited$"], []),
+    ("quota-version", "quota -V", [r"^quota \(VNU\) 0\.1$"], []),
+    ("man-quota", "man quota > /tmp/man-quota.out", [],
+     [r"press h for help"]),
+    ("man-quota-text", "cat /tmp/man-quota.out",
+     [r"^NAME$", r"quota - show and set per-user storage quotas",
+      r"^EXIT STATUS$"], []),
     ("df", "df", [r"^Filesystem", r"^vfs +\d+ +\d+ +\d+ +\d+% /$"], []),
     ("motd", "cat /etc/motd", [r"Welcome to VNU"], []),
     ("echo", "echo hello world", [r"^hello world$"], []),

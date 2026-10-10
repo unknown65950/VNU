@@ -82,6 +82,7 @@
 #define VNU_SYS_gfx_canvas   72
 #define VNU_SYS_times        73
 #define VNU_SYS_getrusage    74
+#define VNU_SYS_quota        75
 
 /* Out-parameter of VNU_SYS_times. All four fields are in units of the
  * scheduler's 100 Hz tick (CLK_TCK 100); the syscall's return value is
@@ -130,6 +131,32 @@ struct vnu_rusage {
                          * or a sleep gives the CPU up itself) */
     int32_t ru_nivcsw;  /* involuntary switches: timer preemptions */
 };
+
+/* VNU_SYS_quota: how much room a user's files take and how much they
+ * may take. The unit is a byte of a regular file's content: `used' is
+ * the sum of the sizes of every regular file in the VFS owned by `uid',
+ * and `limit' is a hard ceiling on that sum, 0 meaning no limit. The
+ * write() path charges a growing write to the file's owner and refuses
+ * the whole write with -VNU_EDQUOT when it would cross the limit (a
+ * quota is a hard limit, not a warning).
+ *
+ * The kernel keeps a small table of per-user limits, so a user with no
+ * entry of their own is held to a default; GET/SET act on `uid', and
+ * the GET_DEFAULT/SET_DEFAULT commands read and write that fallback.
+ * A program may read any user's numbers; changing them is root's.
+ *
+ * In-parameter and result of one syscall (ebx selects the command,
+ * ecx points here): plain uint32 fields, the same struct on both sides
+ * of the boundary. GET_DEFAULT/SET_DEFAULT ignore `uid' and `used'. */
+struct vnu_quota {
+    uint32_t uid;   /* in:  the user GET/SET is about */
+    uint32_t used;  /* out: bytes that user's files hold (GET) */
+    uint32_t limit; /* in/out: hard limit in bytes, 0 = unlimited */
+};
+#define VNU_QUOTA_GET         0
+#define VNU_QUOTA_SET         1 /* uid + limit in; root only */
+#define VNU_QUOTA_GET_DEFAULT 2
+#define VNU_QUOTA_SET_DEFAULT 3 /* limit in; root only */
 
 /* Which display driver is in use, as vnu_gfx_info::driver. */
 #define VNU_GFX_DRIVER_VGA        0 /* Bochs VBE, 8bpp indexed */
@@ -308,6 +335,7 @@ struct vnu_sigaction {
 #define VNU_ETIMEDOUT 110
 #define VNU_ECONNREFUSED 111
 #define VNU_EHOSTUNREACH 113
+#define VNU_EDQUOT 122
 #define VNU_ENOSYS 38
 #define VNU_ENOTEMPTY 39
 #define VNU_EPIPE 32

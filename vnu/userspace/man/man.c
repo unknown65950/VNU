@@ -453,6 +453,41 @@ EXIT STATUS\n\
 SEE ALSO\n\
     uname(1), man(1)\n"
 
+#define QUOTA_PAGE "NAME\n\
+    quota - show and set per-user storage quotas\n\
+\n\
+SYNOPSIS\n\
+    quota [OPTION...] [USER]\n\
+\n\
+DESCRIPTION\n\
+    Each user has a storage quota: the sum of the sizes of the\n\
+    regular files that user id owns in the VFS, and a hard limit on\n\
+    that sum. A write that would grow a file past its owner's limit\n\
+    is refused whole with EDQUOT, so a quota never lets a write in\n\
+    part. A limit of 0 means unlimited, which is the default.\n\
+\n\
+    With no options, prints the usage and limit of USER, or of the\n\
+    caller when no USER is given. USER may be a name from /etc/passwd\n\
+    or a numeric user id.\n\
+\n\
+    Changing a limit is root's: `-s' sets one user's hard limit, and\n\
+    `-d' sets the default that a user with no limit of their own is\n\
+    held to. `-D' prints that default.\n\
+\n\
+OPTIONS\n\
+    -s LIMIT   set USER's hard limit to LIMIT bytes (0 = unlimited)\n\
+    -d LIMIT   set the default limit for users without one\n\
+    -D         show the default limit\n\
+    -h         show this help and exit\n\
+    -V         show the version and exit\n\
+\n\
+EXIT STATUS\n\
+    0 on success, 1 when a limit could not be read or set, 2 on a\n\
+    usage error.\n\
+\n\
+SEE ALSO\n\
+    df(1), id(1), man(1)\n"
+
 #define COREUTILS_PAGE "NAME\n\
     coreutils - the standard command set (index)\n\
 \n\
@@ -1896,6 +1931,8 @@ static const struct Page pages[] = {
      SU_PAGE},
     {"sysctl",   "read and write kernel parameters",
      SYSCTL_PAGE},
+    {"quota",    "show and set per-user storage quotas",
+     QUOTA_PAGE},
     {"coreutils", "the standard command set (index)",
      COREUTILS_PAGE},
     {"echo",     "write its arguments to standard output",

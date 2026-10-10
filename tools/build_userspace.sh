@@ -84,7 +84,7 @@ done
 "$VCC" "$ROOT/vnu/userspace/vsshd/transport.c" "$ROOT/vnu/userspace/vsshd/auth.c" "$ROOT/vnu/userspace/vsshd/conn.c" "$ROOT/vnu/userspace/vsshd/vsshd.c" -o "$ROOT/sysroot/bin/vsshd"
 # account tools: one separate binary per command. The disk installer is
 # not here any more: it is `vnu install`, part of the vnu binary.
-for c in id whoami groups useradd passwd su sysctl; do
+for c in id whoami groups useradd passwd su sysctl quota; do
   "$VCC" "$ROOT/vnu/userspace/usertools/$c.c" -o "$ROOT/sysroot/bin/$c"
 done
 
@@ -138,7 +138,7 @@ for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wallpaper imagine nohup; do
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
-for c in id whoami groups useradd passwd su sysctl; do
+for c in id whoami groups useradd passwd su sysctl quota; do
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
 echo "==> done"

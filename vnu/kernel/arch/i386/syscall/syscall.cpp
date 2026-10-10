@@ -831,6 +831,35 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
         r->ru_nivcsw = static_cast<int32_t>(nivcsw);
         return 0;
     }
+    case VNU_SYS_quota: {
+        const uint32_t cmd = tf->ebx;
+        auto* q = reinterpret_cast<vnu_quota*>(tf->ecx);
+        if (!q)
+            return static_cast<std::uint32_t>(-VNU_EFAULT);
+        auto* p = vnu::proc::current();
+        const uint32_t cur = p ? p->uid : 0;
+        switch (cmd) {
+        case VNU_QUOTA_GET:
+            q->used = vnu::vfs::quota_used(q->uid);
+            q->limit = vnu::vfs::quota_limit(q->uid);
+            return 0;
+        case VNU_QUOTA_SET:
+            if (cur != 0)
+                return static_cast<std::uint32_t>(-VNU_EPERM);
+            return static_cast<std::uint32_t>(
+                vnu::vfs::quota_set(q->uid, q->limit));
+        case VNU_QUOTA_GET_DEFAULT:
+            q->limit = vnu::vfs::quota_default();
+            return 0;
+        case VNU_QUOTA_SET_DEFAULT:
+            if (cur != 0)
+                return static_cast<std::uint32_t>(-VNU_EPERM);
+            vnu::vfs::quota_set_default(q->limit);
+            return 0;
+        default:
+            return static_cast<std::uint32_t>(-VNU_EINVAL);
+        }
+    }
 
     default:
         return static_cast<std::uint32_t>(-VNU_ENOSYS);

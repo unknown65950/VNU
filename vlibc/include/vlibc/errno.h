@@ -38,6 +38,7 @@ extern "C" {
 #define ENOTEMPTY 39
 #define ETIMEDOUT 110
 #define ECONNREFUSED 111
+#define EDQUOT 122  /* a write would take the owner's files past their quota */
 
 #ifdef __cplusplus
 }

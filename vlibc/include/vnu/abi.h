@@ -82,6 +82,28 @@
 #define VNU_SYS_gfx_canvas   72
 #define VNU_SYS_times        73
 #define VNU_SYS_getrusage    74
+#define VNU_SYS_quota        75
+
+/* Per-user storage quota, VNU_SYS_quota: how many bytes of regular
+ * files a user owns and how many they may own. GET/SET act on `uid';
+ * GET_DEFAULT/SET_DEFAULT read and write the limit a user without an
+ * entry is held to; a limit of 0 is no limit. Setting needs root, and
+ * a write that would grow a file past its owner's limit fails with
+ * -VNU_EDQUOT. The tool that speaks this is `quota`.
+ *
+ * The kernel's own copy of the struct is in the kernel's <vnu/abi.h>;
+ * this is the mirror userspace compiles against, and the two are the
+ * same layout. Plain uint32 fields, so there is no packing to get
+ * wrong. */
+struct vnu_quota {
+    uint32_t uid;   /* in: the user GET/SET is about */
+    uint32_t used;  /* out: bytes that user's files hold (GET) */
+    uint32_t limit; /* in/out: hard limit in bytes, 0 = unlimited */
+};
+#define VNU_QUOTA_GET         0
+#define VNU_QUOTA_SET         1 /* uid + limit in; root only */
+#define VNU_QUOTA_GET_DEFAULT 2
+#define VNU_QUOTA_SET_DEFAULT 3 /* limit in; root only */
 
 /* Which display driver is in use, as vnu_gfx_info::driver. */
 #define VNU_GFX_DRIVER_VGA        0 /* Bochs VBE, 8bpp indexed */
@@ -260,6 +282,7 @@ struct vnu_sigaction {
 #define VNU_ETIMEDOUT 110
 #define VNU_ECONNREFUSED 111
 #define VNU_EHOSTUNREACH 113
+#define VNU_EDQUOT 122
 #define VNU_ENOSYS 38
 #define VNU_ENOTEMPTY 39
 #define VNU_EPIPE 32
