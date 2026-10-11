@@ -1,0 +1,9 @@
+NAME
+    which - report where a command lives
+
+SYNOPSIS
+    which NAME
+
+DESCRIPTION
+    Returns the path (or 'is a shell builtin') that would be
+    used for NAME. Identical in behaviour to type.

@@ -1,0 +1,9 @@
+NAME
+    whoami - print the current user name
+
+SYNOPSIS
+    whoami
+
+DESCRIPTION
+    Prints the login name of the current user. Standalone
+    binary in /bin.

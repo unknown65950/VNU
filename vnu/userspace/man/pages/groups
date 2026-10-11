@@ -1,0 +1,9 @@
+NAME
+    groups - print the current group name
+
+SYNOPSIS
+    groups
+
+DESCRIPTION
+    Prints the group of the current session. Standalone
+    binary in /bin.

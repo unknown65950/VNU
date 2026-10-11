@@ -1,0 +1,10 @@
+NAME
+    wc - count lines, words and bytes
+
+SYNOPSIS
+    wc [FILE...]
+
+DESCRIPTION
+    For each FILE (or standard input, with no arguments) prints
+    the number of lines, words and bytes, then the name. A word
+    is any run of non-blank characters.

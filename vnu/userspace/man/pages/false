@@ -1,0 +1,9 @@
+NAME
+    false - do nothing, unsuccessfully
+
+SYNOPSIS
+    false
+
+DESCRIPTION
+    Ignores all arguments and exits with status 1. The
+    traditional 'never succeeds' command.

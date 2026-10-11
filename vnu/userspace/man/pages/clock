@@ -1,0 +1,30 @@
+NAME
+    clock - analog clock, stopwatch and countdown timer
+
+SYNOPSIS
+    clock
+
+DESCRIPTION
+    A graphical clock for the VNU desktop, rewritten from scratch (in
+    C) after the classic clock-tui: an analog face over the `time`
+    syscall (RTC, one-second resolution) with a digital read-out, a
+    stopwatch and a countdown timer. The desktop advances it once per
+    second through the GUI heartbeat; Esc closes the window.
+
+KEYS
+    1 2 3      switch mode: Clock / Stopwatch / Timer
+    Space      start or pause the stopwatch, start or pause the timer
+    r          reset the stopwatch or the timer
+    l          record a lap (stopwatch mode)
+    Esc        close the window
+
+MOUSE
+    Click the mode tabs to switch modes and the on-screen buttons to
+    start, pause, lap, reset or tweak the timer duration.
+
+SYSCALLS
+    time      seconds since midnight from the RTC (0..86399)
+    uptime    whole seconds since boot (RTC-delta)
+
+FILES
+    /apps/clock/bin   the program itself

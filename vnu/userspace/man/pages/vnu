@@ -1,0 +1,101 @@
+NAME
+    vnu - report what system you are running on
+
+SYNOPSIS
+    vnu [COMMAND]...
+
+DESCRIPTION
+    Prints a summary of the running system: its versions, how long it
+    has been up, its host name, memory use, the shell and file system
+    the session runs in, the display, and how much space each part of
+    the system image takes.
+
+    Every value is read from the running system (uname(2), gfx_getinfo(2)
+    for the display, the /proc files listed below, and the size
+    accounting in the kernel, so the output describes the machine you
+    are on, not a built-in table.
+    Nothing is written to disk and no other process is disturbed, so
+    vnu is safe to run at any time, including from scripts.
+
+    With no COMMAND the usage summary is printed.
+
+COMMANDS
+    fetch     overview of the running system: OS and kernel version,
+              uptime, host name, memory, shell, file system, display
+              with its depth and driver, compiler version and build
+              date
+    version   version block: OS, kernel, compiler, ABI version and
+              build date
+    size      image size per component (kernel, userspace, libraries,
+              fonts, resources) with the number of objects in each
+    set       read or flip the outside-access switch, see 'vnu set'
+              below: outsideaccess on starts the SSH daemon, off stops it
+    install   install VNU onto a disk, see 'vnu install' below
+
+    The remaining options are:
+
+        --help    display this help and exit
+        --version output version information and exit
+
+VNU SET
+    set outsideaccess    print whether remote login is allowed
+    set outsideaccess on     allow it: record 'outsideaccess on' in
+        /etc/vnu/config/vsshd.conf and start the SSH daemon vsshd(1)
+    set outsideaccess off    forbid it: flip the config file and stop
+        the daemon (it notices the flip within a second and exits;
+        SIGTERM to the pid in /tmp/vsshd.pid is only the fast path)
+
+    Turning outside access on forks /bin/vsshd, which binds port 22 and
+    accepts SSH-2 connections: RSA host key, diffie-hellman-group14
+    key exchange, password login against /etc/passwd, and on success a
+    session running /bin/vash. A second 'vnu set outsideaccess on' finds
+    the port taken and leaves the running daemon alone.
+
+VNU INSTALL
+    With no argument, install opens a full-screen wizard in the style of
+    the classic Windows Setup / FreeBSD sysinstall / Slackware setup
+    screens: pick the target disk (from /proc/disks), choose the
+    partition size, type the host name for the machine, review the
+    choices, confirm the destructive write and reboot. Blue screens use
+    the console's ANSI color support.
+
+    With arguments it runs without asking anything:
+
+        vnu install DRIVE HOSTNAME [SIZE_MIB]
+
+    DRIVE is the disk index (0..N-1, the same numbering as /proc/disks),
+    HOSTNAME the name the machine should boot with (see 'man
+    hostname'; it is written to /etc/hostname and recorded on the disk)
+    and SIZE_MIB the partition size in MiB, omitted for the whole usable
+    disk. Requires root.
+
+    The write itself is done by the kernel (syscall VNU_SYS_install,
+    30): it stamps the MBR + GRUB core image, records the host name in
+    the config sector before the partition, and creates a FAT16
+    partition at LBA 2048 holding /boot/kernel.elf and a GRUB config, so
+    the disk boots on its own with no CD. This is what a distro
+    'sysinst' does.
+
+EXAMPLES
+    vnu
+    vnu fetch      the Graphics line: driver, WxH and depth
+    vnu version
+    vnu size
+    vnu set outsideaccess    is remote login allowed?
+    vnu set outsideaccess on start the SSH daemon
+    vnu install           the wizard
+    vnu install 0 mybox   disk 0, named mybox, whole disk
+
+FILES
+    /proc/version  OS, kernel and build versions
+    /proc/meminfo  total and free memory
+    /proc/boot     root file system, install state, session shell
+    /proc/images   per-component image sizes
+    /etc/hostname  the name of this machine
+    /etc/vnu/config/vsshd.conf  the outside-access switch
+    /tmp/vsshd.pid  the pid of the running SSH daemon
+
+EXIT STATUS
+    0 on success, 1 when the requested information cannot be read, or
+    when an install fails (in which case nothing was written to the
+    disk).

@@ -6,6 +6,8 @@
 //
 //   /etc/vnu/pics             the demo photograph pack (picview)
 //   /etc/vnu/sounds           the demo WAV clips (play)
+//   /etc/vnu/manpages         the system manual pages, one file per
+//                             command (read by man, see man.c)
 //   /etc/vnu/wallpaper        the desktop background in use
 //   /etc/vnu/wallpaper.default  the shipped original, kept so the
 //                               factory desktop can always come back
@@ -21,6 +23,12 @@
 
 // Demo WAV clips, one file per clip.
 #define VNU_SOUNDS_DIR "/etc/vnu/sounds"
+
+// Manual pages, one file per command; `man <name>` reads
+// /etc/vnu/manpages/<name>. The files are embedded from
+// vnu/userspace/man/pages/ by tools/manpages.py and mounted here by
+// gui/apps.cpp.
+#define VNU_MAN_DIR "/etc/vnu/manpages"
 
 // The wallpaper the desktop draws right now. Any BMP, PNG or JPEG px.h
 // understands, up to 1280x1024 pixels; see gui/wallpaper.cpp.

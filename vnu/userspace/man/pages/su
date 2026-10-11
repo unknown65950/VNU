@@ -1,0 +1,12 @@
+NAME
+    su - switch the session to another user
+
+SYNOPSIS
+    su [USER]
+
+DESCRIPTION
+    Requires USER's password and switches the session identity
+    and working directory to that user. Changing to anything
+    other than your own privilege level needs root. On success
+    it starts a fresh /bin/vash as the target user.
+    Standalone binary in /bin.

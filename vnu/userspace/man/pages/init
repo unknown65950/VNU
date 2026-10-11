@@ -1,0 +1,9 @@
+NAME
+    init - the first process (synonym for vash)
+
+SYNOPSIS
+    init
+
+DESCRIPTION
+    /sbin/init is the same binary as vash, the only process the
+    kernel starts at boot. See man vash.

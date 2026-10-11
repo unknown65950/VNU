@@ -1,0 +1,29 @@
+NAME
+    echoserver - TCP echo server demo
+
+SYNOPSIS
+    echoserver [PORT]
+
+DESCRIPTION
+    Binds PORT (default 7778), enters listen mode and serves one
+    client at a time: every byte received on the connection is sent
+    straight back until the peer closes. Exercises the kernel's
+    bind/listen/accept server path end-to-end over the real NIC.
+
+    run.sh forwards host loopback port 17778 to the guest's 7778
+    (slirp hostfwd), so from the host shell 'nc 127.0.0.1 17778' (or
+    bash's /dev/tcp) can drive it; in the guest, run 'echoserver
+    7778' in the foreground first. The guest's own 10.0.2.15 is not
+    reachable from the host on a plain slirp user network. accept()
+    waits at most 20 s; recv()/send() 5 s per call.
+
+EXIT STATUS
+    0 after the listener is closed, 1 on socket/bind/listen failure,
+    2 on a bad PORT argument.
+
+EXAMPLES
+    echoserver
+    echoserver 9999
+
+SEE ALSO
+    ping(1), tlsdemo, tlsserver, echoserver, man hosts

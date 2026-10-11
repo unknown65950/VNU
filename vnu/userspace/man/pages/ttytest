@@ -1,0 +1,10 @@
+NAME
+    ttytest - POSIX compatibility smoke test
+
+SYNOPSIS
+    ttytest
+
+DESCRIPTION
+    Exercises isatty(), getpid(), getppid() and stat()'s file-
+    type bits against /dev and /proc and reports the results.
+    A quick way to sanity-check the terminal and VFS plumbing.

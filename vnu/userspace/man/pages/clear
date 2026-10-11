@@ -1,0 +1,9 @@
+NAME
+    clear - clear the terminal screen
+
+SYNOPSIS
+    clear
+
+DESCRIPTION
+    Writes enough newlines to push prior output off the top of
+    the 25-row text console. No ANSI escape sequences are used.

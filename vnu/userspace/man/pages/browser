@@ -1,0 +1,80 @@
+NAME
+    browser - a small web browser for the desktop
+
+SYNOPSIS
+    browser
+
+DESCRIPTION
+    A web browser for the VNU desktop. It fetches one address over the
+    socket syscalls and shows what came back as plain text, with every
+    link on the page selectable and followable. It is deliberately
+    small: no HTML layout, no CSS, no cookies, no history and no TLS.
+    What it shows is that a desktop program has a window, a keyboard
+    and a network here, and can use all three at once.
+
+    A page is handled rather than parsed. A tag is skipped whole, from
+    its < to its >, the four entities a text page uses (&amp; &lt;
+    &gt; &nbsp;) become their one character and anything else in that
+    position is dropped; what is left between them is laid out as text.
+    A <br> is a line break and every other tag is invisible.
+
+    An <a href="..."> is both a run of text on the page and a link that
+    can be followed: its text is shown like any other text and its
+    address is remembered. A link with no address, or one whose </a>
+    never arrives, shows its text and is not selectable - nothing is
+    offered that is not really there.
+
+    The focus is either in the address bar or on the page. Tab moves
+    between them, Enter on a link follows it, and Esc returns to the
+    bar rather than quitting, so a mistyped address is one key from
+    being fixed. A second Esc, from the bar, closes the window. With no
+    links on the page, Tab, Enter, Space and the arrows all go back to
+    the bar, since there is then nothing to move through.
+
+    The bar shows what is being typed and the page below shows what was
+    last fetched. The two are kept apart so an address that has been
+    edited but not fetched is visibly still a proposal. F5 fetches the
+    last address again.
+
+    A failed fetch does not blank the window. The reason is drawn over
+    the page, which stays where it was, together with the address it is
+    still showing: an address with no host in it, a name that does not
+    resolve, a refused connection, a request that cannot be sent and an
+    empty answer are all reported this way. With nothing loaded there
+    is no page underneath, so the reason is all there is to show.
+
+    A relative link is resolved against the address of the page it was
+    found on: one beginning with / takes the scheme and host and changes
+    the path, and a bare name is taken relative to the directory the
+    current path names. A port that is not the default is carried into
+    the resolved address.
+
+    There is no TLS. An https address is fetched over a plain
+    connection, so a server that requires TLS will refuse, and one that
+    does not is noted on screen as having answered in the clear.
+
+    The window is pre-created by the desktop and input arrives through
+    vgfx_poll() like every other desktop program, which is the only way
+    a windowed program is delivered keys here: read(0, ...) is the
+    console's byte stream, a windowed task has none of it, and the
+    kernel answers that call with nothing.
+
+KEYS
+    printable  edit the address
+    Backspace  delete the character before the caret
+    Delete     delete the character at the caret
+    Left Right move the caret; Home End go to either end
+    Tab        move between the address bar and the page
+    Enter      fetch the address, or follow the selected link
+    Up Down    choose a link; Home End the first or the last
+    F5         fetch the last address again
+    Esc        back to the address bar, and from there close the window
+
+NOTES
+    Only the first 64 KiB of an answer is kept, and only the rows that
+    fit the window are drawn. A page larger than either is shown as far
+    as it goes rather than refused, and a line longer than a row wraps
+    onto the next one instead of being cut off.
+
+FILES
+    /apps/browser/bin   the program itself

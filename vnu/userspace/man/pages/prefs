@@ -1,0 +1,35 @@
+NAME
+    prefs - graphical system preferences
+
+SYNOPSIS
+    prefs
+
+DESCRIPTION
+    A preferences window split into a pane selector (left)
+    and a content area (right):
+
+      About     OS identification (utsname, /proc/version)
+      Memory    live totals from /proc/meminfo and /proc/uptime
+      Mounts    mounted filesystems from /proc/mounts
+      CPU       /proc/cpuinfo snippet
+      Wallpaper the pictures in /etc/vnu/pics and the shipped one
+
+KEYS
+    j/k switch pane, Esc closes. Click a pane to select it.
+
+    In the Wallpaper pane the Up/Down arrows move the cursor over the
+    pictures (clicking one also) and Enter applies the selected one:
+    the kernel decodes it and the desktop redraws at once. A picture
+    it refuses leaves the desktop as it was and says why on the status
+    line. See man wallpaper for what may be used, and note that the
+    choice is forgotten at reboot.
+
+    F12 belongs to the desktop rather than to this window, so it works
+    with every pane and with no window at all: it steps the display
+    through 640x480, 800x600, 1024x768 and 1280x1024 while the desktop
+    keeps running, moving windows back inside the new screen. The mode
+    is recorded in /etc/vnu/config/gfx.conf, so the next gui and the
+    next boot come up in it, and /proc/gfx reports the one in use.
+    Like everything else in the RAM filesystem, that file is gone at
+    reboot, so a booted ISO starts over from the built-in 1024x768.
+    A GUI app.

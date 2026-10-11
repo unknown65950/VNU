@@ -122,6 +122,7 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
     vnu::apps::install_demo_apps();
     vnu::apps::install_demo_pics();
     vnu::apps::install_demo_sounds();
+    vnu::apps::install_manpages();
     vnu::ata::init();
     serial_init();
     /* An installed disk carries the node name the installer was given;

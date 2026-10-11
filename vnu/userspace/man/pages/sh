@@ -1,0 +1,9 @@
+NAME
+    sh - the standard shell (synonym for vash)
+
+SYNOPSIS
+    sh
+
+DESCRIPTION
+    /bin/sh is the same binary as vash; the VFS and the embedded
+    program table only know it as a login shell path. See man vash.

@@ -1,0 +1,9 @@
+NAME
+    tail - print the last lines of a file
+
+SYNOPSIS
+    tail [-N] [FILE]
+
+DESCRIPTION
+    Prints the last N lines (default 10), subject to the same
+    fixed-buffer 128-line limit as head (see man head).

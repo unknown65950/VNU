@@ -1,0 +1,37 @@
+NAME
+    play - WAV sound player for the desktop
+
+SYNOPSIS
+    play
+
+DESCRIPTION
+    A graphical sound player for the VNU desktop: lists the WAV
+    clips in /etc/vnu/sounds, decodes the selected one with the embedded
+    libwav parser and streams the PCM through the kernel's AC'97
+    audio driver (audio_* syscalls). It is launched from the play
+    tile on the desktop; the window is 480x340 and lives on the
+    cooperative GUI scheduler, so audio_write is non-blocking and
+    the ring is topped up on every heartbeat.
+
+    The transport buttons and the space bar start (play), halt
+    (pause), resume and stop playback; the progress bar tracks the
+    play position via audio_pending() and the track's time is shown
+    next to it. Pause keeps the position; resume restarts from there,
+    stop rewinds to the beginning. The hardware plays 16-bit stereo,
+    so 8-bit and/or mono clips are converted by the kernel driver.
+
+KEYS
+    Up / Down   select a clip
+    Space       play / pause / resume
+    s           stop
+    Esc         close the window
+
+FILES
+    /etc/vnu/sounds     directory of embedded demo WAV clips
+    /dev/dsp            the sound card as a byte stream (16-bit stereo PCM;
+                        writes go straight to the AC'97 DMA ring)
+    /apps/play/bin      the program itself
+
+SYSCALLS
+    audio_open, audio_set_fmt, audio_write, audio_pending, audio_pause,
+    audio_reset, audio_close   the AC'97 playback channel

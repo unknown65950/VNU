@@ -1,0 +1,41 @@
+NAME
+    vsshd - the SSH-2 server daemon
+
+SYNOPSIS
+    vsshd
+
+DESCRIPTION
+    Serves SSH-2 remote logins on port 22: an RSA-2048 host key (the
+    fixed device key embedded at build time, see hostkey.h),
+    diffie-hellman-group14-sha256 key exchange, aes128-ctr with
+    hmac-sha2-256, password authentication checked against /etc/passwd
+    exactly the way the console login checks it, and on success a
+    single session channel running the machine's own /bin/vash. No pty
+    is emulated: vash edits and echoes its own lines, so the session
+    is two plain byte pipes against the shell.
+
+    The daemon is normally started and stopped by 'vnu set
+    outsideaccess on|off' (see man vnu), which also records the choice
+    in /etc/vnu/config/vsshd.conf. Run directly only to debug: the
+    daemon refuses to start unless that file says 'outsideaccess on'.
+    It writes its pid to /tmp/vsshd.pid, forks a process per accepted
+    connection, and reaps the children as they finish. It stops within
+    a second of the switch file flipping to off (SIGTERM is only the
+    fast path), removing the pid file and exiting.
+
+    From the host, run.sh forwards guest port 22 to host loopback
+    10022, so 'ssh -p 10022 root@127.0.0.1' reaches it over the real
+    NIC (slirp hostfwd) when QEMU runs with the SSH port mapped.
+
+FILES
+    /etc/vnu/config/vsshd.conf  the outside-access switch
+    /tmp/vsshd.pid     the daemon's pid
+    /tmp/.session      the session identity handed to /bin/vash
+    /tmp/.ssh_out      the session's stdout/stderr drain file
+
+EXIT STATUS
+    0 when shutting down cleanly; 1 when the switch file forbids it or
+    the socket cannot be bound.
+
+SEE ALSO
+    vnu(1) (the set command), vash(1), man passwd

@@ -1,0 +1,111 @@
+NAME
+    imagine - put a picture on the screen, with nothing in between
+
+SYNOPSIS
+    imagine FILE
+
+DESCRIPTION
+    Draws a picture straight onto the display, through /dev/fb0, and
+    returns. Nothing else is involved: no window, no canvas, no
+    compositor and no palette of its own. What the monitor shows
+    afterwards is the decoder's output and the display driver's, and
+    nothing of this program's own idea of what the picture should
+    look like.
+
+    That is the whole reason it exists. A desktop program draws through
+    vgfx, which puts a window on the screen, quantises colour to the
+    sixteen palette entries a DAC holds and lets the compositor scale
+    the result -- so when a picture comes out wrong there, the decoder,
+    the palette and the scaling are all still suspects. This program
+    takes the display's own frame instead, and a wrong picture here is
+    a wrong picture in px.h or on the hardware.
+
+    The picture is fitted to the display the way a photograph is fitted
+    to a page: scaled to fit, centred, keeping its own shape, with the
+    rest of the screen black. A 32bpp display gets true colour, a pixel
+    being a B8G8R8X8 word written whole. An 8bpp display has a DAC in
+    front of it and can hold only one of sixteen slots, so each pixel is
+    reduced to the nearest entry of the palette the kernel programmed
+    (VNU_SYS_gfx_palette) -- the closest the hardware can get, which is
+    the display's limit and not this program's.
+
+    BMP, PNG and JPEG are read, at most 8192 pixels on a side and 4 MiB
+    of file. A file that is not one of those, or whose header claims a
+    size past those limits, is refused without touching the screen.
+
+    The picture stays on the screen until a key is pressed, which is
+    what puts the console back in front of it: the program holds the
+    display for exactly as long as it is worth looking at, and gives
+    the machine back the moment anyone wants to type at it. Until then
+    the frame is the device's to lend and this program's to paint;
+    after it the text mode is back, with the console's own characters
+    on the screen.
+
+    Where the picture ends up is the device's business, not this
+    program's: the desktop draws into the same frame, and it redraws
+    when it has a reason to -- a window changed, or the pointer moved --
+    so a desktop that is running takes the picture back at its next
+    redraw. That is why this one waits for a key rather than going
+    straight back to the shell.
+
+FILES
+    /dev/fb0            the display's own frame, mapped on open
+
+EXIT STATUS
+    0 on success, 1 if the file cannot be read, is not an image this
+    can show, or the display cannot be put into a mode with a frame.
+
+THE DEVICE: /dev/fb0
+
+    Opening /dev/fb0 maps the display's frame into the calling
+    process at the fixed address VNU_FB_VA and returns a descriptor.
+    A read of struct vnu_fb_info (in <vnu/abi.h>) answers where that
+    address is and how the frame is laid out: va, width, height, bpp
+    (8 or 32), stride in bytes a row, and size for the whole frame.
+    The program writes pixels into va directly and then writes zero
+    bytes to the descriptor, which puts the frame on the screen. A
+    write with data instead copies those bytes into the frame at the
+    descriptor's position, which lseek moves. SEEK_END there is the size
+    of the frame, one byte past the last row that can be written, so a
+    write starting exactly there is refused with EINVAL; ask for the
+    tail by a negative offset instead, as in lseek(fd, -stride,
+    SEEK_END) for the last row. On the other character devices SEEK_END
+    is 0, since a stream has no end.
+
+    Opening the device takes the display with it. A machine at its
+    prompt is in text mode, where there is no frame to map, so an
+    open there programs the mode the last graphics session left
+    behind -- the one the desktop itself would use -- and maps that
+    frame. Open fails with ENODEV only when the card cannot be put
+    into a mode with a frame at all.
+
+    Closing the last descriptor gives the mode back. The console has
+    been sitting in its own cells the whole time, unreadable while the
+    card reads a frame, so returning to text mode is what puts those
+    characters on the screen again; a desktop that has taken the
+    display over in the meantime keeps it. Closing is not what a
+    program has to remember to do: the descriptor is recorded against
+    the process that opened it, and a process that exits or is killed
+    has its descriptors closed for it, so a program that paints and
+    then dies hands the machine its prompt back anyway. Until it
+    does, what is on the screen stays what was drawn into it.
+
+    Nothing else draws on the display while the descriptor is open.
+    The console redraws itself from a scheduler pass, and it waits for
+    the close to do it: a pass that ran anyway would paint its
+    characters straight over the program's picture, and on a display
+    that has no text mode of its own -- a virtio-gpu -- it would hand
+    the whole screen back at the console's 720x400 geometry while the
+    program still held a frame twice that size. So what is on the
+    screen stays what was drawn into it, for as long as the program
+    keeps the descriptor open.
+
+    A mode change replaces the frame a descriptor was opened on, so a
+    read re-maps and answers with the frame in use now, which may be
+    a different size -- read the geometry again rather than trusting
+    the one you started with. The frame belongs to the display and not
+    to the program: exiting, forking or execveing takes the mapping
+    with it and never hands the frame back.
+
+SEE ALSO
+    wallpaper, picview, vgfx

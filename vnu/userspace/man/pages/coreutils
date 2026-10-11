@@ -1,0 +1,22 @@
+NAME
+    coreutils - the standard command set (index)
+
+SYNOPSIS
+    (no such binary - see DESCRIPTION)
+
+DESCRIPTION
+    The basic operating-system tools used to be one busybox-style
+    multi-call binary selected by argv[0]. They are now each a
+    separate, self-contained executable in /bin:
+
+        echo true false pwd cat ls mkdir rm touch uname clear
+        wc head tail grep sort cp mv basename dirname seq df ping
+        nohup
+
+    There is no 'coreutils' program on the image any more; this
+    page is kept as an index of the set. Run 'man <name>' for a
+    single tool, or bare 'man' for every documented command.
+
+    The separate account tools id, whoami, groups, useradd,
+    passwd and su are standalone /bin binaries too. The disk
+    installer is not one of them: it is 'vnu install' (see man vnu).

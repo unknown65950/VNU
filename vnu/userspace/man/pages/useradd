@@ -1,0 +1,15 @@
+NAME
+    useradd - add a new user account
+
+SYNOPSIS
+    useradd NAME
+
+DESCRIPTION
+    Root-only. Adds a user called NAME (lowercase letters,
+    digits, '_' and '-' only) to /etc/passwd, prompting for a
+    password twice. The new user gets uid >= 1000, primary group
+    users (100), a home directory /home/NAME, owned by them with
+    mode 0700.
+
+SEE ALSO
+    man passwd, man su

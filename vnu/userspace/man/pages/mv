@@ -1,0 +1,10 @@
+NAME
+    mv - move (rename) a file
+
+SYNOPSIS
+    mv SRC DST
+
+DESCRIPTION
+    Moves SRC to DST. There is no rename() in the VFS yet, so
+    this is implemented as copy-then-unlink. Directories cannot
+    be moved.

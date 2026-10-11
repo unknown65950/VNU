@@ -1,0 +1,15 @@
+NAME
+    calc - graphical calculator
+
+SYNOPSIS
+    calc
+
+DESCRIPTION
+    A graphical keypad calculator for the VNU desktop. Arithmetic
+    follows immediate execution without operator precedence, so
+    2 + 3 * 4 is 20, not 14.
+
+KEYS
+    digits 0-9, . + - * / % and = operators, Backspace to clear
+    the last digit, Esc closes the window. Launched from the
+    desktop or as /apps/calc/bin; not reachable from the shell.

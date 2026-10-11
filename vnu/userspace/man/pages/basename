@@ -1,0 +1,9 @@
+NAME
+    basename - strip the directory part of a path
+
+SYNOPSIS
+    basename PATH
+
+DESCRIPTION
+    Prints PATH with any leading directory components removed,
+    e.g. basename /bin/ls prints ls.

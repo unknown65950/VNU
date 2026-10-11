@@ -1,0 +1,33 @@
+NAME
+    hostname - the name of this machine
+
+SYNOPSIS
+    cat /etc/hostname
+
+DESCRIPTION
+    /etc/hostname holds the node name of the machine: one line, no
+    spaces, as on any other Unix. It is the single source of truth, so
+    everything that has to know who the machine is reads it from
+    here instead of keeping a copy:
+
+      - the vash prompt, which prints user@name:cwd$ where it used to
+        print a hard-coded root@vnu:...
+      - uname(2), so 'uname -n' and 'uname -a' agree with the prompt
+      - the installer, which asks for the name and records it on the
+        disk it writes (vnu install)
+
+    A name is 1 to 63 characters of letters, digits, '-', '_' and
+    '.', and must start and end with a letter or digit. 'vnu fetch'
+    reports the current one as its Host line.
+
+    The file is seeded at boot with the built-in default 'vnu'. An
+    installed disk carries the name it was given, so booting that disk
+    puts the name here instead. To rename a running system, write the
+    file as root ('echo mybox > /etc/hostname') or call sethostname()
+    from a program; the shell picks the new name up at the next
+    prompt. Keep it short: it is part of every prompt.
+
+    See 'man vnu' for the installer and 'man uname' for -n.
+
+FILES
+    /etc/hostname

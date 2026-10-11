@@ -1,0 +1,31 @@
+NAME
+    rusagedemo - what times(2) and getrusage(2) report
+
+SYNOPSIS
+    rusagedemo
+
+DESCRIPTION
+    Forks once and prints the caller's CPU-time accounting from
+    times(2) and getrusage(2), for the process itself and for the
+    child it waited for. The child burns a few ticks of the 100 Hz
+    scheduler clock in a busy loop and exits with status 7; the
+    kernel folds its time into the parent's tms_cutime and into
+    getrusage(RUSAGE_CHILDREN) at the exit, which is what the demo
+    then shows. Every line printed is a claim about the accounting
+    the kernel does, so this doubles as the regression test for the
+    two syscalls.
+
+    VNU executes all code at privilege 0 with per-process page tables
+    and does not sample a privilege level, so user and system time
+    are not separated the way Linux separates them: every tick a
+    process runs is charged to utime, and stime/cstime are always 0
+    (see ABI.md and <vnu/abi.h>). The demo prints those zeros rather
+    than hiding them. getrusage's unmeasurable fields (maxrss, page
+    faults, block I/O, ...) are likewise reported as 0.
+
+EXIT STATUS
+    0 when the child burned its ticks and was reaped with status 7;
+    1 when fork() or waitpid() misbehaved.
+
+SEE ALSO
+    times(2), getrusage(2), forkdemo(1), ttytest(1), man(1)

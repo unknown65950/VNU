@@ -1,0 +1,63 @@
+NAME
+    wallpaper - show or set the desktop background
+
+SYNOPSIS
+    wallpaper [option]... [file]
+ 
+DESCRIPTION
+    The desktop background is a plain file, /etc/vnu/wallpaper, that
+    the kernel decodes and stretches behind the windows at startup.
+    This command reports which picture is in use, or replaces it.
+
+    With no argument, print the bare name of the background the
+    desktop is drawing, or `none` while it is still the procedural
+    sky. With a file argument, hand the path to the kernel
+    (VNU_SYS_wallpaper): the kernel reads the file, decodes it with
+    the same px.h decoder picview uses, quantises it to a palette of
+    up to 240 of its own colours in the display palette, makes it
+    the background and rewrites /etc/vnu/wallpaper with it, so the
+    choice survives a restart of the GUI. A candidate that fails to
+    decode is refused and changes nothing -- neither the file nor the
+    screen.
+
+    BMP, PNG and JPEG pictures of at most 1280x1024 pixels are
+    accepted. JPEG is decoded by the same float IDCT picview uses,
+    which the kernel borrows the FPU for and hands straight back;
+    every other decoder is integer code and does without one.
+
+    The picture lives in the RAM filesystem and is therefore
+    forgotten at reboot, where the kernel seeds the shipped desktop
+    back into place. That seed is /etc/vnu/wallpaper.default, which
+    this command never overwrites -- it is always there to fall back
+    on.
+
+    The same pictures can be picked from the desktop: open the
+    preferences window (prefs) and use its Wallpaper pane.
+
+OPTIONS
+    -l, --list     list the pictures that can be used, one per line,
+                   marking the JPEGs the kernel cannot decode, then
+                   the shipped desktop
+        --help     display this help and exit
+        --version  output version information and exit
+
+EXIT STATUS
+    0 on success, 1 on a missing file, an unusable picture, an unknown
+    option or an unreadable /proc/gfx.
+
+EXAMPLES
+    wallpaper -l
+        list the candidates
+    wallpaper /etc/vnu/pics/sunset.png
+        put the sunset on the desktop
+    wallpaper /etc/vnu/wallpaper.default
+        go back to the desktop VNU ships with
+
+FILES
+    /etc/vnu/wallpaper           the background in use
+    /etc/vnu/wallpaper.default   the shipped background
+    /etc/vnu/pics                the demo picture pack
+    /proc/gfx                    reports the background in use
+
+SYSCALLS
+    wallpaper   decode and adopt a background picture

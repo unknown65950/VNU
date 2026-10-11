@@ -34,6 +34,13 @@ PY
 echo "==> thams"
 python3 "$ROOT/tools/thams.py" generate
 
+# The manual pages are files under vnu/userspace/man/pages/, one per
+# command; embed them so gui/apps.cpp can mount each at
+# /etc/vnu/manpages/<name>, where the man binary reads it. Like the
+# thams table, the header has to exist before the kernel is compiled.
+echo "==> manpages"
+python3 "$ROOT/tools/manpages.py" generate
+
 echo "==> userspace"
 # Build vash (multi-file)
 VASH_SRC="$ROOT/vnu/userspace/vash/strbuf.c $ROOT/vnu/userspace/vash/cmd.c $ROOT/vnu/userspace/vash/lex.c $ROOT/vnu/userspace/vash/vars.c $ROOT/vnu/userspace/vash/fnmatch.c $ROOT/vnu/userspace/vash/expand.c $ROOT/vnu/userspace/vash/parse.c $ROOT/vnu/userspace/vash/exec.c $ROOT/vnu/userspace/vash/arith.c $ROOT/vnu/userspace/vash/builtins.c $ROOT/vnu/userspace/vash/vash.c"

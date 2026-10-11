@@ -1,0 +1,28 @@
+NAME
+    export - give shell variables to the programs the shell runs
+
+SYNOPSIS
+    export [-p] [NAME[=VALUE]...]...
+
+DESCRIPTION
+    Marks each NAME as exported, so that its value is placed in the
+    environment of every program this shell starts. With NAME=VALUE
+    the variable is given that value first; a bare NAME is created
+    empty if it does not exist yet. A variable that is not exported
+    belongs to the shell alone and no program ever sees it, which is
+    why `FOO=1' and `export FOO=1' are not the same command.
+
+    With no operand, and with -p, writes the exported variables in a
+    form that can be read back in:
+
+        export NAME="VALUE"
+
+    An array cannot be exported. The environment holds NAME=VALUE
+    strings and has nowhere to put a subscript, so `export a[2]' is
+    refused rather than quietly exporting `a' and leaving the caller
+    to wonder what happened to the element.
+
+    Exporting says nothing about where commands are looked up: that
+    is the shell's own search path, which `type' reports (see type).
+    Unknown options are refused, whether or not -p was given first.
+    Shell builtin.

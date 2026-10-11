@@ -1,0 +1,10 @@
+NAME
+    cp - copy a file
+
+SYNOPSIS
+    cp SRC DST
+
+DESCRIPTION
+    Copies the contents of SRC to DST, creating or truncating
+    DST. Permissions and ownership of DST follow the umask
+    defaults of whoever creates it, not SRC's.

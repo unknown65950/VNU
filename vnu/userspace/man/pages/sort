@@ -1,0 +1,11 @@
+NAME
+    sort - sort lines of a file
+
+SYNOPSIS
+    sort [FILE]
+
+DESCRIPTION
+    Sorts the lines of FILE (or standard input) in ascending
+    bytewise (strcmp) order using insertion sort, then prints
+    them. Subject to the 128-line fixed-buffer limit like head.
+    No options.

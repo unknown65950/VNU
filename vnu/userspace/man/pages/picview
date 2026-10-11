@@ -1,0 +1,31 @@
+NAME
+    picview - graphical image viewer
+
+SYNOPSIS
+picview [file]
+ 
+ DESCRIPTION
+    A tiny image viewer for the VNU desktop. Without an argument it
+    walks the /etc/vnu/pics directory; with a file argument (as the files
+    manager supplies when you open a .png/.jpg/.jpeg) it decodes and
+    shows just that file. Either way, BMP, PNG and JPEG are decoded
+    with the embedded px.h decoder and rendered into the window's
+    client area in the display's own colours. A display attached to a
+    virtio-gpu shows 24 bits per pixel and the picture is drawn as it
+    is; a VBE display has 16 colours behind a DAC, so the same picture
+    is quantised to the nearest of them (dithered unless `d` says not
+    to), which is the only thing about it that loses anything. The
+    program asks the display which case it is in rather than deciding.
+    A file dropped onto the window (drag it from the file manager)
+    switches it to that file, like a file argument would.
+
+KEYS
+    [ ]   previous / next picture (gallery mode only)
+    z     toggle zoom (fit window / 1:1)
+    d     toggle ordered dithering (a 16-colour display only; on a
+          24-bit one the picture is already finer than 16 steps)
+    Esc   close the window (opened from the file manager: return to it)
+
+FILES
+    /etc/vnu/pics   directory of embedded demo pictures
+    /apps/picview/bin   the program itself

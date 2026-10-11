@@ -1,0 +1,9 @@
+NAME
+    unset - empty (unset) the command search path
+
+SYNOPSIS
+    unset PATH
+
+DESCRIPTION
+    Clears the session PATH. External commands then resolve
+    directly to /bin anyway. Only PATH may be unset. Shell builtin.

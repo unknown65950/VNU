@@ -66,6 +66,12 @@ void install_demo_pics();
 // play.
 void install_demo_sounds();
 
+// Mounts the manual pages under /etc/vnu/manpages (one VFS node per
+// command, sourced from the embedded page files) so `man <name>` can
+// read /etc/vnu/manpages/<name>; see vnu/userspace/man/man.c and
+// tools/manpages.py.
+void install_manpages();
+
 // Scans /apps/ for subdirectories and fills out[] (up to max). Returns
 // the number of apps found.
 int list(AppEntry* out, int max);

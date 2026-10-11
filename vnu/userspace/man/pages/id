@@ -1,0 +1,10 @@
+NAME
+    id - print the current identity
+
+SYNOPSIS
+    id
+
+DESCRIPTION
+    Prints the effective user and group as uid and gid with
+    names, e.g. uid=1000(guest) gid=100(users). Standalone
+    binary in /bin.

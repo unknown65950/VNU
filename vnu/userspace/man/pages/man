@@ -1,0 +1,40 @@
+NAME
+    man - display reference manual pages
+
+SYNOPSIS
+    man [NAME...]
+    man [-l | --list]
+    man [-h | --help]
+
+DESCRIPTION
+    Displays the manual page for each NAME on standard output.
+    With no arguments (or with -l) it lists every documented
+    command on the system with a one-line summary, which doubles
+    as a quick way to discover what is installed.
+
+    When the output is a terminal the page is shown in a pager
+    instead: a white status bar on the last row reads
+        Manual page vcc(1) line 12 (press h for help or q to quit)
+    and names the page and the first line you are looking at. When
+    the output is redirected the page is simply printed instead, so
+    'man ls > /tmp/ls.txt' leaves you a file to grep.
+
+KEYS
+    Up / Down      scroll one line (k and j do the same)
+    space, f, Enter  scroll down one screen (also Ctrl+F, Ctrl+D)
+    b, u           scroll up one screen (also Ctrl+B)
+    Home, g        jump to the first line of the page
+    End, G         jump to the last line of the page
+    h              list the keys (any other key goes back)
+    q              quit and return to the shell (Esc, Ctrl+C too)
+
+EXAMPLES
+    man ls          page for the ls command
+    man useradd id  two pages at once
+    man             full listing of documented commands
+    man vcc > /tmp/v.txt  the page as a plain file, no pager
+
+SEE ALSO
+    Every command in the system has a page; try man vash,
+    man vedit, man coreutils. AGENTS.md at the repo root rules
+    that new commands must come with a page.

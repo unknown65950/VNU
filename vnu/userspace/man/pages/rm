@@ -1,0 +1,11 @@
+NAME
+    rm - remove files or directories
+
+SYNOPSIS
+    rm FILE...
+
+DESCRIPTION
+    Removes each argument: it tries unlink first and falls back
+    to rmdir, so both files and directories are acceptable
+    operands. There is no -r, -f or confirmation; nothing is
+    recursive.

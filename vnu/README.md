@@ -24,7 +24,7 @@ vnu/
 │   ├── usertools/              id, whoami, su, ...
 │   ├── gui/                    desktop apps, picview, prefs, ...
 │   ├── editors/                vedit
-│   ├── man/                    the manual (self-contained, one binary)
+│   ├── man/                    the pager (man.c) and pages/ (one file per command)
 │   ├── vcc/                    the compiler that also runs inside VNU
 │   ├── vnu/                    system information (fetch/version/size)
 │   ├── examples/               hello, echoserver, tlsserver, ...
@@ -103,10 +103,11 @@ and `ABI.md` carry it in the same change.
 ## Manuals
 
 Every user-visible command has a manual page: the vash builtins, each
-coreutils binary, the usertools, the GUI apps, `vcc` and `vnu`. The
-`man` binary is self-contained (there is no `/usr/share/man` filesystem),
-so the pages live in the `pages[]` table in
-`userspace/man/man.c`. Read them with:
+coreutils binary, the usertools, the GUI apps, `vcc` and `vnu`. A page is
+a file under `/etc/vnu/manpages`, one per command; the sources live in
+`userspace/man/pages/` and `tools/manpages.py` embeds them, so the `man`
+binary carries no pages of its own (a module ships its page at
+`/apps/<name>/man/<name>`). Read them with:
 
 ```bash
 man              # every documented command
@@ -116,3 +117,4 @@ man vash man su  # several at once
 
 The rule that makes a page mandatory is in `AGENTS.md` at the repository
 root, and is repeated in a comment at the top of `userspace/man/man.c`.
+Pages live in `/etc/vnu/manpages` and nowhere else.

@@ -1,0 +1,34 @@
+NAME
+    quota - show and set per-user storage quotas
+
+SYNOPSIS
+    quota [OPTION...] [USER]
+
+DESCRIPTION
+    Each user has a storage quota: the sum of the sizes of the
+    regular files that user id owns in the VFS, and a hard limit on
+    that sum. A write that would grow a file past its owner's limit
+    is refused whole with EDQUOT, so a quota never lets a write in
+    part. A limit of 0 means unlimited, which is the default.
+
+    With no options, prints the usage and limit of USER, or of the
+    caller when no USER is given. USER may be a name from /etc/passwd
+    or a numeric user id.
+
+    Changing a limit is root's: `-s' sets one user's hard limit, and
+    `-d' sets the default that a user with no limit of their own is
+    held to. `-D' prints that default.
+
+OPTIONS
+    -s LIMIT   set USER's hard limit to LIMIT bytes (0 = unlimited)
+    -d LIMIT   set the default limit for users without one
+    -D         show the default limit
+    -h         show this help and exit
+    -V         show the version and exit
+
+EXIT STATUS
+    0 on success, 1 when a limit could not be read or set, 2 on a
+    usage error.
+
+SEE ALSO
+    df(1), id(1), man(1)

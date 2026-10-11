@@ -1,0 +1,32 @@
+NAME
+    ping - send ICMP echo requests (network test)
+
+SYNOPSIS
+    ping TARGET [COUNT]
+
+DESCRIPTION
+    Sends an IPv4 ICMP echo request to TARGET and reports the
+    round-trip time the kernel measured. Used to check that the NIC is
+    up: on QEMU's default user network the host router answers at
+    10.0.2.2, so 'ping 10.0.2.2' is a quick connectivity smoke test.
+
+    TARGET is a dotted-quad address or a host name. Names are resolved
+    through /etc/hosts first, then via DNS: A queries to each
+    'nameserver' line of /etc/resolv.conf (default server 1.1.1.1),
+    tried in order. COUNT (default 4) picks how many requests to send
+    before printing a summary; each request waits at most 300 ms in the
+    kernel (ARP resolution for a new target, via the gateway off
+    subnet).
+
+FILES
+    /etc/hosts
+    /etc/resolv.conf
+
+EXIT STATUS
+    0 if at least one reply arrived, 1 otherwise; 2 on bad usage or an
+    unknown host.
+
+EXAMPLES
+    ping 10.0.2.2
+    ping gateway 1
+    ping 10.0.2.2 1

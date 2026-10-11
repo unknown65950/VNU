@@ -1,0 +1,11 @@
+NAME
+    exit - end the shell session
+
+SYNOPSIS
+    exit [STATUS]
+
+DESCRIPTION
+    Terminates the current shell. In a login shell this is a
+    logout: the saved session is dropped and the machine returns
+    to the 'VNU login:' prompt. STATUS, an optional exit code,
+    is returned to the kernel. Shell builtin.

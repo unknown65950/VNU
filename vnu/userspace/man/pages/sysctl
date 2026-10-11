@@ -1,0 +1,44 @@
+NAME
+    sysctl - read and write kernel parameters
+
+SYNOPSIS
+    sysctl [OPTION...] [VARIABLE[=VALUE]]...
+
+DESCRIPTION
+    Reads or writes a runtime kernel parameter. Every parameter is a
+    small file under /proc/sys, and the name it is known by is the
+    path with '.' (or '/') where the path has '/': `kernel.hostname'
+    is /proc/sys/kernel/hostname. With no operand, nothing is done.
+
+    An operand with an '=' assigns a value (`sysctl -w a=b' is the
+    same as `sysctl a=b'); one without reads the parameter and prints
+    `name = value'. VNU carries a small /proc/sys/kernel: ostype,
+    osrelease, osrevision and version are read-only facts (the same
+    values uname(2) reports), and hostname and domainname may also be
+    written. Changing hostname is the same as rewriting
+    /etc/hostname; changing domainname rewrites /etc/domainname.
+
+OPTIONS
+    -a, --all           display every parameter in /proc/sys
+    -b, --binary        print a value without its trailing newline
+    -e, --ignore        ignore errors about unknown keys
+    -N, --names         list only the parameter names
+    -n, --values        list only the values
+    -q, --quiet         do not echo `name = value' when writing
+    -w, --write         the operands are name=value assignments
+    -p, --load[=FILE]   read assignments from FILE
+                        (/etc/sysctl.conf when none is given)
+    -r, --pattern ERE   with -a, show only names matching the
+                        POSIX extended regular expression ERE
+    -h, --help          show this help
+    -V, --version       show the version
+
+    FILE has one `name = value' per line; blank lines and lines whose
+    first non-blank character is '#' are ignored.
+
+EXIT STATUS
+    0 when every operand was handled, 1 when any read, write or load
+    failed.
+
+SEE ALSO
+    uname(1), man(1)

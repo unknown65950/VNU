@@ -1,0 +1,18 @@
+NAME
+    hosts - static host name to IP mapping
+
+DESCRIPTION
+    /etc/hosts maps names to IPv4 addresses before any DNS traffic is
+    sent, so entries work offline and always win over DNS answers.
+
+    Each non-comment line lists an IP followed by one or more aliases:
+
+        10.0.2.2    gateway
+        10.0.2.15   vnu
+
+    Lines starting with '#' are ignored; fields are separated by
+    spaces or tabs. Lookups are case-insensitive. The file is seeded
+    at boot and is a plain editable file (root: 0644).
+
+FILES
+    /etc/hosts

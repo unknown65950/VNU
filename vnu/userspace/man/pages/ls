@@ -1,0 +1,11 @@
+NAME
+    ls - list directory contents
+
+SYNOPSIS
+    ls [DIR]
+
+DESCRIPTION
+    Prints the names of the entries in DIR, one per line, with
+    a trailing '/' on directories. The default is the current
+    directory; '.' is accepted as an explicit current directory.
+    Sorting is by VFS node order, not alphabetical.

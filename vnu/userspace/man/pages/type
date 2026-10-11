@@ -1,0 +1,10 @@
+NAME
+    type - say how a name would be interpreted
+
+SYNOPSIS
+    type NAME
+
+DESCRIPTION
+    Reports whether NAME is a shell builtin ('NAME is a shell
+    builtin') or resolves to an external program path. Identical
+    in behaviour to which. Shell builtin.

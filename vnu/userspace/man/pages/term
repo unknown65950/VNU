@@ -1,0 +1,10 @@
+NAME
+    term - the desktop terminal app (synonym for vash)
+
+SYNOPSIS
+    term
+
+DESCRIPTION
+    The GUI launcher ships vash under the name 'term'; a login
+    happens inside the window just like on the console. See
+    man vash.

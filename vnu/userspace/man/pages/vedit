@@ -1,0 +1,21 @@
+NAME
+    vedit - full-screen text editor
+
+SYNOPSIS
+    vedit
+
+DESCRIPTION
+    A text editor in the style of MS-DOS EDIT, text-mode only.
+    22x78 editing buffer; the buffer starts as a single blank
+    line and is not loaded from disk at startup.
+
+KEYS
+    Arrows / Home / End / Del / Backspace / Enter  edit text
+    Esc    enter the command line at the bottom
+
+    In command mode:
+      s [file]  save to a file
+      o [file]  load a file
+      q         quit (asks if modified; q! forces)
+      h         help
+      Enter / Esc  return to editing

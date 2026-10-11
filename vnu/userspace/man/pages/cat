@@ -1,0 +1,10 @@
+NAME
+    cat - concatenate files and print
+
+SYNOPSIS
+    cat [FILE...]
+
+DESCRIPTION
+    Reads each FILE in turn and writes it to standard output.
+    With no arguments, copies standard input to standard output.
+    Sizes are bounded by the VFS file buffer (20 KiB).

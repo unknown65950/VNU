@@ -1,0 +1,21 @@
+NAME
+    uname - print system information
+
+SYNOPSIS
+    uname [OPTION]...
+
+DESCRIPTION
+    With no option prints the kernel name (same as -s).
+
+    -a, --all            print everything
+    -s, --kernel-name    kernel name
+    -n, --nodename       host name (from /etc/hostname; see
+                         'man hostname')
+    -r, --kernel-release kernel release
+    -v, --kernel-version kernel version
+    -m, --machine        machine hardware name
+    -p, --processor      processor type
+    -i, --hardware-platform
+    -o, --operating-system
+        --help           show help and exit
+        --version        show version and exit

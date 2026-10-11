@@ -1,0 +1,11 @@
+NAME
+    cd - change the working directory
+
+SYNOPSIS
+    cd [DIR]
+
+DESCRIPTION
+    Makes DIR the current working directory. With no argument
+    it returns to the invoking user's home directory. '.' and
+    '..' are resolved by the VFS, so cd .. works like on a real
+    Unix. Built-in to vash (run inside the shell).

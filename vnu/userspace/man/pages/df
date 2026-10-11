@@ -1,0 +1,34 @@
+NAME
+    df - report file system space usage
+
+SYNOPSIS
+    df [OPTION] [FILE...]
+
+DESCRIPTION
+    Shows the amount of space used and available on each mounted
+    file system. VNU's only real file system is the in-memory VFS
+    (mounted on /); /dev and /proc are pseudo file systems with
+    no accounted space, so they print zeros. FILE operands restrict
+    the report to the file systems containing those files.
+
+    Sizes are shown in 1 KiB blocks unless a human-readable option
+    is given.
+
+OPTIONS
+    -a            include pseudo file systems (all are shown anyway)
+    -h            human-readable sizes (powers of 1024)
+    -H            human-readable sizes (powers of 1000)
+    -k            show sizes in 1 KiB blocks (the default)
+    -l            limit to local file systems (all are local)
+    -P            POSIX output format (1024-blocks, single spaces)
+    -T            also print the file system type
+    -t TYPE       only include file systems of type TYPE
+    -x TYPE       exclude file systems of type TYPE
+    -v            ignored (macOS compatibility)
+        --help    display this help and exit
+        --version output version information and exit
+
+EXAMPLES
+    df
+    df -h /proc/version
+    df -T -t vfs

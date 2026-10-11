@@ -1,0 +1,42 @@
+NAME
+    vcc - the VNU C compiler
+
+SYNOPSIS
+    vcc [-c] [-o out] [-I dir] file.c [file.o] [file.a]
+
+DESCRIPTION
+    Compiles and links C programs for VNU: a preprocessor, a compiler
+    for a strict i386 C subset into ELF relocatable objects, and a
+    linker that links against the standard library (crt0.o plus
+    libvlibc.a, read from /lib). The whole compiler runs inside the OS
+    and writes its output to the VFS, so a simple
+        vcc hello.c -o a.out
+    produces a VNU executable.
+
+    Flags are appended in any order. With -c only the relocatable
+    object is written (default file a.o); without it vcc compiles the
+    single .c file and links it with crt0.o and the whole libvlibc.a
+    into a full VNU ELF (default a.out). Object files may be linked
+    individually through a lib.a archive.
+
+    Input sources are read from the VFS; no files larger than memory
+    are expected. vcc is itself compiled with vcc (it is self-hosting).
+
+OPTIONS
+    -c            compile only, write the object file
+    -o out        output file (default a.o with -c, else a.out)
+    -I dir        add dir to the include search path
+        --help    display this help and exit
+        --version output version information and exit
+
+EXAMPLES
+    vcc -c hello.c -o hello.o
+    vcc main.c libfoo.a -o app          link app from main.c and the
+                                        archive
+
+FILES
+    /lib/crt0.o     startup object
+    /lib/libvlibc.a standard C library archive
+
+EXIT STATUS
+    0 on success, 1 on any compile, link or I/O error.

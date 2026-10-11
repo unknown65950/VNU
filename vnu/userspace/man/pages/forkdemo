@@ -1,0 +1,26 @@
+NAME
+    forkdemo - what fork(2) gives a child, and what it does not
+
+SYNOPSIS
+    forkdemo
+
+DESCRIPTION
+    Forks once and reports what the two processes can see of each
+    other. The child is a second process in its own address space:
+    it runs while the parent runs, has its own pid, and resumes at
+    the instruction after fork() with a return value of 0. Memory is
+    not shared - the child writes to a variable in .data and the
+    parent never sees it. The filesystem, the console and every other
+    process are shared, and the parent reaps the child with
+    waitpid().
+
+    Useful as a smoke test for the process table and for fork()
+    itself: every line printed is a claim about what the kernel
+    guarantees.
+
+EXIT STATUS
+    0 if waitpid() returned the child's pid and its exit status 7,
+    1 if fork() failed or the child was not reaped as expected.
+
+SEE ALSO
+    ttytest(1), man(1)

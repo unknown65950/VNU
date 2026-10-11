@@ -1,0 +1,12 @@
+NAME
+    seq - print a sequence of numbers
+
+SYNOPSIS
+    seq LAST
+    seq FIRST LAST
+    seq FIRST STEP LAST
+
+DESCRIPTION
+    Prints integers from FIRST (default 1) up to LAST, counting
+    by STEP (default 1), one per line. A negative STEP counts
+    downwards. Unrepresentable values are printed as 0.

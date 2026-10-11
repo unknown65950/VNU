@@ -1,0 +1,29 @@
+NAME
+    vash - VNU shell
+
+SYNOPSIS
+    vash
+
+DESCRIPTION
+    The interactive login shell. Prints a prompt of the form
+    user@name:cwd$, where name comes from /etc/hostname, and reads
+    commands line by line. Words are
+    split on whitespace; there is no quoting or piping yet.
+
+    Redirection is supported with > file, >> file (append) and
+    < file; the operators may be attached or space-separated.
+
+    On a cold boot vash runs the login sequence (VNU login: /
+    Password:) against /etc/passwd. After an external command
+    the kernel respawns it and it silently re-adopts the session
+    it saved to /tmp/.session, so a 'logout' (exit) returns to
+    the login prompt.
+
+    Editor keys: Up/Down history, Ctrl+C cancels a line, Shift
+    is used to type symbol characters.
+
+    Also installed as /bin/sh, /sbin/init and as the GUI's
+    'term' app - see man sh, man init, man term.
+
+OPTIONS
+    none.

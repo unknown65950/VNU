@@ -1,0 +1,9 @@
+NAME
+    pwd - print the working directory
+
+SYNOPSIS
+    pwd
+
+DESCRIPTION
+    Writes the absolute path of the current working directory
+    to standard output.

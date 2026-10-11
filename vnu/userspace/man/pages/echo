@@ -1,0 +1,10 @@
+NAME
+    echo - write its arguments to standard output
+
+SYNOPSIS
+    echo [WORD...]
+
+DESCRIPTION
+    Writes each WORD in order, separated by a single space, and
+    finishes with a newline. No option handling (backslashes,
+    -n and -e are copied literally).

@@ -1,0 +1,10 @@
+NAME
+    help - list the shell builtins
+
+SYNOPSIS
+    help
+
+DESCRIPTION
+    Prints the list of vash built-in commands, the current PATH
+    and a reminder of the editor keys. For full documentation of
+    any command use man (see man man). Shell builtin.

@@ -1,0 +1,12 @@
+NAME
+    dirname - strip the final component of a path
+
+SYNOPSIS
+    dirname PATH
+
+DESCRIPTION
+    Prints PATH with its last component removed, giving the
+    directory part. Trailing slashes are stripped first, and a
+    path with no directory component yields '.'. A root path
+    yields '/'. Examples: dirname /bin/ls -> /bin, dirname ls
+    -> .

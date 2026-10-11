@@ -1,0 +1,11 @@
+NAME
+    grep - print lines matching a pattern
+
+SYNOPSIS
+    grep PATTERN [FILE]
+
+DESCRIPTION
+    Prints every line of FILE (or standard input) that contains
+    PATTERN as a plain substring. There is no regular-expresion
+    support, no options, and the same 128-line input cap as
+    head. Exit status is 0 if a match was found, 1 otherwise.

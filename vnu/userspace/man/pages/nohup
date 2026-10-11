@@ -1,0 +1,29 @@
+NAME
+    nohup - run a command immune to hangups
+
+SYNOPSIS
+    nohup COMMAND [ARG...]
+
+DESCRIPTION
+    Runs COMMAND with SIGHUP set to be ignored, so it keeps running
+    when the terminal that started it goes away instead of being
+    killed with the session. Because that output would otherwise be
+    lost with the terminal, the command's standard output - when it
+    is a terminal - is appended to nohup.out in the current
+    directory, created with mode 0600 if it does not exist, and its
+    standard error is sent to the same place; standard input, when
+    it is a terminal, is redirected from /dev/null. A short note on
+    standard error says what was redirected.
+
+    nohup then replaces itself with the command (execve(2)), so the
+    shell sees the command's own exit status. A name without a slash
+    is looked up in /bin; there is no PATH search and no
+    $HOME/nohup.out fallback.
+
+EXIT STATUS
+    The command's status. nohup returns 125 if it could not set up
+    (bad usage, nohup.out not creatable) and 127 if the command
+    could not be executed at all.
+
+SEE ALSO
+    coreutils(1), sh(1), man(1)

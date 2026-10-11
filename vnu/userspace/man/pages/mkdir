@@ -1,0 +1,9 @@
+NAME
+    mkdir - create a directory
+
+SYNOPSIS
+    mkdir DIR...
+
+DESCRIPTION
+    Creates each DIR (mode 0755, owned by the caller).
+    Intermediate directories are not created automatically.

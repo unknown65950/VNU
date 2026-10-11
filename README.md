@@ -29,9 +29,10 @@ root@vnu:~$ man ls
 - **Multi-user**: password login (`root`/`root`, `guest`/`guest`),
   `/etc/passwd` + `/etc/group`, `rwx` permissions with `uid`/`gid` on VFS
   nodes, builtins `id`, `whoami`, `groups`, `useradd`, `passwd`, `su`.
-- **Man pages**: built-in page database inside the `man` binary (no
-  `/usr/share/man`). `man` for listings and pages; mandatory for every
-  command — see `AGENTS.md`.
+- **Man pages**: a file per command under `/etc/vnu/manpages`, read by the
+  `man` binary (no `/usr/share/man`, no page database in the binary).
+  `man` for listings and pages; mandatory for every command — see
+  `AGENTS.md`.
 - **VFS (RAM, FHS)**: `/bin`, `/sbin`, `/etc`, `/home`, `/root`, `/tmp`,
   `/usr`, `/var`, `/mnt`, `/dev` (char devices: `null`, `zero`, `full`,
   `random`/`urandom`, `tty`, `console`), `/proc` (synthetic: `version`,
@@ -220,8 +221,9 @@ after the table, so `make test` covers both.
 - Every new userspace command is a **standalone binary** with its own location
   under `vnu/userspace/`, its own `embedded_<name>.h`, a `/bin/<name>` VFS
   node and a `process.cpp` table entry; no applets in a multi-call binary.
-- A feature is not done until the command has a page in `man.c` (and has been
-  verified in QEMU).
+- A feature is not done until the command has a page in
+  `/etc/vnu/manpages` (source: `vnu/userspace/man/pages/<name>`), and has
+  been verified in QEMU.
 - New syscalls only as an append to both `abi.h` copies + `vnu/abi/ABI.md`.
 
 The full ruleset is in `AGENTS.md`. GUI/window history and known

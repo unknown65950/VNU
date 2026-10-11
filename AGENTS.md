@@ -7,7 +7,8 @@ consistent.
 ## Layout
 - `vnu/kernel/` — the kernel (freestanding C++20, own build via CMake).
 - `vnu/userspace/` — userspace programs compiled with `tools/vcc`
-  (vash, vibecoreutils, vedit, gui apps, man, examples).
+  (vash, vibecoreutils, vedit, gui apps, man, examples). The manual page
+  sources are the files under `vnu/userspace/man/pages/`.
 - `vlibc/` — freestanding C library (headers under `vlibc/include/vlibc/`).
 - `tools/` — host toolchain (`vcc`, `v++`, `vld`) and `build_userspace.sh`.
 - `sysroot/` — compiled userspace ELFs, embedded byte-for-byte into the
@@ -59,12 +60,16 @@ instead, sending the keys with `guest._type("<down>q")`.
 - **Mandatory man pages.** Every user-visible command — vash builtins,
   each coreutils command (they are separate binaries under
   `vnu/userspace/vibecoreutils/`, one `.c` per command, not applets of a
-  multi-call binary), and standalone binaries — MUST ship a manual
-  page before the feature is considered done. Pages live in the
-  `pages[]` table in `vnu/userspace/man/man.c` (the `man` binary is
-  self-contained; there is no `/usr/share/man` filesystem). Add an entry
-  there, run `./tools/build_userspace.sh`, and verify `man <cmd>` in
-  QEMU. Reject any new command that lacks a page.
+  multi-call binary), and standalone binaries — MUST ship a manual page
+  before the feature is considered done. Manual pages live in
+  `/etc/vnu/manpages`: one file per command, named after it, e.g.
+  `/etc/vnu/manpages/echo`. The source of that file is
+  `vnu/userspace/man/pages/<name>`; `tools/manpages.py` embeds it and
+  `vnu/kernel/gui/apps.cpp` mounts it at the path above, so `man <cmd>`
+  reads it and the `man` binary carries no pages of its own. Put a page
+  in `/etc/vnu/manpages` (through that source file) and nowhere else.
+  Add the file, run `./tools/build_userspace.sh`, and verify `man <cmd>`
+  in QEMU. Reject any new command that lacks a page there.
 - **One command = one binary = its own userspace location.** New commands
   MUST be standalone binaries with a dedicated source location under
   `vnu/userspace/` (its own `.c`/directory, e.g.

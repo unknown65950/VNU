@@ -1,0 +1,39 @@
+NAME
+    sticky - a sticky note for the desktop
+
+SYNOPSIS
+    sticky
+
+DESCRIPTION
+    A window holding one note. Type into it and it is kept: the text is
+    written to /root/.sticky-note within a second of the last change, and
+    again when the window is closed, so opening the note again - or
+    restarting the whole desktop - gives back what was last written
+    rather than an empty page.
+
+    The status line names the file the note lives in and says whether it
+    has been written, so a note that is still only in the window cannot
+    be mistaken for one that is on disk.
+
+    The editor is the small one a note needs: printable keys, Enter,
+    Backspace, Delete, the arrows, Home and End. A row that reaches the
+    right margin does not wrap, so a long line is scrolled sideways to
+    keep the caret on screen, and a note longer than the window is
+    scrolled vertically to keep the row being edited in view.
+
+KEYS
+    printable keys  type into the note
+    Enter            start a new line
+    Backspace        delete backwards, joining lines at the start
+    Delete           delete forwards
+    Arrows, Home, End  move the caret
+    a click          put the caret where it landed
+    Esc              save if needed and close the window
+
+    The two buttons under the note save it at once and empty it.
+
+FILES
+    /root/.sticky-note  the note itself, rewritten as it changes
+
+    Like the rest of the RAM filesystem that file is gone at reboot,
+    where the desktop comes back with an empty note.

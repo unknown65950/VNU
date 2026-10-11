@@ -522,14 +522,28 @@ SUITE = [
      [r"^initrd /initrd initrd ro 0 0$"], []),
 
     # The system's own content lives under /etc/vnu, not at the root:
-    # the picture pack, the sound clips and the two wallpaper files.
+    # the picture pack, the sound clips, the manual pages and the two
+    # wallpaper files.
     ("media-tree", "ls /etc/vnu",
-     [r"^pics/$", r"^sounds/$", r"^wallpaper$", r"^wallpaper\.default$"], []),
+     [r"^pics/$", r"^sounds/$", r"^manpages/$", r"^wallpaper$",
+      r"^wallpaper\.default$"], []),
     ("media-pics", "ls /etc/vnu/pics",
      [r"^flower\.bmp$", r"^sunset\.png$", r"^logo\.jpg$",
       r"^gray_alpha\.png$", r"^shapes_pal\.png$", r"^shapes_rgba\.png$"], []),
     ("media-sounds", "ls /etc/vnu/sounds",
      [r"^chime\.wav$", r"^melody\.wav$", r"^beep\.wav$"], []),
+    # Manual pages are files, one per command, under /etc/vnu/manpages;
+    # `man <name>` reads /etc/vnu/manpages/<name> there.
+    ("media-manpages", "ls /etc/vnu/manpages",
+     [r"^ls$", r"^man$", r"^vcc$", r"^echo$", r"^vash$"], []),
+    ("man-page-file", "wc /etc/vnu/manpages/ls",
+     [r"^\d+ \d+ \d+ /etc/vnu/manpages/ls$"], []),
+    ("man-page-first", "head -1 /etc/vnu/manpages/ls", [r"^NAME$"], []),
+    # The listing is built from the page files, its summary taken from
+    # each page's own NAME line.
+    ("man-list-file", "man -l > /tmp/man-list.out", [], [r"press h"]),
+    ("man-list-text", "cat /tmp/man-list.out",
+     [r"^    ls  -  list directory contents$"], []),
     # Both wallpaper files hold the shipped image: abstract-art.jpg, a
     # progressive 1280x804 JPEG, as built.
     ("media-wall", "wc /etc/vnu/wallpaper",

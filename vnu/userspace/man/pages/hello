@@ -1,0 +1,10 @@
+NAME
+    hello - demonstration program
+
+SYNOPSIS
+    hello
+
+DESCRIPTION
+    Prints 'Hello from VNU userspace!' followed by its argument
+    vector, showing how the kernel passes argc/argv to an
+    embedded userspace binary. Mostly useful as a test.

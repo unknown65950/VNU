@@ -1,0 +1,21 @@
+NAME
+    tlsdemo - TLS 1.2 client demo
+
+SYNOPSIS
+    tlsdemo IP PORT [TIME_MS] [SNI]
+
+DESCRIPTION
+    Connects to a TLS 1.2 server over the kernel's TCP socket
+    API and runs the vlibc TLS handshake (cipher suite
+    TLS_RSA_WITH_AES_128_GCM_SHA256) through the tls_stream
+    callbacks, then sends one HTTP GET and prints the response.
+    IP is a dotted quad; the default timeout is 15000 ms and the
+    default SNI name is 'localhost'. From inside QEMU the host is
+    reachable at 10.0.2.2 (slirp user networking).
+
+EXAMPLES
+    tlsdemo 10.0.2.2 14433
+    tlsdemo 127.0.0.1 7779
+
+SEE ALSO
+    ping(1), tlsserver, echoserver, man hosts

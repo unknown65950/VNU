@@ -28,6 +28,7 @@
 #include "../proc/embedded_pic_shapes_pal.h"
 #include "../proc/embedded_pic_shapes_rgba.h"
 #include "../proc/embedded_wallpaper_jpg.h"
+#include "../proc/embedded_manpages.h"
 
 namespace {
 
@@ -256,6 +257,28 @@ void install_demo_sounds()
         vnu::vfs::write(fd, c.data, c.size);
         vnu::vfs::close(fd);
         vnu::images::add(vnu::images::Resources, c.size);
+    }
+}
+
+/* Mount the system manual pages under /etc/vnu/manpages, one VFS node
+ * per command, so `man <name>` reads it from there instead of carrying
+ * the text inside its own ELF. The bytes come from the page files in
+ * vnu/userspace/man/pages/ (tools/manpages.py). A module's own page is
+ * mounted separately under /apps/<name>/man/ by install_module. */
+void install_manpages()
+{
+    vnu::vfs::mkdir(VNU_MEDIA_DIR);
+    vnu::vfs::mkdir(VNU_MAN_DIR);
+    for (uint32_t i = 0; i < embedded_manpages_count; ++i) {
+        const EmbeddedManPage& p = embedded_manpages[i];
+        char path[96];
+        join(path, sizeof(path), VNU_MAN_DIR, p.name);
+        int fd = vnu::vfs::open(path, O_WRONLY | O_CREAT | O_TRUNC);
+        if (fd < 0)
+            continue;
+        vnu::vfs::write(fd, p.data, p.size);
+        vnu::vfs::close(fd);
+        vnu::images::add(vnu::images::Resources, p.size);
     }
 }
 
