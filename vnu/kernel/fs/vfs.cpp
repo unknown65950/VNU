@@ -34,6 +34,8 @@ static uint32_t caller_pgdir()
 
 #include <vnu/ata.h>
 #include <vnu/net.h>
+#include <vnu/fat16.h>
+#include <vnu/blockdev.h>
 #include "../proc/embedded_lib_crt0.h"
 #include "../proc/embedded_lib_vlibc.h"
 
@@ -68,6 +70,8 @@ struct Node {
     bool dir;
     vnu::vfs::DevKind dev;
     SynthKind synth;
+    /* Index into the block-device table for DevKind::Block nodes. */
+    int blk;
     char path[PATH_CAP];
     /* File content. Unlike a fixed per-node data[DATA_CAP] array, live
      * bytes live in a page-grained contiguous pmm run grown on demand
@@ -110,6 +114,106 @@ int strlen_local(const char* s)
     while (s[n])
         ++n;
     return n;
+}
+
+/* ---- Mounted disk volumes -----------------------------------------
+ *
+ * A volume is mounted at a directory and every path below it is served
+ * by the FAT16 library instead of the in-memory node table. Only /mnt
+ * is auto-mounted today (from the data partition the installer lays
+ * down), but the table itself is general: the path functions below ask
+ * mount_for() first and hand a matching path to the mount helpers, so
+ * the RAM tree and a disk volume coexist in one namespace.
+ *
+ * A descriptor on a mounted file carries `mount' (one-based index into
+ * this table), the cluster of the directory it lives in, its name there
+ * and its size (see struct File); the RAM `node' field is -1 for it. */
+constexpr int MAX_MOUNTS = 4;
+
+struct Mount {
+    bool used;
+    char path[PATH_CAP];
+    int blk;
+    vnu::fat16::Fs fs;
+    uint8_t scratch[vnu::fat16::SECTOR];
+};
+
+Mount mounts[MAX_MOUNTS];
+
+/* True when `at` names `path` itself or a directory above it. */
+bool prefix_at(const char* path, const char* at)
+{
+    while (*at && *path && *path == *at) {
+        ++path;
+        ++at;
+    }
+    if (*at)
+        return false;
+    return *path == 0 || *path == '/';
+}
+
+/* The mount covering `abs`, with *rel set to the part inside it (no
+ * leading slash; "" for the mount point itself). nullptr if none. */
+Mount* mount_for(const char* abs, const char** rel)
+{
+    Mount* best = nullptr;
+    int best_len = -1;
+    for (int i = 0; i < MAX_MOUNTS; ++i) {
+        if (!mounts[i].used)
+            continue;
+        const int len = strlen_local(mounts[i].path);
+        if (prefix_at(abs, mounts[i].path) && len >= best_len) {
+            best = &mounts[i];
+            best_len = len;
+        }
+    }
+    if (!best)
+        return nullptr;
+    const char* r = abs + best_len;
+    if (*r == '/')
+        ++r;
+    *rel = r;
+    return best;
+}
+
+/* Split the in-mount path "a/b/c" into the parent directory "a/b"
+ * (written to `parent`) and the final component (returned). */
+const char* split_parent(const char* rel, char* parent, uint32_t cap)
+{
+    int slash = -1;
+    uint32_t i = 0;
+    for (; rel[i]; ++i)
+        if (rel[i] == '/')
+            slash = static_cast<int>(i);
+    if (slash < 0) {
+        if (cap)
+            parent[0] = 0;
+        return rel;
+    }
+    uint32_t n = static_cast<uint32_t>(slash);
+    if (n >= cap)
+        n = cap - 1;
+    for (uint32_t k = 0; k < n; ++k)
+        parent[k] = rel[k];
+    parent[n] = 0;
+    return rel + slash + 1;
+}
+
+/* Resolve an in-mount directory path to its first cluster (0 = root). */
+bool mount_dir_cluster(Mount& m, const char* rel, uint32_t* clu)
+{
+    if (!rel[0]) {
+        *clu = 0;
+        return true;
+    }
+    uint32_t c = 0, size = 0;
+    uint8_t attr = 0;
+    if (!vnu::fat16::resolve(m.fs, rel, &c, &size, &attr))
+        return false;
+    if (!(attr & vnu::fat16::ATTR_DIR))
+        return false;
+    *clu = c;
+    return true;
 }
 
 /* Resolve relative path against cwd into out (absolute-ish). Also
@@ -582,6 +686,15 @@ void regen_synth(Node& n)
          * has to guess where /initrd came from. */
         if (vnu::initrd::present())
             a.str("initrd /initrd initrd ro 0 0\n");
+        /* Disk volumes are mounted by the block device they came from, so
+         * the line names the partition node under /dev. */
+        for (int i = 0; i < MAX_MOUNTS; ++i)
+            if (mounts[i].used) {
+                a.str(vnu::blockdev::at(mounts[i].blk).name);
+                a.str(" ");
+                a.str(mounts[i].path);
+                a.str(" fat16 rw 0 0\n");
+            }
         break;
     case SynthKind::Disks:
         for (int i = 0; i < vnu::ata::drive_count(); ++i) {
@@ -1227,12 +1340,148 @@ void init()
     add("/mnt", true);
 }
 
+/* Second half of the VFS bring-up, run after the ATA driver has probed
+ * the disks. Every drive and partition becomes a block device node under
+ * /dev, and the data volume the installer left behind is mounted at
+ * /mnt so its files survive a reboot. Called from the kernel, not from
+ * init(): vfs::init() runs before the disks are known. */
+void init_disks()
+{
+    vnu::blockdev::init();
+
+    for (int i = 0; i < vnu::blockdev::count(); ++i) {
+        const vnu::blockdev::Device& d = vnu::blockdev::at(i);
+        char path[PATH_CAP];
+        copy(path, "/dev/", PATH_CAP);
+        int k = 5;
+        for (int c = 0; d.name[c] && k + 1 < PATH_CAP; ++c)
+            path[k++] = d.name[c];
+        path[k] = 0;
+        Node* n = add(path, false);
+        if (!n)
+            continue;
+        n->dev = DevKind::Block;
+        n->blk = i;
+        n->perm = 0660u;
+    }
+
+    /* Mount the first data partition: one of ours (the OEM name) whose
+     * volume label is VNUDATA. The boot volume is labelled VNU, so this
+     * never picks it. */
+    for (int i = 0; i < vnu::blockdev::count(); ++i) {
+        const vnu::blockdev::Device& d = vnu::blockdev::at(i);
+        if (d.whole)
+            continue;
+        uint8_t bs[vnu::fat16::SECTOR];
+        if (vnu::blockdev::read(i, 0, bs, sizeof(bs)) !=
+            static_cast<int>(sizeof(bs)))
+            continue;
+        const char* oem = "VNUFS   ";
+        const char* label = "VNUDATA";
+        bool ours = true;
+        for (int k = 0; k < 8; ++k)
+            if (bs[3 + k] != static_cast<uint8_t>(oem[k]))
+                ours = false;
+        for (int k = 0; k < 7; ++k)
+            if (bs[43 + k] != static_cast<uint8_t>(label[k]))
+                ours = false;
+        if (!ours)
+            continue;
+
+        int slot = -1;
+        for (int k = 0; k < MAX_MOUNTS; ++k)
+            if (!mounts[k].used) {
+                slot = k;
+                break;
+            }
+        if (slot < 0)
+            break;
+        Mount& m = mounts[slot];
+        m.used = true;
+        copy(m.path, "/mnt", PATH_CAP);
+        m.blk = i;
+        if (!vnu::fat16::mount(m.fs, vnu::blockdev::fat16_device(i), 0,
+                               m.scratch)) {
+            m.used = false;
+            continue;
+        }
+        break;
+    }
+}
+
+int open_mount(Mount& m, const char* rel, uint32_t flags)
+{
+    const int mi = static_cast<int>(&m - mounts) + 1;
+    bool is_dir = false;
+    uint32_t dir_clu = 0;
+    uint32_t size = 0;
+    char name[64];
+    name[0] = 0;
+
+    if (!rel[0]) {
+        is_dir = true; /* the mount point is the volume's root */
+    } else {
+        uint32_t clu = 0;
+        uint8_t attr = 0;
+        if (vnu::fat16::resolve(m.fs, rel, &clu, &size, &attr)) {
+            if (attr & vnu::fat16::ATTR_DIR) {
+                is_dir = true;
+                dir_clu = clu;
+            } else {
+                char parent[PATH_CAP];
+                const char* leaf = split_parent(rel, parent, PATH_CAP);
+                if (!mount_dir_cluster(m, parent, &dir_clu))
+                    return -VNU_ENOENT;
+                copy(name, leaf, sizeof(name));
+            }
+        } else {
+            if (!(flags & vnu::posix::O_CREAT))
+                return -VNU_ENOENT;
+            char parent[PATH_CAP];
+            const char* leaf = split_parent(rel, parent, PATH_CAP);
+            if (!leaf[0])
+                return -VNU_EINVAL;
+            if (!mount_dir_cluster(m, parent, &dir_clu))
+                return -VNU_ENOENT;
+            if (!vnu::fat16::create(m.fs, dir_clu, leaf))
+                return -VNU_EIO;
+            size = 0;
+            copy(name, leaf, sizeof(name));
+        }
+    }
+
+    if (is_dir && (flags & 3u) == vnu::posix::O_WRONLY)
+        return -VNU_EISDIR;
+
+    for (int i = 3; i < MAX_FD; ++i) {
+        if (files[i].used)
+            continue;
+        files[i] = {};
+        files[i].used = true;
+        files[i].flags = flags;
+        files[i].node = -1;
+        files[i].owner = static_cast<uint32_t>(vnu::proc::current_pid());
+        files[i].mount = mi;
+        files[i].dir_clu = dir_clu;
+        files[i].fsize = is_dir ? 0 : size;
+        copy(files[i].fname, name, sizeof(files[i].fname));
+        if (!is_dir && (flags & vnu::posix::O_TRUNC) && size != 0) {
+            if (!vnu::fat16::truncate(m.fs, dir_clu, files[i].fname, 0))
+                return -VNU_EIO;
+            files[i].fsize = 0;
+        }
+        return i;
+    }
+    return -VNU_ENOSPC;
+}
+
 int open(const char* path, uint32_t flags)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
-    if (path[0] != '/') {
-    }
+    const char* mrel = nullptr;
+    if (Mount* m = mount_for(abs, &mrel))
+        return open_mount(*m, mrel, flags);
     int ni = find_index(abs);
     if (ni < 0) {
         if (!(flags & vnu::posix::O_CREAT))
@@ -1313,7 +1562,8 @@ int close(int fd)
 {
     if (fd < 3 || fd >= MAX_FD || !files[fd].used)
         return -VNU_EBADF;
-    const bool was_fb = nodes[files[fd].node].dev == DevKind::Framebuffer;
+    const bool was_fb = files[fd].node >= 0 &&
+                        nodes[files[fd].node].dev == DevKind::Framebuffer;
     files[fd] = {false, 0, 0, -1, 0};
     /* The last descriptor on /dev/fb0 is the end of the picture: whoever
      * mapped the display's frame is finished with it, and if opening the
@@ -1323,7 +1573,8 @@ int close(int fd)
     if (was_fb) {
         bool held = false;
         for (int i = 3; i < MAX_FD && !held; ++i)
-            held = files[i].used && nodes[files[i].node].dev == DevKind::Framebuffer;
+            held = files[i].used && files[i].node >= 0 &&
+                   nodes[files[i].node].dev == DevKind::Framebuffer;
         if (!held)
             vnu::fb::release();
     }
@@ -1350,7 +1601,7 @@ void close_all_of(uint32_t pid)
     bool redirected = false;
     for (int i = 0; i < 3; ++i)
         redirected = redirected || (files[i].used && files[i].owner == pid &&
-                                    files[i].node >= 0);
+                                    (files[i].node >= 0 || files[i].mount != 0));
     if (redirected)
         reset_stdio();
 }
@@ -1359,11 +1610,22 @@ int read(int fd, void* buf, uint32_t count)
 {
     if (fd < 0 || fd >= MAX_FD || !files[fd].used)
         return -VNU_EBADF;
+    /* A descriptor on a mounted volume reads through the FAT16 library;
+     * the in-memory node table does not know the file at all. */
+    if (files[fd].mount) {
+        if (files[fd].fname[0] == 0)
+            return -VNU_EISDIR;
+        Mount& m = mounts[files[fd].mount - 1];
+        uint32_t got = 0;
+        if (!vnu::fat16::read(m.fs, files[fd].dir_clu, files[fd].fname,
+                              files[fd].position, buf, count, &got))
+            return -VNU_EIO;
+        files[fd].position += got;
+        return static_cast<int>(got);
+    }
     /* fd 0/1/2 normally mean the console and are handled in the
      * syscall layer, but once redirected they point at a real node and
      * must be served here like any other fd. */
-    if (fd < 3 && files[fd].node < 0)
-        return -VNU_EBADF;
     if (files[fd].node < 0)
         return -VNU_EBADF;
     Node& n = nodes[files[fd].node];
@@ -1409,6 +1671,14 @@ int read(int fd, void* buf, uint32_t count)
                                static_cast<vnu_fb_info*>(buf)))
                 return -VNU_ENODEV;
             return static_cast<int>(sizeof(vnu_fb_info));
+        case DevKind::Block: {
+            const int r = vnu::blockdev::read(n.blk, files[fd].position,
+                                              buf, count);
+            if (r < 0)
+                return -VNU_EIO;
+            files[fd].position += static_cast<uint32_t>(r);
+            return r;
+        }
         case DevKind::None:
             break;
         }
@@ -1452,8 +1722,21 @@ int write(int fd, const void* buf, uint32_t count)
 {
     if (fd < 0 || fd >= MAX_FD || !files[fd].used)
         return -VNU_EBADF;
-    if (fd < 3 && files[fd].node < 0)
-        return -VNU_EBADF;
+    if (files[fd].mount) {
+        if (files[fd].fname[0] == 0)
+            return -VNU_EISDIR;
+        Mount& m = mounts[files[fd].mount - 1];
+        if (files[fd].flags & vnu::posix::O_APPEND)
+            files[fd].position = files[fd].fsize;
+        uint32_t got = 0;
+        if (!vnu::fat16::write(m.fs, files[fd].dir_clu, files[fd].fname,
+                               files[fd].position, buf, count, &got))
+            return -VNU_EIO;
+        files[fd].position += got;
+        if (files[fd].position > files[fd].fsize)
+            files[fd].fsize = files[fd].position;
+        return static_cast<int>(got);
+    }
     if (files[fd].node < 0)
         return -VNU_EBADF;
     Node& n = nodes[files[fd].node];
@@ -1494,6 +1777,14 @@ int write(int fd, const void* buf, uint32_t count)
                 return put; /* the errno, not a position to advance */
             files[fd].position += static_cast<uint32_t>(put);
             return put;
+        }
+        case DevKind::Block: {
+            const int r = vnu::blockdev::write(n.blk, files[fd].position,
+                                               buf, count);
+            if (r < 0)
+                return -VNU_EIO;
+            files[fd].position += static_cast<uint32_t>(r);
+            return r;
         }
         case DevKind::None:
             break;
@@ -1578,6 +1869,19 @@ int lseek(int fd, int32_t offset, int whence)
 {
     if (fd < 0 || fd >= MAX_FD || !files[fd].used)
         return -VNU_EBADF;
+    if (files[fd].mount) {
+        uint32_t end = files[fd].fname[0] ? files[fd].fsize : 0;
+        int32_t base = 0;
+        if (whence == 1)
+            base = static_cast<int32_t>(files[fd].position);
+        else if (whence == 2)
+            base = static_cast<int32_t>(end);
+        int32_t np = base + offset;
+        if (np < 0)
+            np = 0;
+        files[fd].position = static_cast<uint32_t>(np);
+        return np;
+    }
     if (files[fd].node < 0)
         return 0;
     Node& n = nodes[files[fd].node];
@@ -1587,8 +1891,11 @@ int lseek(int fd, int32_t offset, int whence)
     if (whence == 1)
         base = static_cast<int32_t>(files[fd].position);
     else if (whence == 2)
-        base = static_cast<int32_t>(n.dev != DevKind::None ? seek_end_of(n.dev)
-                                                            : n.size);
+        base = static_cast<int32_t>(n.dev == DevKind::Block
+                                        ? vnu::blockdev::sector_size(n.blk)
+                                        : (n.dev != DevKind::None
+                                               ? seek_end_of(n.dev)
+                                               : n.size));
     int32_t np = base + offset;
     if (np < 0)
         np = 0;
@@ -1602,11 +1909,38 @@ int stat(const char* path, vnu::posix::Stat* st)
         return -VNU_EFAULT;
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
+    const char* mrel = nullptr;
+    if (Mount* m = mount_for(abs, &mrel)) {
+        bool is_dir = mrel[0] == 0;
+        uint32_t size = 0;
+        if (!is_dir) {
+            uint32_t clu = 0;
+            uint8_t attr = 0;
+            if (!vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr))
+                return -VNU_ENOENT;
+            is_dir = (attr & vnu::fat16::ATTR_DIR) != 0;
+        }
+        st->mode = (is_dir ? vnu::posix::S_IFDIR : vnu::posix::S_IFREG) |
+                   (is_dir ? 0755u : 0644u);
+        st->size = is_dir ? 0 : size;
+        st->type = is_dir ? 4 : 8;
+        st->uid = 0;
+        st->gid = 0;
+        return 0;
+    }
     Node* n = find(abs);
     if (!n)
         return -VNU_ENOENT;
     if (n->synth != SynthKind::None)
         regen_synth(*n); /* so st_size matches what a read would yield */
+    if (n->dev == DevKind::Block) {
+        st->mode = vnu::posix::S_IFBLK | 0660;
+        st->size = vnu::blockdev::sector_size(n->blk);
+        st->type = 6; /* DT_BLK */
+        st->uid = 0;
+        st->gid = 0;
+        return 0;
+    }
     if (n->dev != DevKind::None) {
         st->mode = vnu::posix::S_IFCHR | 0666;
         st->size = 0;
@@ -1629,6 +1963,16 @@ int fstat(int fd, vnu::posix::Stat* st)
         return -VNU_EFAULT;
     if (fd < 0 || fd >= MAX_FD || !files[fd].used)
         return -VNU_EBADF;
+    if (files[fd].mount) {
+        const bool is_dir = files[fd].fname[0] == 0;
+        st->mode = (is_dir ? vnu::posix::S_IFDIR : vnu::posix::S_IFREG) |
+                   (is_dir ? 0755u : 0644u);
+        st->size = is_dir ? 0 : files[fd].fsize;
+        st->type = is_dir ? 4 : 8;
+        st->uid = 0;
+        st->gid = 0;
+        return 0;
+    }
     if (files[fd].node < 0) {
         /* stdin/stdout/stderr: report them as character devices so
          * isatty() and friends behave sensibly. */
@@ -1642,6 +1986,14 @@ int fstat(int fd, vnu::posix::Stat* st)
     Node& n = nodes[files[fd].node];
     if (!n.used)
         return -VNU_EBADF;
+    if (n.dev == DevKind::Block) {
+        st->mode = vnu::posix::S_IFBLK | 0660;
+        st->size = vnu::blockdev::sector_size(n.blk);
+        st->type = 6;
+        st->uid = 0;
+        st->gid = 0;
+        return 0;
+    }
     if (n.dev != DevKind::None) {
         st->mode = vnu::posix::S_IFCHR | 0666;
         st->size = 0;
@@ -1671,7 +2023,7 @@ bool fd_is_redirected(int fd)
 {
     if (fd < 0 || fd > 2 || !files[fd].used)
         return false;
-    return files[fd].node >= 0;
+    return files[fd].node >= 0 || files[fd].mount != 0;
 }
 
 void reset_stdio()
@@ -1716,6 +2068,23 @@ int touch(const char* path)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
+    const char* mrel = nullptr;
+    if (Mount* m = mount_for(abs, &mrel)) {
+        if (!mrel[0])
+            return 0;
+        char parent[PATH_CAP];
+        const char* leaf = split_parent(mrel, parent, PATH_CAP);
+        uint32_t clu = 0, size = 0;
+        uint8_t attr = 0;
+        if (vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr))
+            return 0; /* creating is `touch'; it already exists */
+        uint32_t dir_clu = 0;
+        if (!mount_dir_cluster(*m, parent, &dir_clu))
+            return -VNU_ENOENT;
+        if (!vnu::fat16::create(m->fs, dir_clu, leaf))
+            return -VNU_EIO;
+        return 0;
+    }
     if (Node* n = find(abs)) {
         if (!have_access(*n, A_W))
             return -VNU_EACCES;
@@ -1733,6 +2102,23 @@ int mkdir(const char* path)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
+    const char* mrel = nullptr;
+    if (Mount* m = mount_for(abs, &mrel)) {
+        if (!mrel[0])
+            return -VNU_EEXIST; /* the mount point is a directory */
+        uint32_t clu = 0, size = 0;
+        uint8_t attr = 0;
+        if (vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr))
+            return -VNU_EEXIST;
+        char parent[PATH_CAP];
+        const char* leaf = split_parent(mrel, parent, PATH_CAP);
+        uint32_t dir_clu = 0;
+        if (!mount_dir_cluster(*m, parent, &dir_clu))
+            return -VNU_ENOENT;
+        if (!vnu::fat16::mkdir(m->fs, dir_clu, leaf))
+            return -VNU_EIO;
+        return 0;
+    }
     if (find(abs))
         return -VNU_EEXIST;
     Node* par = parent_dir(abs);
@@ -1747,6 +2133,25 @@ int rmdir(const char* path)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
+    const char* mrel = nullptr;
+    if (Mount* m = mount_for(abs, &mrel)) {
+        if (!mrel[0])
+            return -VNU_EPERM;
+        char parent[PATH_CAP];
+        const char* leaf = split_parent(mrel, parent, PATH_CAP);
+        uint32_t clu = 0, size = 0;
+        uint8_t attr = 0;
+        if (!vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr))
+            return -VNU_ENOENT;
+        if (!(attr & vnu::fat16::ATTR_DIR))
+            return -VNU_ENOTDIR;
+        uint32_t dir_clu = 0;
+        if (!mount_dir_cluster(*m, parent, &dir_clu))
+            return -VNU_ENOENT;
+        if (!vnu::fat16::rmdir(m->fs, dir_clu, leaf))
+            return -VNU_ENOTEMPTY;
+        return 0;
+    }
     Node* n = find(abs);
     if (!n)
         return -VNU_ENOENT;
@@ -1772,6 +2177,25 @@ int unlink(const char* path)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
+    const char* mrel = nullptr;
+    if (Mount* m = mount_for(abs, &mrel)) {
+        if (!mrel[0])
+            return -VNU_EISDIR;
+        char parent[PATH_CAP];
+        const char* leaf = split_parent(mrel, parent, PATH_CAP);
+        uint32_t clu = 0, size = 0;
+        uint8_t attr = 0;
+        if (!vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr))
+            return -VNU_ENOENT;
+        if (attr & vnu::fat16::ATTR_DIR)
+            return -VNU_EISDIR;
+        uint32_t dir_clu = 0;
+        if (!mount_dir_cluster(*m, parent, &dir_clu))
+            return -VNU_ENOENT;
+        if (!vnu::fat16::unlink(m->fs, dir_clu, leaf))
+            return -VNU_EIO;
+        return 0;
+    }
     Node* n = find(abs);
     if (!n)
         return -VNU_ENOENT;
@@ -1799,11 +2223,59 @@ int remove(const char* path)
     return unlink(abs);
 }
 
+/* A move that touches a mounted volume, or crosses between one and the
+ * RAM tree: neither side can be relinked in place, so it is a copy
+ * through a bounded buffer followed by an unlink of the source. */
+int move_stream(const char* af, const char* at)
+{
+    vnu::posix::Stat st{};
+    if (stat(at, &st) == 0)
+        return -VNU_EEXIST;
+    int in = open(af, vnu::posix::O_RDONLY);
+    if (in < 0)
+        return in;
+    int out = open(at, vnu::posix::O_WRONLY | vnu::posix::O_CREAT |
+                        vnu::posix::O_TRUNC);
+    if (out < 0) {
+        close(in);
+        return out;
+    }
+    char tmp[4096];
+    for (;;) {
+        const int got = read(in, tmp, sizeof(tmp));
+        if (got < 0) {
+            close(in);
+            close(out);
+            return got;
+        }
+        if (got == 0)
+            break;
+        int off = 0;
+        while (off < got) {
+            const int put = write(out, tmp + off,
+                                  static_cast<uint32_t>(got - off));
+            if (put < 0) {
+                close(in);
+                close(out);
+                return put;
+            }
+            off += put;
+        }
+    }
+    close(in);
+    close(out);
+    return unlink(af);
+}
+
 int move_file(const char* from, const char* to)
 {
     char af[PATH_CAP], at[PATH_CAP];
     normalize(from, af, PATH_CAP);
     normalize(to, at, PATH_CAP);
+    const char* r1 = nullptr;
+    const char* r2 = nullptr;
+    if (mount_for(af, &r1) || mount_for(at, &r2))
+        return move_stream(af, at);
     Node* n = find(af);
     if (!n)
         return -VNU_ENOENT;
@@ -1834,6 +2306,20 @@ int read_path(const char* path, char* buf, uint32_t count)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
+    const char* mrel = nullptr;
+    if (Mount* m = mount_for(abs, &mrel)) {
+        char parent[PATH_CAP];
+        const char* leaf = split_parent(mrel, parent, PATH_CAP);
+        if (!leaf[0])
+            return -VNU_ENOENT;
+        uint32_t dir_clu = 0;
+        if (!mount_dir_cluster(*m, parent, &dir_clu))
+            return -VNU_ENOENT;
+        uint32_t got = 0;
+        if (!vnu::fat16::read(m->fs, dir_clu, leaf, 0, buf, count, &got))
+            return -VNU_ENOENT;
+        return static_cast<int>(got);
+    }
     Node* n = find(abs);
     if (!n || n->dir)
         return -VNU_ENOENT;
@@ -1852,6 +2338,30 @@ int set_path(const char* path, const char* data, uint32_t len)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
+    const char* mrel = nullptr;
+    if (Mount* m = mount_for(abs, &mrel)) {
+        char parent[PATH_CAP];
+        const char* leaf = split_parent(mrel, parent, PATH_CAP);
+        if (!leaf[0])
+            return -VNU_ENOENT;
+        uint32_t dir_clu = 0;
+        if (!mount_dir_cluster(*m, parent, &dir_clu))
+            return -VNU_ENOENT;
+        uint32_t clu = 0, size = 0;
+        uint8_t attr = 0;
+        if (!vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr) &&
+            !vnu::fat16::create(m->fs, dir_clu, leaf))
+            return -VNU_EIO;
+        if (!vnu::fat16::truncate(m->fs, dir_clu, leaf, 0))
+            return -VNU_EIO;
+        if (len) {
+            uint32_t got = 0;
+            if (!vnu::fat16::write(m->fs, dir_clu, leaf, 0, data, len, &got) ||
+                got != len)
+                return -VNU_EIO;
+        }
+        return 0;
+    }
     Node* n = find(abs);
     if (!n || n->dir)
         return -VNU_ENOENT;
@@ -1882,6 +2392,42 @@ int getdents(int fd, void* buf, uint32_t count)
 {
     if (fd < 0 || fd >= MAX_FD || !files[fd].used)
         return -VNU_EBADF;
+    /* A directory on a mounted volume is walked through the FAT16
+     * library; the descriptor holds the directory's cluster and no RAM
+     * node. `position' is how many real entries have been handed out,
+     * so a re-scan skips exactly those again. */
+    if (files[fd].mount) {
+        if (files[fd].fname[0] != 0)
+            return -VNU_ENOTDIR;
+        Mount& m = mounts[files[fd].mount - 1];
+        auto* out = static_cast<uint8_t*>(buf);
+        uint32_t written = 0;
+        uint32_t skip = files[fd].position;
+        uint32_t seen = 0;
+        vnu::fat16::Iter it;
+        vnu::fat16::opendir(m.fs, files[fd].dir_clu, &it);
+        char name[vnu::fat16::NAME_MAX];
+        uint32_t clu = 0, size = 0;
+        uint8_t attr = 0;
+        while (vnu::fat16::readdir(m.fs, &it, name, sizeof(name), &clu, &size,
+                                   &attr)) {
+            if (seen++ < skip)
+                continue;
+            Dirent de{};
+            de.ino = 1;
+            de.type = (attr & vnu::fat16::ATTR_DIR) ? 4 : 8;
+            copy(de.name, name, sizeof(de.name));
+            de.reclen = static_cast<uint16_t>(sizeof(Dirent));
+            if (written + de.reclen > count)
+                break;
+            auto* dst = reinterpret_cast<uint8_t*>(out + written);
+            for (uint16_t b = 0; b < de.reclen; ++b)
+                dst[b] = reinterpret_cast<uint8_t*>(&de)[b];
+            written += de.reclen;
+            files[fd].position = seen;
+        }
+        return static_cast<int>(written);
+    }
     if (files[fd].node < 0)
         return -VNU_EBADF;
     Node& dir = nodes[files[fd].node];
@@ -1926,6 +2472,19 @@ int chdir(const char* path)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
+    const char* mrel = nullptr;
+    if (Mount* m = mount_for(abs, &mrel)) {
+        if (mrel[0] != 0) {
+            uint32_t clu = 0, size = 0;
+            uint8_t attr = 0;
+            if (!vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr))
+                return -VNU_ENOENT;
+            if (!(attr & vnu::fat16::ATTR_DIR))
+                return -VNU_ENOTDIR;
+        }
+        copy(cwd, abs, PATH_CAP);
+        return 0;
+    }
     Node* n = find(abs);
     if (!n) {
         return -VNU_ENOENT;
@@ -1957,6 +2516,19 @@ int chmod(const char* path, uint32_t mode)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
+    const char* mrel = nullptr;
+    if (Mount* m = mount_for(abs, &mrel)) {
+        /* FAT16 carries no permission bits; a chmod on a mounted file
+         * is a no-op as long as the file is actually there. */
+        (void)mode;
+        if (!mrel[0])
+            return 0;
+        uint32_t clu = 0, size = 0;
+        uint8_t attr = 0;
+        return vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr)
+                   ? 0
+                   : -VNU_ENOENT;
+    }
     Node* n = find(abs);
     if (!n)
         return -VNU_ENOENT;
@@ -1971,6 +2543,20 @@ int chown(const char* path, uint32_t uid, uint32_t gid)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
+    const char* mrel = nullptr;
+    if (Mount* m = mount_for(abs, &mrel)) {
+        /* As with chmod: there is nowhere on a FAT16 volume to record an
+         * owner, so a change of one is acknowledged and ignored. */
+        (void)uid;
+        (void)gid;
+        if (!mrel[0])
+            return 0;
+        uint32_t clu = 0, size = 0;
+        uint8_t attr = 0;
+        return vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr)
+                   ? 0
+                   : -VNU_ENOENT;
+    }
     Node* n = find(abs);
     if (!n)
         return -VNU_ENOENT;

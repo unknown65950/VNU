@@ -124,6 +124,10 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
     vnu::apps::install_demo_sounds();
     vnu::apps::install_manpages();
     vnu::ata::init();
+    /* The disks are known now: expose them under /dev and mount the data
+     * partition at /mnt. Ordered after ata::init(), before any process
+     * can open a file. */
+    vnu::vfs::init_disks();
     serial_init();
     /* An installed disk carries the node name the installer was given;
      * adopt it into /etc/hostname. A live session keeps the default.

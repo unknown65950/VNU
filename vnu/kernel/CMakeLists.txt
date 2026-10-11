@@ -121,6 +121,8 @@ add_executable(kernel.elf
     fs/vfs.cpp
     fs/pipe.cpp
     fs/fat16.cpp
+    fs/blockdev.cpp
+    fs/blockdev.cpp
     console/console.cpp
     console/tty.cpp
     console/font8x16.cpp

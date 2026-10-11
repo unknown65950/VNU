@@ -13,6 +13,12 @@ extern "C" const uint8_t vnu_install_boot_img_end[];
 extern "C" const uint8_t vnu_install_core_img[];
 extern "C" const uint8_t vnu_install_core_img_end[];
 
+// The installer is the only caller; the definition is with the ATA
+// adapter at the bottom of this file.
+namespace vnu::fat16 {
+bool create_data_volume(int drive, uint32_t part_lba, uint32_t part_sectors);
+}
+
 namespace {
 
 constexpr uint32_t PART_START = 2048;         // 1 MiB alignment
@@ -140,15 +146,20 @@ int install(int drive, uint32_t size_mib, const char* hostname)
     if (total <= PART_START + 8192)
         return -28; // ENOSPC: disk far too small
 
-    // Partition size: explicit MiB (1 MiB = 2048 sectors), or the whole
-    // usable disk when size_mib is 0. An explicit size that cannot fit
-    // the disk is an error; an explicit size above the FAT16 ceiling is
-    // clamped down to it (same ceiling the "whole disk" path uses).
+    // Two partitions: the bootable FAT16 volume first, then the data
+    // volume the kernel mounts at /mnt. With no explicit size the boot
+    // volume takes half the usable disk, so the default install leaves
+    // room for user files that survive a reboot; an explicit size names
+    // the boot volume and the rest becomes the data volume. Either way
+    // the boot volume is clamped to the FAT16 ceiling.
     uint32_t part_sectors;
     if (size_mib == 0) {
-        part_sectors = total - PART_START;
+        part_sectors = (total - PART_START) / 2;
+        part_sectors &= ~(2048u - 1); // 1 MiB alignment for the data start
         if (part_sectors > MAX_PART_SECTORS)
             part_sectors = MAX_PART_SECTORS;
+        if (part_sectors < 8192)
+            part_sectors = total - PART_START; // tiny disk: boot volume only
     } else {
         const uint64_t wanted = static_cast<uint64_t>(size_mib) * 2048;
         if (wanted < 2048 || wanted > static_cast<uint64_t>(total - PART_START))
@@ -157,6 +168,17 @@ int install(int drive, uint32_t size_mib, const char* hostname)
                                                  ? MAX_PART_SECTORS
                                                  : wanted);
     }
+
+    // The data volume, when the disk is big enough for a second FAT16
+    // (a few thousand clusters at least). It ends the usable disk, and
+    // is clamped like the boot volume so the FAT16 cluster count stays
+    // inside the format's limit.
+    const uint32_t data_start = PART_START + part_sectors;
+    uint32_t data_sectors = total > data_start ? total - data_start : 0;
+    if (data_sectors > MAX_PART_SECTORS)
+        data_sectors = MAX_PART_SECTORS;
+    if (data_sectors < 8192)
+        data_sectors = 0; // too small: no data volume on this disk
 
     // 1) MBR: the GRUB boot image plus our partition table.
     vnu::tty::write_cstr("install: writing boot loader\n");
@@ -179,6 +201,20 @@ int install(int drive, uint32_t size_mib, const char* hostname)
     mbr[0x1be + 7] = 0xFF;
     put32(mbr + 0x1be + 8, PART_START);
     put32(mbr + 0x1be + 12, part_sectors);
+    /* Second partition: the data volume. Slot left empty (type 0) when
+     * the disk was too small for one. */
+    if (data_sectors != 0) {
+        mbr[0x1ce + 0] = 0x00;              // not bootable
+        mbr[0x1ce + 1] = 0xFE;              // CHS start (dummy, LBA used)
+        mbr[0x1ce + 2] = 0xFF;
+        mbr[0x1ce + 3] = 0xFF;
+        mbr[0x1ce + 4] = 0x06;              // FAT16
+        mbr[0x1ce + 5] = 0xFE;              // CHS end (dummy)
+        mbr[0x1ce + 6] = 0xFF;
+        mbr[0x1ce + 7] = 0xFF;
+        put32(mbr + 0x1ce + 8, data_start);
+        put32(mbr + 0x1ce + 12, data_sectors);
+    }
     mbr[510] = 0x55;
     mbr[511] = 0xAA;
     if (!vnu::ata::write_sectors(drive, 0, 1, mbr))
@@ -230,6 +266,12 @@ int install(int drive, uint32_t size_mib, const char* hostname)
                                         vnu::initrd::image(), initrd_size,
                                         grub_cfg))
         return -5;
+
+    if (data_sectors != 0) {
+        vnu::tty::write_cstr("install: creating data volume\n");
+        if (!vnu::fat16::create_data_volume(drive, data_start, data_sectors))
+            return -5;
+    }
 
     vnu::tty::write_cstr("install: done\n");
     return 0;
@@ -317,6 +359,22 @@ bool create_boot_volume(int drive, uint32_t part_lba, uint32_t part_sectors,
     if (!write_file(fs, grub, "GRUB.CFG", grub_cfg, cstr_len(grub_cfg)))
         return false;
 
+    return sync(fs);
+}
+
+/* Empty FAT16 volume with the data label the kernel looks for at boot.
+ * Unlike the boot volume there is nothing to copy in, so the volume is
+ * mounted only to flush a consistent root directory and released. */
+bool create_data_volume(int drive, uint32_t part_lba, uint32_t part_sectors)
+{
+    AtaDev ctx{drive};
+    Device dev{&ctx, ata_read, ata_write, ata_flush};
+    if (!format(dev, part_lba, part_sectors, "VNUFS   ", "VNUDATA", 0x44415441))
+        return false;
+    static uint8_t sector[SECTOR];
+    Fs fs{};
+    if (!mount(fs, dev, part_lba, sector))
+        return false;
     return sync(fs);
 }
 

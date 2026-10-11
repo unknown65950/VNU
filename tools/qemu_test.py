@@ -3869,6 +3869,31 @@ def run_install_scenario(iso, result, verbose, timeout, workdir):
         check("vnu-fetch-disk", output,
               [r"installed on ata0", r"^Host +: +%s$" % INSTALLED_HOST], [],
               result, verbose)
+        # The installer gave the disk a second, FAT16 partition for user
+        # data; the kernel auto-mounts it at /mnt. Write through it here
+        # and prove it survives the reboot below.
+        output, _ = g.sh("cat /proc/mounts", timeout)
+        check("mnt-mounted", output, [r"^hda2 /mnt fat16 rw 0 0$"], [],
+              result, verbose)
+        output, _ = g.sh("mkdir /mnt/sub", timeout)
+        check("mnt-mkdir", output, [], [r"error", r"denied", r"not found"],
+              result, verbose)
+        output, _ = g.sh("echo persisted > /mnt/keep.txt", timeout)
+        check("mnt-write", output, [], [r"error", r"denied", r"not found"],
+              result, verbose)
+        output, _ = g.sh("cat /mnt/keep.txt", timeout)
+        check("mnt-read", output, [r"^persisted$"], [], result, verbose)
+    # A third boot of the same disk: the files are on the volume, not in
+    # RAM, so they must still be there.
+    with Guest(disk=disk, boot="c",
+               log=os.path.join(workdir, "install3.log")) as g:
+        g.wait(r"VNU login:", 120.0)
+        g.login()
+        output, _ = g.sh("cat /mnt/keep.txt", timeout)
+        check("mnt-persist", output, [r"^persisted$"], [], result, verbose)
+        output, _ = g.sh("ls /mnt", timeout)
+        check("mnt-persist-ls", output, [r"keep\.txt", r"sub"], [],
+              result, verbose)
     return result
 
 

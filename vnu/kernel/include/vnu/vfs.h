@@ -11,13 +11,13 @@ namespace vnu::vfs {
  * 0/1/2 (including the windowed-task redirection added for
  * VibeGraphics), so the syscall layer queries fd_dev_kind() and
  * handles that case itself rather than the VFS duplicating it. */
-enum class DevKind : uint8_t { None = 0, Null, Zero, Full, Random, Tty, Audio, Framebuffer };
+enum class DevKind : uint8_t { None = 0, Null, Zero, Full, Random, Tty, Audio, Framebuffer, Block };
 
 struct File {
-    bool used;
-    uint32_t position;
-    uint32_t flags;
-    int node; /* index into node table, -1 = stdio */
+    bool used = false;
+    uint32_t position = 0;
+    uint32_t flags = 0;
+    int node = -1; /* index into node table, -1 = stdio or an on-disk file */
     /* Which process opened it. The table is global to the kernel, so
      * without this nothing can tell a program's descriptors from anyone
      * else's and a process that stops running cannot take its own with
@@ -25,7 +25,18 @@ struct File {
      * graphics mode with the console's pass suppressed for good, and a
      * full table of them fails every later open with ENOSPC. See
      * close_all_of(). */
-    uint32_t owner; /* pid */
+    uint32_t owner = 0; /* pid */
+    /* A descriptor for a file on a mounted disk volume (mount > 0, an
+     * index into the VFS mount table offset by one, so a zeroed File is
+     * an ordinary in-memory file): the cluster of the directory holding
+     * it, its name there, and its size. All three are ignored for every
+     * other kind of descriptor, including the directory descriptors a
+     * volume's directories are read through, where `dir_clu` alone
+     * matters and `fname` is empty. */
+    int mount = 0;
+    uint32_t dir_clu = 0;
+    uint32_t fsize = 0;
+    char fname[64] = {};
 };
 
 /* Directory entry for getdents */
@@ -37,6 +48,10 @@ struct Dirent {
 } __attribute__((packed));
 
 void init();
+/* Second half of the VFS bring-up, for after the ATA driver has probed
+ * the disks: register the block devices under /dev and auto-mount any
+ * data volume at /mnt. A no-op when no disk is attached. */
+void init_disks();
 int open(const char* path, uint32_t flags);
 int close(int fd);
 /* Close every descriptor belonging to `pid`, as that process is no
