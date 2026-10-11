@@ -3883,6 +3883,8 @@ def run_install_scenario(iso, result, verbose, timeout, workdir):
               result, verbose)
         output, _ = g.sh("cat /mnt/keep.txt", timeout)
         check("mnt-read", output, [r"^persisted$"], [], result, verbose)
+        output, _ = g.sh("df -T /mnt", timeout)
+        check("mnt-df", output, [r"^hda2 +fat16 .* /mnt$"], [], result, verbose)
     # A third boot of the same disk: the files are on the volume, not in
     # RAM, so they must still be there.
     with Guest(disk=disk, boot="c",

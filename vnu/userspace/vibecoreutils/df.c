@@ -3,8 +3,10 @@
  * Space comes from /proc/dfstat, which the kernel regenerates on every
  * open() and which has one line per mounted file system:
  *     source fstype mountpoint total_bytes used_bytes
- * Only the in-memory VFS (source "vfs", mounted on /) has real data;
- * /dev and /proc are pseudo file systems with nothing to account.
+ * The in-memory VFS (source "vfs", mounted on /) reports its live node
+ * bytes; /dev and /proc are pseudo file systems with nothing to
+ * account; a mounted disk volume reports its real capacity and free
+ * space read from the FAT.
  */
 #include "cu.h"
 

@@ -830,6 +830,32 @@ void copy_padded(char* dst, uint32_t cap, const char* src)
 
 } // namespace
 
+/* Sum the free clusters by walking the FAT one sector at a time (a
+ * sector holds 256 entries, so re-reading it for every cluster in it is
+ * avoided by caching which sector is loaded). */
+bool volume_stats(Fs& fs, uint32_t* out_total, uint32_t* out_free)
+{
+    if (!fs.mounted || fs.spc == 0 || fs.max_cluster < 2)
+        return false;
+    const uint32_t cluster_bytes = fs.spc * SECTOR;
+    uint32_t free_clusters = 0;
+    uint32_t loaded = 0xFFFFFFFFu;
+    for (uint32_t c = 2; c <= fs.max_cluster; ++c) {
+        const uint32_t off = c * 2;
+        const uint32_t sec = off / SECTOR;
+        if (sec != loaded) {
+            if (!dev_read(fs, fs.first_fat + sec, 1, fs.sec))
+                return false;
+            loaded = sec;
+        }
+        if (rd16(fs.sec + off % SECTOR) == 0)
+            ++free_clusters;
+    }
+    *out_total = (fs.max_cluster - 1) * cluster_bytes;
+    *out_free = free_clusters * cluster_bytes;
+    return true;
+}
+
 bool format(const Device& dev, uint32_t part_lba, uint32_t part_sectors,
             const char* oem, const char* label, uint32_t volume_id)
 {

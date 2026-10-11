@@ -109,6 +109,11 @@ bool unlink(Fs& fs, uint32_t dir_cluster, const char* name);
 bool mkdir(Fs& fs, uint32_t dir_cluster, const char* name);
 bool rmdir(Fs& fs, uint32_t dir_cluster, const char* name);
 
+/* The volume's capacity and free space, in bytes, by walking the FAT:
+ * for a disk usage report. Fails only when the mount is not live or a
+ * sector cannot be read. */
+bool volume_stats(Fs& fs, uint32_t* out_total, uint32_t* out_free);
+
 /* Directory iteration. Start a cursor on a directory, then pull names
  * out one at a time; "." and ".." and the volume label are skipped, the
  * long name is returned when the entry has one. */

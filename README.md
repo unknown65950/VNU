@@ -45,9 +45,13 @@ root@vnu:~$ man ls
   1280x1024 while the desktop runs; the choice is kept in
   `/etc/vnu/config/gfx.conf` and the next `gui` (and the next boot) come up
   in it.
-- **Disks**: ATA driver + FAT16, syscalls `blkcount`/`install` — the kernel
+- **Disks**: ATA driver + a full read/write FAT16 filesystem (`vnu/kernel/fs/fat16.cpp`,
+  also laid down by the installer), syscalls `blkcount`/`install` — the kernel
   can write itself (GRUB + partition) to a disk, together with the host name
-  the machine should boot with (see `/etc/hostname`).
+  the machine should boot with (see `/etc/hostname`). Every drive and partition
+  is a block device under `/dev` (`hda`, `hda1`, ...), and the data partition
+  `vnu install` creates is auto-mounted at `/mnt`, so user files there survive a
+  reboot while the rest of the root stays RAM-backed.
 - **initial ramdisk**: `tools/build_initrd.sh` packs `vnu/initrd/` into a
   POSIX ustar archive, GRUB loads it as a Multiboot2 module and the kernel
   unpacks it into `/initrd` at boot (reported by `/proc/boot` and
@@ -238,5 +242,6 @@ MIT — see `LICENSE`.
 
 `initialD` (a userspace init, contract `/etc/initialD/*.init`) is declared but
 deferred until proper `fork`/`execve` scenarios; for now PID 1 is vash itself.
-FAT16/ATA exist, but at boot the system lives in RAM-VFS (useful when moving
+FAT16/ATA exist, and an installed disk keeps user files under `/mnt` across
+reboots, but the rest of the root still lives in RAM-VFS (useful when moving
 to real hardware).

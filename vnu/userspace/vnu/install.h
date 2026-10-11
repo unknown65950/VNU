@@ -266,8 +266,10 @@ static inline int install_wizard(void)
     unsigned long size_mib = 0;
     for (;;) {
         banner("Choose the partition size");
-        ue_out("Partition size in MiB. Leave empty to use the whole disk\n");
-        ue_out("(up to what the FAT16 filesystem allows).\n\n");
+        ue_out("How much of the disk the boot partition should take, in MiB.\n");
+        ue_out("The rest becomes a data volume mounted at /mnt, where\n");
+        ue_out("files survive a reboot. Leave empty to split the disk in\n");
+        ue_out("half (the boot half capped at what FAT16 allows).\n\n");
         ue_out("Size in MiB: ");
         char buf[16];
         if (read_field(buf, sizeof(buf)) < 0) {
@@ -275,7 +277,7 @@ static inline int install_wizard(void)
             return 1;
         }
         if (buf[0] == 0)
-            break; /* whole disk */
+            break; /* split the disk in half */
         int v = atoi(buf);
         if (v > 0) {
             size_mib = (unsigned long)v;
@@ -334,11 +336,12 @@ static inline int install_wizard(void)
         }
     ue_out("Partition: ");
     if (size_mib == 0)
-        ue_out("whole disk (maximum allowed by FAT16)\n");
+        ue_out("split in half / ");
     else {
         ue_num(size_mib);
-        ue_out(" MiB\n");
+        ue_out(" MiB / ");
     }
+    ue_out("data volume mounted at /mnt\n");
     ue_out("Host:    ");
     ue_out(hostname);
     ue_out("\n\nThis will erase the whole disk. ");

@@ -6,10 +6,12 @@ SYNOPSIS
 
 DESCRIPTION
     Shows the amount of space used and available on each mounted
-    file system. VNU's only real file system is the in-memory VFS
-    (mounted on /); /dev and /proc are pseudo file systems with
-    no accounted space, so they print zeros. FILE operands restrict
-    the report to the file systems containing those files.
+    file system. The in-memory VFS is mounted on /; /dev and /proc are
+    pseudo file systems with no accounted space, so they print zeros.
+    A data volume on disk (FAT16, mounted at /mnt by `vnu install`)
+    reports its real capacity and free space, read from its file
+    allocation table. FILE operands restrict the report to the file
+    systems containing those files.
 
     Sizes are shown in 1 KiB blocks unless a human-readable option
     is given.
@@ -32,3 +34,4 @@ EXAMPLES
     df
     df -h /proc/version
     df -T -t vfs
+    df /mnt    the data volume on disk

@@ -143,6 +143,11 @@ int main(int argc, char** argv)
     check(mount(fs, dev, 0, sec.data()), "mount");
     check(fs.mounted, "fs marked mounted");
 
+    uint32_t vol_total = 0, vol_free = 0;
+    check(volume_stats(fs, &vol_total, &vol_free) && vol_total > 0 &&
+              vol_free > 0 && vol_free <= vol_total,
+          "volume_stats reports a sane capacity");
+
     /* A plain 8.3 file, created on demand by write(). */
     const char* hello = "hello, fat16";
     uint32_t got = 0;
@@ -183,7 +188,13 @@ int main(int argc, char** argv)
     std::vector<uint8_t> big(BIG);
     for (uint32_t i = 0; i < BIG; ++i)
         big[i] = static_cast<uint8_t>(pattern(i));
+    uint32_t free_before = 0;
+    check(volume_stats(fs, &vol_total, &free_before), "volume_stats before big.bin");
     check(write(fs, 0, "big.bin", 0, big.data(), BIG, &got) && got == BIG, "write 3 MiB big.bin");
+    uint32_t free_after = 0;
+    check(volume_stats(fs, &vol_total, &free_after) &&
+              free_after + BIG <= free_before,
+          "big.bin consumed at least its own size in free space");
     std::vector<uint8_t> back(BIG, 0);
     check(read(fs, 0, "big.bin", 0, back.data(), BIG, &got) && got == BIG &&
               std::memcmp(back.data(), big.data(), BIG) == 0,

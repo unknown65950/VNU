@@ -66,8 +66,8 @@ VNU INSTALL
     DRIVE is the disk index (0..N-1, the same numbering as /proc/disks),
     HOSTNAME the name the machine should boot with (see 'man
     hostname'; it is written to /etc/hostname and recorded on the disk)
-    and SIZE_MIB the partition size in MiB, omitted for the whole usable
-    disk. Requires root.
+    and SIZE_MIB the size of the boot partition in MiB, omitted to split
+    the usable disk in half. Requires root.
 
     The write itself is done by the kernel (syscall VNU_SYS_install,
     30): it stamps the MBR + GRUB core image, records the host name in
@@ -75,6 +75,17 @@ VNU INSTALL
     partition at LBA 2048 holding /boot/kernel.elf and a GRUB config, so
     the disk boots on its own with no CD. This is what a distro
     'sysinst' does.
+
+    A second FAT16 partition follows the boot one. It is the data
+    volume, labelled VNUDATA, and the kernel mounts it at /mnt when the
+    disk boots, so files written under /mnt survive a reboot. The boot
+    partition takes SIZE_MIB, or half the usable disk when SIZE_MIB is
+    omitted; everything left is the data volume, and a disk too small
+    for both gets only the boot volume. /mnt holds ordinary files and
+    directories, but they are FAT16: they carry no owner and no
+    permission bits, so chmod and chown on them do nothing, and names
+    follow the FAT16 rules. The volumes appear in /proc/mounts and the
+    block devices behind them under /dev (hda, hda1, hda2, ...).
 
 EXAMPLES
     vnu
@@ -84,7 +95,7 @@ EXAMPLES
     vnu set outsideaccess    is remote login allowed?
     vnu set outsideaccess on start the SSH daemon
     vnu install           the wizard
-    vnu install 0 mybox   disk 0, named mybox, whole disk
+    vnu install 0 mybox   disk 0, named mybox, split half boot / half /mnt
 
 FILES
     /proc/version  OS, kernel and build versions

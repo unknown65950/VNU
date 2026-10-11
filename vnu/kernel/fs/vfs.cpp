@@ -709,12 +709,13 @@ void regen_synth(Node& n)
         }
         break;
     case SynthKind::DfStat: {
-        /* Space report for df(1). The only real filesystem is the
-         * in-memory VFS: "total" is the sum of the nodes' currently
-         * allocated content buffers and "used" is the live bytes in
-         * them (the gap is the geometric headroom node_reserve keeps),
-         * so df grows and shrinks with real usage. /dev and /proc are
-         * pure pseudo-filesystems with nothing to account. Lines are
+        /* Space report for df(1). "total" is the sum of the nodes'
+         * currently allocated content buffers and "used" is the live
+         * bytes in them (the gap is the geometric headroom
+         * node_reserve keeps), so df grows and shrinks with real usage.
+         * /dev and /proc are pure pseudo-filesystems with nothing to
+         * account, but a mounted disk volume has a real capacity and a
+         * real free count read from its FAT. Lines are
          * `source fstype mountpoint total_bytes used_bytes`. */
         uint32_t total = 0;
         uint32_t used = 0;
@@ -730,6 +731,21 @@ void regen_synth(Node& n)
         a.str("\n");
         a.str("dev devfs /dev 0 0\n");
         a.str("proc procfs /proc 0 0\n");
+        for (int i = 0; i < MAX_MOUNTS; ++i) {
+            if (!mounts[i].used)
+                continue;
+            uint32_t vol_total = 0, vol_free = 0;
+            if (!vnu::fat16::volume_stats(mounts[i].fs, &vol_total, &vol_free))
+                continue;
+            a.str(vnu::blockdev::at(mounts[i].blk).name);
+            a.str(" fat16 ");
+            a.str(mounts[i].path);
+            a.str(" ");
+            a.num(vol_total);
+            a.str(" ");
+            a.num(vol_total - vol_free);
+            a.str("\n");
+        }
         break;
     }
     case SynthKind::Uptime: {
@@ -2215,6 +2231,17 @@ int remove(const char* path)
 {
     char abs[PATH_CAP];
     normalize(path, abs, PATH_CAP);
+    const char* mrel = nullptr;
+    if (mount_for(abs, &mrel)) {
+        /* A mounted path has no RAM node to ask, so stat decides which
+         * of the two removals applies. */
+        vnu::posix::Stat st{};
+        if (stat(abs, &st) != 0)
+            return -VNU_ENOENT;
+        if ((st.mode & vnu::posix::S_IFMT) == vnu::posix::S_IFDIR)
+            return rmdir(abs);
+        return unlink(abs);
+    }
     Node* n = find(abs);
     if (!n)
         return -VNU_ENOENT;
