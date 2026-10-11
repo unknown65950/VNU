@@ -2038,6 +2038,17 @@ CALC_CHROME_H = CALC_TITLE_H + 12
 # The size calc asks for, and the slack allowed on what comes back.
 CALC_WANT_W, CALC_WANT_H = 220, 220
 CALC_GRANT_SLACK = 8
+
+# The drag a window is moved by in the outline check, and the two bounds
+# that tell its two halves apart. While the button is down the window
+# must not have moved: the frame and the two pointer footprints are a
+# perimeter, a couple of thousand pixels, while a live move would have
+# repainted the whole client area - two window's worth, some hundreds of
+# thousands. When the button comes up the window has to be at the new
+# place, most of the way there (a packet can be dropped, so not exactly).
+DRAG_FRAME_X, DRAG_FRAME_Y = 180, 150
+DRAG_FRAME_LIVE = 6000
+DRAG_FRAME_MOVE = 40
 # How much the window has to grow by to count as resized. The desktop
 # rounds the canvas up to a 64x64 granule, so a resize inside one
 # granule costs nothing and changes no pixels; the drag below is several
@@ -2246,6 +2257,130 @@ def run_gfx_canvas_resize(guest, result, verbose, timeout=60.0):
     else:
         result.passed += 1
         print("ok   %-18s" % "gfx-canvas-resize")
+
+
+def run_gfx_drag_frame(guest, result, verbose, timeout=60.0):
+    """A window being dragged shows an outline, not a live repaint.
+
+    Moving a window live repaints its whole client area - the
+    calculator's own drawing, and the wallpaper the window uncovers - on
+    every mouse packet, so a drag of a few pixels costs a window's worth
+    of pixels a packet. The classic desktops answered this with a
+    one-pixel frame of the window's outline that follows the pointer
+    while the window stays where it is, and the move is committed when
+    the button comes up. Both halves are on the screen, so this looks at
+    the screen: while the button is down the window must still be where
+    it was and only a thin frame may have moved, and when the button
+    comes up the window must be at the new place.
+
+    The first half is a pixel budget with a floor under it. A live move
+    changes about two window's worth of pixels; the frame changes a
+    perimeter, plus the two pointer footprints. The two are two orders
+    of magnitude apart, so a bound between them says which happened
+    without having to find the frame first.
+    """
+    print("==> the drag outline (screendump)")
+    problems = []
+    shotdir = tempfile.mkdtemp(prefix="vnu-drag-")
+    try:
+        def shot(name):
+            return settled_shot(guest, os.path.join(shotdir, name))
+
+        guest._type("gui\n")
+        time.sleep(3.0)
+        bare = shot("bare.ppm")
+        if not frame_is_desktop(bare):
+            problems.append("the bare desktop is not a drawn desktop")
+        if not esc_to_shell(guest, timeout):
+            problems.append("the desktop did not give the console back")
+
+        guest._type("gui calc\n")
+        time.sleep(5.0)
+        before = shot("before.ppm")
+        box = window_box(before, bare)
+        if box is None:
+            problems.append("no window on screen after gui calc")
+        else:
+            x0, y0, x1, y1 = box
+            # A point on the title bar, well clear of the thin band along
+            # the top edge and of the left edge's grip, so the press is a
+            # move and not a resize.
+            grab = ((x0 + x1) // 2, y0 + CALC_TITLE_H - 3)
+            during = dragged = None
+            for attempt in range(3):
+                if occl_goto(guest, grab) is None:
+                    continue
+                mouse_button(guest, True)
+                time.sleep(0.3)
+                occl_run(guest, DRAG_FRAME_X, DRAG_FRAME_Y)
+                time.sleep(0.5)
+                during = shot("during%d.ppm" % attempt)
+                mouse_button(guest, False)
+                time.sleep(1.5)
+                dragged = shot("dragged%d.ppm" % attempt)
+                grown = window_box(dragged, bare)
+                if grown is not None and \
+                        grown[0] - x0 >= DRAG_FRAME_MOVE and \
+                        grown[1] - y0 >= DRAG_FRAME_MOVE:
+                    break
+                # The packets did not carry the pointer far enough: walk
+                # the drag back and take it again from the title bar.
+                occl_run(guest, -DRAG_FRAME_X, -DRAG_FRAME_Y)
+
+            # 1. With the button down the window stayed put. The changed
+            # pixels are the frame and the two pointer footprints, a
+            # perimeter; a live move would have changed the client area
+            # and the wallpaper around it, two window's worth.
+            pile = sum(changed_rows(before[2], during[2], bare[0],
+                                    bare[1]))
+            if pile >= DRAG_FRAME_LIVE:
+                problems.append(
+                    "the screen changed %d pixels with the button down: "
+                    "the window was repainted along the drag instead of "
+                    "outlined" % pile)
+            # 2. The frame went to the new place: what changed reaches
+            # past the window's own right and bottom edges.
+            dbox = changed_bbox(during, before, bare[0], PANEL_H)
+            if dbox is None or dbox[2] <= x1 or dbox[3] <= y1:
+                problems.append(
+                    "nothing changed past the window with the button "
+                    "down: no outline followed the pointer")
+            # 3. The button coming up is what committed the move.
+            grown = window_box(dragged, bare)
+            if grown is None:
+                problems.append("the window vanished during the drag")
+            else:
+                gx0, gy0, gx1, gy1 = grown
+                if verbose:
+                    print("   dragged %dx%d to %d,%d (%d px changed with "
+                          "the button down)"
+                          % (gx1 - gx0 + 1, gy1 - gy0 + 1, gx0, gy0, pile))
+                if gx0 - x0 < DRAG_FRAME_MOVE or gy0 - y0 < DRAG_FRAME_MOVE:
+                    problems.append(
+                        "the button came up and left the window at %d,%d: "
+                        "the drag was not committed" % (gx0, gy0))
+                if abs((gx1 - gx0) - (x1 - x0)) > CALC_GRANT_SLACK or \
+                        abs((gy1 - gy0) - (y1 - y0)) > CALC_GRANT_SLACK:
+                    problems.append(
+                        "the drag left the window %dx%d: a move resized it"
+                        % (gx1 - gx0 + 1, gy1 - gy0 + 1))
+
+        if not esc_to_shell(guest, timeout):
+            problems.append("the desktop did not give the console back")
+    except TimeoutError as exc:
+        problems.append("the desktop session timed out: %s" % exc)
+    finally:
+        if result.failed or verbose:
+            keep_frames(shotdir, "gfx-drag-frame")
+        else:
+            shutil.rmtree(shotdir, ignore_errors=True)
+
+    if problems:
+        result.failed.append(("gfx-drag-frame", "", problems))
+        print("FAIL %-18s %s" % ("gfx-drag-frame", "; ".join(problems)))
+    else:
+        result.passed += 1
+        print("ok   %-18s" % "gfx-drag-frame")
 
 
 def present_total(proc_gfx):
@@ -3820,6 +3955,8 @@ def main():
                             "typing in a window (screendump + /proc/gfx)"))
         print("%-18s %s" % ("gfx-canvas-resize",
                             "gui calc (app request + corner drag)"))
+        print("%-18s %s" % ("gfx-drag-frame",
+                            "gui calc (title-bar drag shows an outline)"))
         print("%-18s %s" % ("system-menu",
                             "gui term (system menu, click items)"))
         print("%-18s %s" % ("install-write", "vnu install 0 vnu-test"))
@@ -3840,7 +3977,8 @@ def main():
     interactive = ("console-screen", "man-pager", "ctrl-c",
                    "prefs-wallpaper", "imagine-screen", "gfx-surface",
                    "gfx-resolution", "gfx-damage", "gfx-canvas-resize",
-                   "occlusion", "system-menu", "vibecommander")
+                   "gfx-drag-frame", "occlusion", "system-menu",
+                   "vibecommander")
     cases = SUITE
     if args.only:
         cases = [c for c in SUITE
@@ -3893,6 +4031,10 @@ def main():
                                         for sel in args.only):
                     run_gfx_canvas_resize(guest, result, args.verbose,
                                           args.timeout)
+                if not args.only or any(sel in "gfx-drag-frame"
+                                        for sel in args.only):
+                    run_gfx_drag_frame(guest, result, args.verbose,
+                                       args.timeout)
                 if not args.only or any(sel in "occlusion"
                                         for sel in args.only):
                     run_occlusion(guest, result, args.verbose)

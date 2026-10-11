@@ -39,6 +39,11 @@ constexpr int ICON_ORIGIN_X = 8;
 /* Icons live below the taskbar now. */
 constexpr int ICON_ORIGIN_Y = PANEL_H + 8;
 
+/* The restore list has to hold the frame-new region, the pointer's box,
+ * one region per window that moved, the pull-down's strip and the four
+ * edges a drag frame leaves behind. */
+constexpr int RESTORE_MAX = MAX_TASKS + 8;
+
 /* Gfx windows stretch their fixed 480x340 canvas to whatever client
  * area the window ends up with, so resizing is free-form just like the
  * text windows. These lower bounds keep a window far enough above a
@@ -551,6 +556,66 @@ void clamp_to_desktop(Window& win)
     if (win.y < 0) win.y = 0;
     if (win.x + win.w > vnu::vgfx::width()) win.x = vnu::vgfx::width() - win.w;
     if (win.y + win.h > vnu::vgfx::height()) win.y = vnu::vgfx::height() - win.h;
+}
+
+/* --- The drag frame ---------------------------------------------------
+ *
+ * A window drag does not move the window. Moving it live repaints the
+ * whole client area - the console's cell grid, or a gfx app's canvas,
+ * and the wallpaper it vacates - on every mouse packet, so a drag of
+ * even a few pixels costs a window's worth of pixels per packet and a
+ * fast one costs the screen. The classic desktop answer, on Windows and
+ * on the Macintosh both, is a one-pixel frame of the window's outline
+ * that follows the pointer while the window stays where it is, with the
+ * move committed when the button comes up. Only the thin band the frame
+ * vacates and occupies is ever put back, so a drag costs a perimeter
+ * rather than an area.
+ *
+ * The frame is a checker of black and white, one pixel of each along the
+ * outline: a single colour would vanish wherever it matched what it was
+ * drawn over, and two colours read on the wallpaper, on a window's
+ * chrome and on the panel alike.
+ */
+constexpr int DRAG_FRAME_T = 1;
+
+/* Queue the band a frame leaves behind, as the four edges it is made of.
+ * The restore path takes rectangles, and one rectangle around the whole
+ * frame would repaint the very client area the frame exists to leave
+ * alone, so top, bottom and the two sides go in one by one. */
+int add_frame_restore(Rect* out, int n, int cap, const Window& w)
+{
+    const int x0 = w.x, y0 = w.y;
+    const int x1 = w.x + w.w - DRAG_FRAME_T, y1 = w.y + w.h - DRAG_FRAME_T;
+    const Rect full = {0, 0, vnu::vgfx::width(), vnu::vgfx::height()};
+    const Rect edges[4] = {
+        {x0, y0, w.w, DRAG_FRAME_T},
+        {x0, y1, w.w, DRAG_FRAME_T},
+        {x0, y0 + DRAG_FRAME_T, DRAG_FRAME_T, w.h - 2 * DRAG_FRAME_T},
+        {x1, y0 + DRAG_FRAME_T, DRAG_FRAME_T, w.h - 2 * DRAG_FRAME_T},
+    };
+    for (int i = 0; i < 4 && n < cap; ++i) {
+        const Rect c = clip_rect(edges[i], full);
+        if (c.w > 0 && c.h > 0)
+            out[n++] = c;
+    }
+    return n;
+}
+
+void draw_drag_frame(const Window& w)
+{
+    using namespace vnu::vgfx;
+    if (w.w < 2 * DRAG_FRAME_T || w.h < 2 * DRAG_FRAME_T)
+        return;
+    const int x0 = w.x, y0 = w.y;
+    const int x1 = w.x + w.w - DRAG_FRAME_T, y1 = w.y + w.h - DRAG_FRAME_T;
+    for (int x = x0; x <= x1; ++x) {
+        put_pixel(x, y0, ((x + y0) & 1) ? COLOR_BLACK : COLOR_WHITE);
+        put_pixel(x, y1, ((x + y1) & 1) ? COLOR_BLACK : COLOR_WHITE);
+    }
+    for (int y = y0 + DRAG_FRAME_T; y < y1; ++y) {
+        put_pixel(x0, y, ((x0 + y) & 1) ? COLOR_BLACK : COLOR_WHITE);
+        put_pixel(x1, y, ((x1 + y) & 1) ? COLOR_BLACK : COLOR_WHITE);
+    }
 }
 
 void draw_chrome(const Window& win, bool active, bool fill_client = true)
@@ -1373,6 +1438,14 @@ void run(const char* open_app)
     TaskHandle drag_h = NO_TASK;
     int drag_off_x = 0, drag_off_y = 0;
     int rs_orig_x = 0, rs_orig_y = 0, rs_orig_w = 0, rs_orig_h = 0, rs_mx = 0, rs_my = 0;
+    /* The drag frame: `ghost` is where the window would be put if the
+     * button came up now, `ghost_on` is whether a frame is being shown at
+     * all (the geometry only differs once the pointer has moved, so a
+     * click on the title bar that never drags draws nothing), and
+     * `shown_ghost` is where the frame on the screen actually is, like
+     * shown_mx for the pointer. */
+    Window ghost = {0, 0, 0, 0};
+    bool ghost_on = false;
     bool left_was_down = false;
     TaskHandle gfx_press_h = NO_TASK;
     int gfx_press_px = 0, gfx_press_py = 0;
@@ -1397,7 +1470,7 @@ void run(const char* open_app)
     static Shown shown[MAX_TASKS];
     /* One per window, plus the first frame, the pointer box and the
      * pull-down's own rectangle when it closes. */
-    static Rect restore[MAX_TASKS + 4];
+    static Rect restore[RESTORE_MAX];
     static bool redraw[MAX_TASKS];
     /* The part of each window that has to be painted because something
      * under it was put back, as a box: empty (w == 0) for a window that
@@ -1409,6 +1482,8 @@ void run(const char* open_app)
      * canvas_hash). */
     static uint64_t digest_of[MAX_TASKS];
     static int shown_mx, shown_my;
+    static Window shown_ghost = {0, 0, 0, 0};
+    static bool shown_ghost_on = false;
     static TaskHandle shown_focused = NO_TASK;
     static vnu::vgfx::CursorShape shown_cursor =
         vnu::vgfx::CursorShape::Arrow;
@@ -1728,6 +1803,20 @@ void run(const char* open_app)
                 dnd_active = false;
                 drag_path[0] = 0;
                 drag_src = NO_TASK;
+                /* The button coming up is what commits a window drag:
+                 * until now the window has not moved, only the frame
+                 * above it has, and this is the one geometry change the
+                 * drag costs. */
+                if (drag_op != DragOp::None && drag_h != NO_TASK && ghost_on &&
+                    vnu::wintask::has_window(drag_h)) {
+                    Window& win = geom[drag_h];
+                    vnu::wintask::Console* con = vnu::wintask::console(drag_h);
+                    win = ghost;
+                    clamp_to_desktop(win);
+                    if (con && con->gfx && con->pixel)
+                        follow_canvas(con, win);
+                }
+                ghost_on = false;
                 drag_op = DragOp::None;
                 drag_h = NO_TASK;
                 if (have_gfx_press && gfx_press_h != NO_TASK &&
@@ -1740,7 +1829,7 @@ void run(const char* open_app)
             }
 
             if (drag_op != DragOp::None && drag_h != NO_TASK) {
-                Window& win = geom[drag_h];
+                const Window& win = geom[drag_h];
                 vnu::wintask::Console* con = vnu::wintask::console(drag_h);
                 bool g = con && con->gfx;
                 int minw = g ? GFX_MIN_CLIENT_W + 8 : 20 * CELL_W + 8;
@@ -1751,62 +1840,74 @@ void run(const char* open_app)
                              : TITLE_H + CON_ROWS * CELL_H + 12;
                 auto cw = [&](int v) -> int { return v < minw ? minw : (v > maxw ? maxw : v); };
                 auto ch = [&](int v) -> int { return v < minh ? minh : (v > maxh ? maxh : v); };
+                /* Worked out into `next`, not into the window: the
+                 * window stays where it is and the frame above it
+                 * follows the pointer, so nothing here repaints a client
+                 * area. The canvas is not resized either - that is the
+                 * other half of what used to make a drag expensive - and
+                 * follows once, when the button comes up. */
+                Window next = win;
                 switch (drag_op) {
                 case DragOp::Move:
-                    win.x = mx - drag_off_x;
-                    win.y = my - drag_off_y;
+                    next.x = mx - drag_off_x;
+                    next.y = my - drag_off_y;
                     break;
                 case DragOp::ResizeRight:
-                    win.w = cw(rs_orig_w + (mx - rs_mx));
+                    next.w = cw(rs_orig_w + (mx - rs_mx));
                     break;
                 case DragOp::ResizeBottom:
-                    win.h = ch(rs_orig_h + (my - rs_my));
+                    next.h = ch(rs_orig_h + (my - rs_my));
                     break;
                 case DragOp::ResizeCorner:
-                    win.w = cw(rs_orig_w + (mx - rs_mx));
-                    win.h = ch(rs_orig_h + (my - rs_my));
+                    next.w = cw(rs_orig_w + (mx - rs_mx));
+                    next.h = ch(rs_orig_h + (my - rs_my));
                     break;
                 case DragOp::ResizeLeft: {
                     int right = rs_orig_x + rs_orig_w;
-                    win.w = cw(rs_orig_w - (mx - rs_mx));
-                    win.x = right - win.w;
+                    next.w = cw(rs_orig_w - (mx - rs_mx));
+                    next.x = right - next.w;
                     break;
                 }
                 case DragOp::ResizeTop: {
                     int bottom = rs_orig_y + rs_orig_h;
-                    win.h = ch(rs_orig_h - (my - rs_my));
-                    win.y = bottom - win.h;
+                    next.h = ch(rs_orig_h - (my - rs_my));
+                    next.y = bottom - next.h;
                     break;
                 }
                 case DragOp::ResizeTopLeft: {
                     int right = rs_orig_x + rs_orig_w;
                     int bottom = rs_orig_y + rs_orig_h;
-                    win.w = cw(rs_orig_w - (mx - rs_mx));
-                    win.x = right - win.w;
-                    win.h = ch(rs_orig_h - (my - rs_my));
-                    win.y = bottom - win.h;
+                    next.w = cw(rs_orig_w - (mx - rs_mx));
+                    next.x = right - next.w;
+                    next.h = ch(rs_orig_h - (my - rs_my));
+                    next.y = bottom - next.h;
                     break;
                 }
                 case DragOp::ResizeTopRight: {
                     int bottom = rs_orig_y + rs_orig_h;
-                    win.w = cw(rs_orig_w + (mx - rs_mx));
-                    win.h = ch(rs_orig_h - (my - rs_my));
-                    win.y = bottom - win.h;
+                    next.w = cw(rs_orig_w + (mx - rs_mx));
+                    next.h = ch(rs_orig_h - (my - rs_my));
+                    next.y = bottom - next.h;
                     break;
                 }
                 case DragOp::ResizeBottomLeft: {
                     int right = rs_orig_x + rs_orig_w;
-                    win.w = cw(rs_orig_w - (mx - rs_mx));
-                    win.x = right - win.w;
-                    win.h = ch(rs_orig_h + (my - rs_my));
+                    next.w = cw(rs_orig_w - (mx - rs_mx));
+                    next.x = right - next.w;
+                    next.h = ch(rs_orig_h + (my - rs_my));
                     break;
                 }
                 default:
                     break;
                 }
-                clamp_to_desktop(win);
-                if (g && con->pixel)
-                    follow_canvas(con, win);
+                clamp_to_desktop(next);
+                /* The frame shows from the first motion and stays until
+                 * the button comes up: dragging back onto the start does
+                 * not blink it away. */
+                if (next.x != win.x || next.y != win.y ||
+                    next.w != win.w || next.h != win.h)
+                    ghost_on = true;
+                ghost = next;
             }
 
             /* Mouse-wheel: scroll the focused text window. */
@@ -1955,6 +2056,23 @@ void run(const char* open_app)
         if (shown_menu_open && !menu_open)
             restore[restore_n++] = Rect{MENU_X, MENU_Y, MENU_W + MENU_SHADOW,
                                         MENU_H + MENU_SHADOW};
+
+        /* The drag frame is ground of its own, like the pull-down: while
+         * a window is dragged the window stays where it is and only the
+         * frame above it moves, so what has to be put back is the thin
+         * band the frame vacates - never the client area it surrounds,
+         * which is the whole reason the frame is there. */
+        const bool ghost_changed =
+            ghost_on != shown_ghost_on ||
+            (ghost_on && (ghost.x != shown_ghost.x ||
+                          ghost.y != shown_ghost.y ||
+                          ghost.w != shown_ghost.w ||
+                          ghost.h != shown_ghost.h));
+        if (ghost_changed && shown_ghost_on)
+            restore_n = add_frame_restore(restore, restore_n, RESTORE_MAX,
+                                          shown_ghost);
+        shown_ghost = ghost;
+        shown_ghost_on = ghost_on;
 
         /* Layer 1: the wallpaper, in the regions that are bare. Drawn
          * once when the frame is new and afterwards only here - it is a
@@ -2150,6 +2268,17 @@ void run(const char* open_app)
                                       MENU_H + MENU_SHADOW);
         }
         shown_menu_open = menu_open;
+
+        /* Layer 6: the drag frame, over the windows and the panel but
+         * under the pointer. Painted whenever a drag is in progress - a
+         * window under it that changed may have drawn over it - but
+         * damaged only where it moved, which is the whole saving: an
+         * idle frame costs its pixels once, not once a pass. */
+        if (ghost_on) {
+            draw_drag_frame(ghost);
+            if (ghost_changed || first_frame)
+                vnu::vgfx::damage_add(ghost.x, ghost.y, ghost.w, ghost.h);
+        }
 
         if (dnd_active && drag_path[0]) {
             /* Drag ghost: a little document page riding the cursor, with
