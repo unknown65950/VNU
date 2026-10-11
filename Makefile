@@ -43,7 +43,7 @@ ISO_SOURCES := $(shell find $(KERNEL_DIR) $(VNU)/userspace $(VNU)/initrd \
         thambuild thamupdate thamon thamoff thamstatus \
         run run-headless run-gpu run-headless-gpu run-vhd run-headless-vhd \
         run-installed run-headless-installed \
-        test test-gpu test-install test-all \
+        test test-gpu test-install test-fat16 test-all \
         doctor size clean clean-vhd distclean
 
 ## @build
@@ -65,6 +65,7 @@ help: ## list every target (this is the default goal)
 	     printf '  make test                     automated guest tests\n'; \
 	 fi
 	@printf '  make test-install             install to a disk, boot that disk\n'
+	@printf '  make test-fat16               host-side FAT16 library test (no QEMU)\n'
 
 all: iso ## same as iso (reads better in a script)
 
@@ -168,6 +169,12 @@ test-gpu: $(ISO) ## the same suite on a virtio-gpu display
 
 test-install: $(ISO) ## install to a disk, boot that disk
 	@python3 tools/qemu_test.py --install-only $(TEST_ARGS)
+
+test-fat16: ## host-side test for the FAT16 library (no QEMU)
+	@mkdir -p $(BUILD_DIR)
+	@g++ -std=c++17 -O1 -I $(KERNEL_DIR)/include \
+	    $(KERNEL_DIR)/fs/fat16.cpp tools/fat16_test.cpp -o $(BUILD_DIR)/fat16_test
+	@$(BUILD_DIR)/fat16_test
 
 test-all: $(ISO) ## everything: ISO suite + virtio-gpu + install
 	@python3 tools/qemu_test.py $(TEST_ARGS)

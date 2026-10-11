@@ -236,3 +236,88 @@ int install(int drive, uint32_t size_mib, const char* hostname)
 }
 
 } // namespace vnu::install
+
+// The kernel-side half of the FAT16 header: format a bootable volume on an
+// ATA drive and copy the kernel, the initrd and grub.cfg into it. The
+// filesystem itself lives in fs/fat16.cpp and knows nothing about ATA, so
+// this is where the two meet.
+namespace vnu::fat16 {
+namespace {
+
+struct AtaDev {
+    int drive;
+};
+
+int ata_read(void* ctx, uint32_t lba, uint32_t count, void* buf)
+{
+    return vnu::ata::read_sectors(static_cast<AtaDev*>(ctx)->drive, lba, count, buf) ? 0 : -1;
+}
+
+int ata_write(void* ctx, uint32_t lba, uint32_t count, const void* buf)
+{
+    return vnu::ata::write_sectors(static_cast<AtaDev*>(ctx)->drive, lba, count, buf) ? 0 : -1;
+}
+
+int ata_flush(void*)
+{
+    return 0;
+}
+
+bool write_file(Fs& fs, uint32_t dir, const char* name, const void* data, uint32_t size)
+{
+    if (size == 0)
+        return create(fs, dir, name);
+    uint32_t wrote = 0;
+    return write(fs, dir, name, 0, data, size, &wrote) && wrote == size;
+}
+
+uint32_t cstr_len(const char* s)
+{
+    uint32_t n = 0;
+    while (s && s[n])
+        ++n;
+    return n;
+}
+
+} // namespace
+
+bool create_boot_volume(int drive, uint32_t part_lba, uint32_t part_sectors,
+                        const void* kernel, uint32_t kernel_size,
+                        const void* initrd, uint32_t initrd_size,
+                        const char* grub_cfg)
+{
+    AtaDev ctx{drive};
+    Device dev{&ctx, ata_read, ata_write, ata_flush};
+    if (!format(dev, part_lba, part_sectors, "VNUFS   ", "VNU", 0x56554E55))
+        return false;
+
+    static uint8_t sector[SECTOR];
+    Fs fs{};
+    if (!mount(fs, dev, part_lba, sector))
+        return false;
+
+    if (!mkdir(fs, 0, "BOOT"))
+        return false;
+    uint32_t boot = 0, size = 0;
+    uint8_t attr = 0;
+    if (!resolve(fs, "BOOT", &boot, &size, &attr))
+        return false;
+    if (!mkdir(fs, boot, "GRUB"))
+        return false;
+    uint32_t grub = 0;
+    if (!resolve(fs, "BOOT/GRUB", &grub, &size, &attr))
+        return false;
+
+    if (!write_file(fs, boot, "KERNEL.ELF", kernel, kernel_size))
+        return false;
+    if (initrd && initrd_size) {
+        if (!write_file(fs, boot, "INITRD.TAR", initrd, initrd_size))
+            return false;
+    }
+    if (!write_file(fs, grub, "GRUB.CFG", grub_cfg, cstr_len(grub_cfg)))
+        return false;
+
+    return sync(fs);
+}
+
+} // namespace vnu::fat16
