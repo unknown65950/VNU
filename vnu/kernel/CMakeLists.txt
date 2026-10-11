@@ -151,6 +151,7 @@ add_executable(kernel.elf
     proc/thams.cpp
     proc/mboot.cpp
     proc/images.cpp
+    proc/initrd.cpp
     proc/switch.s
     proc/ctxswitch.s
     sync/locking.cpp

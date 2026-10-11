@@ -9,6 +9,10 @@ vnu/kernel/build/
 vnu/iso/
 vnu/vnu.iso
 
+# Initial ramdisk: built by tools/build_initrd.sh from vnu/initrd/ (the
+# sources are tracked, the packed archive is not) and loaded by GRUB.
+vnu/initrd.tar
+
 # GRUB boot blobs extracted from a grub-mkrescue ISO for the portable
 # (xorriso-only) ISO builder used on hosts without grub tools (Termux).
 vnu/grub-seed/

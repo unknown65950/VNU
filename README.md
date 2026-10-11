@@ -5,7 +5,9 @@ A hobby operating system built from scratch for x86 (i386). GRUB loads a
 paging, ring 3, and starts the userspace shell **vash** on top of its own VFS.
 Instead of `libc` there is a custom **vlibc**; all of userspace is compiled
 with the host toolchain `vcc`/`v++`/`vld` and embedded into the kernel as
-`embedded_*.h` (prototype stage — no initrd yet).
+`embedded_*.h`. Other files can ride in at boot as an **initrd**: GRUB
+loads `vnu/initrd.tar` as a Multiboot2 module and the kernel unpacks it
+into `/initrd`.
 
 ```
 VNU (Vibe's Not UNIX!) booted.
@@ -45,6 +47,11 @@ root@vnu:~$ man ls
 - **Disks**: ATA driver + FAT16, syscalls `blkcount`/`install` — the kernel
   can write itself (GRUB + partition) to a disk, together with the host name
   the machine should boot with (see `/etc/hostname`).
+- **initial ramdisk**: `tools/build_initrd.sh` packs `vnu/initrd/` into a
+  POSIX ustar archive, GRUB loads it as a Multiboot2 module and the kernel
+  unpacks it into `/initrd` at boot (reported by `/proc/boot` and
+  `/proc/mounts`). It carries files without rebuilding the kernel, and
+  `vnu install` copies it onto an installed disk.
 - **System calls**: `int 0x80`, append-only ABI v1 (0–34), see
   `vnu/abi/ABI.md`. New numbers start at 35 and only with documentation.
 
@@ -84,6 +91,7 @@ vnu/
 ├── userspace/                  vash, vibecoreutils (one .c per command),
 │                               usertools (accounts), man, vedit,
 │                               GUI apps, examples, rootfs
+├── initrd/                     sources packed into initrd.tar at boot
 ├── abi/ABI.md                  ABI v1 description
 ├── build_iso.sh                cmake + grub-mkrescue -> vnu/vnu.iso
 └── run.sh                      launch in QEMU (--headless via serial)

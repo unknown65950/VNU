@@ -1,0 +1,9 @@
+VNU initial ramdisk
+
+This tree is packed into initrd.tar and handed to the kernel by the
+boot loader as a Multiboot2 module. The kernel unpacks it into /initrd
+of the RAM filesystem at boot, so a file can be added to the running
+system by dropping it here and rebuilding the image - no change to the
+kernel is needed.
+
+Everything under this directory arrives at /initrd/<name> in the guest.

@@ -503,6 +503,24 @@ SUITE = [
     ("hostname-restore", "echo vnu > /etc/hostname", [], []),
     ("hostname-back", "uname -n", [r"^vnu$"], []),
 
+    # -- the initial ramdisk ---------------------------------------------
+    # GRUB loads vnu/initrd/ as a Multiboot2 module and the kernel
+    # unpacks the ustar archive into /initrd at boot. The sources are
+    # tracked in vnu/initrd/, the archive is built by tools/build_initrd.sh
+    # and is a build artifact like the ISO itself.
+    ("initrd-release", "cat /initrd/etc/initrd-release",
+     [r"^VNU initrd$"], []),
+    ("initrd-readme", "cat /initrd/README",
+     [r"VNU initial ramdisk"], []),
+    ("initrd-list", "ls /initrd",
+     [r"^README$", r"^bin/$", r"^etc/$"], []),
+    ("initrd-run", "sh /initrd/bin/hello.sh",
+     [r"^hello from the initrd$"], []),
+    ("initrd-proc", "cat /proc/boot",
+     [r"^initrd\t\d+\t\d+$"], []),
+    ("initrd-mount", "cat /proc/mounts",
+     [r"^initrd /initrd initrd ro 0 0$"], []),
+
     # The system's own content lives under /etc/vnu, not at the root:
     # the picture pack, the sound clips and the two wallpaper files.
     ("media-tree", "ls /etc/vnu",
@@ -3573,8 +3591,14 @@ def run_install_scenario(iso, result, verbose, timeout, workdir):
               result, verbose)
         output, _ = g.sh("cat /proc/boot", timeout)
         check("proc-boot-disk", output,
-              [r"^rootfs\tvfs$", r"^installed\tata0$", r"^shell\tvash$"], [],
+              [r"^rootfs\tvfs$", r"^installed\tata0$", r"^shell\tvash$",
+               r"^initrd\t\d+\t\d+$"], [],
               result, verbose)
+        # The installer copied the initrd module onto the disk beside the
+        # kernel and named it in the grub.cfg it wrote, so a boot from the
+        # disk alone has it too.
+        output, _ = g.sh("cat /initrd/etc/initrd-release", timeout)
+        check("initrd-disk", output, [r"^VNU initrd$"], [], result, verbose)
         output, _ = g.sh("vnu fetch", timeout)
         check("vnu-fetch-disk", output,
               [r"installed on ata0", r"^Host +: +%s$" % INSTALLED_HOST], [],

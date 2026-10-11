@@ -41,12 +41,20 @@ cmake --build "$BUILD_DIR" -j"$(nproc 2>/dev/null || echo 1)"
 mkdir -p "$ROOT_DIR/iso/boot/grub"
 cp "$BUILD_DIR/kernel.elf" "$ROOT_DIR/iso/boot/kernel.elf"
 
+# The initial ramdisk: vnu/initrd/ packed into a ustar archive and
+# loaded as a second Multiboot2 module (the kernel file itself is the
+# first, which is how `vnu install` copies the running kernel). The
+# kernel unpacks it into /initrd at boot; see vnu/kernel/proc/initrd.cpp.
+bash "$REPO_DIR/tools/build_initrd.sh"
+cp "$ROOT_DIR/initrd.tar" "$ROOT_DIR/iso/boot/initrd.tar"
+
 cat > "$ROOT_DIR/iso/boot/grub/grub.cfg" <<'EOF'
 set timeout=0
 set default=0
 menuentry "VNU" {
     multiboot2 /boot/kernel.elf
     module2 /boot/kernel.elf
+    module2 /boot/initrd.tar
     boot
 }
 EOF

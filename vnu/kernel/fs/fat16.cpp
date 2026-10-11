@@ -196,6 +196,7 @@ namespace vnu::fat16 {
 
 bool create_boot_volume(int drive, uint32_t part_lba, uint32_t part_sectors,
                         const void* kernel, uint32_t kernel_size,
+                        const void* initrd, uint32_t initrd_size,
                         const char* grub_cfg)
 {
     Vol v{};
@@ -339,6 +340,17 @@ bool create_boot_volume(int drive, uint32_t part_lba, uint32_t part_sectors,
             return false;
         uint8_t e[32];
         make_entry(e, "KERNEL", "ELF", 0x20, first, kernel_size);
+        if (!add_dir_entry(v, boot_dir, e))
+            return false;
+    }
+
+    // /boot/initrd.tar (only when this boot carried one)
+    if (initrd && initrd_size) {
+        uint32_t first = 0;
+        if (!write_file(v, initrd, initrd_size, first))
+            return false;
+        uint8_t e[32];
+        make_entry(e, "INITRD", "TAR", 0x20, first, initrd_size);
         if (!add_dir_entry(v, boot_dir, e))
             return false;
     }

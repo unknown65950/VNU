@@ -11,7 +11,10 @@ void set_info(uint32_t addr)
     g_info = addr;
 }
 
-const void* first_module(uint32_t& size)
+namespace {
+/* Walk the tag list and hand back the `index`-th module (0-based), or
+ * nullptr once they run out. */
+const void* module_index(int index, uint32_t& size)
 {
     size = 0;
     if (!g_info)
@@ -29,15 +32,40 @@ const void* first_module(uint32_t& size)
             break;
         if (tsz < 8)
             break;
-        if (type == 3 && tsz >= 16) { // Multiboot2 module tag
-            uint32_t start = *reinterpret_cast<const uint32_t*>(p + 8);
-            uint32_t stop = *reinterpret_cast<const uint32_t*>(p + 12);
-            size = stop - start;
-            return reinterpret_cast<const void*>(start);
+        if (type == 3 && tsz >= 16) { // Multiboot2 module tag (type 3)
+            if (index == 0) {
+                uint32_t start = *reinterpret_cast<const uint32_t*>(p + 8);
+                uint32_t stop = *reinterpret_cast<const uint32_t*>(p + 12);
+                size = stop - start;
+                return reinterpret_cast<const void*>(start);
+            }
+            --index;
         }
         p += (tsz + 7) & ~7u; // tags are 8-byte aligned
     }
     return nullptr;
+}
+} // namespace
+
+const void* first_module(uint32_t& size)
+{
+    return module_at(0, size);
+}
+
+int module_count()
+{
+    int n = 0;
+    uint32_t size = 0;
+    while (module_at(n, size))
+        ++n;
+    return n;
+}
+
+const void* module_at(int index, uint32_t& size)
+{
+    if (index < 0)
+        return nullptr;
+    return module_index(index, size);
 }
 
 uint32_t ram_bytes()

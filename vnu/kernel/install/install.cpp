@@ -1,4 +1,5 @@
 #include <vnu/install.h>
+#include <vnu/initrd.h>
 #include <vnu/ata.h>
 #include <vnu/fat16.h>
 #include <vnu/host.h>
@@ -29,15 +30,30 @@ constexpr uint32_t CFG_NAME_MAX = vnu::host::MAX;
 
 // The config the installed GRUB loads. `module2 /boot/kernel.elf` is
 // what makes the running kernel available as a Multiboot2 module, so a
-// second install copies the exact same kernel.
-const char* GRUB_CFG =
-    "set timeout=0\n"
-    "set default=0\n"
-    "menuentry \"VNU\" {\n"
-    "    multiboot2 /boot/kernel.elf\n"
-    "    module2 /boot/kernel.elf\n"
-    "    boot\n"
-    "}\n";
+// second install copies the exact same kernel. The initrd is only named
+// when this boot actually carried one: a grub.cfg referring to a missing
+// /boot/initrd.tar would leave the disk unbootable.
+void make_grub_cfg(char* out, uint32_t cap)
+{
+    const char* head =
+        "set timeout=0\n"
+        "set default=0\n"
+        "menuentry \"VNU\" {\n"
+        "    multiboot2 /boot/kernel.elf\n"
+        "    module2 /boot/kernel.elf\n";
+    const char* initrd = "    module2 /boot/initrd.tar\n";
+    const char* tail = "    boot\n}\n";
+    uint32_t k = 0;
+    auto put = [&](const char* s) {
+        for (; *s && k + 1 < cap; ++s)
+            out[k++] = *s;
+    };
+    put(head);
+    if (vnu::initrd::present())
+        put(initrd);
+    put(tail);
+    out[k] = 0;
+}
 
 void put32(uint8_t* p, uint32_t v)
 {
@@ -205,9 +221,14 @@ int install(int drive, uint32_t size_mib, const char* hostname)
                              "boot with `module2 /boot/kernel.elf`\n");
         return -2; // ENOENT
     }
+    char grub_cfg[512];
+    make_grub_cfg(grub_cfg, sizeof(grub_cfg));
+    const uint32_t initrd_size = vnu::initrd::image_size();
     vnu::tty::write_cstr("install: creating filesystem and copying kernel\n");
     if (!vnu::fat16::create_boot_volume(drive, PART_START, part_sectors,
-                                        kernel, ksize, GRUB_CFG))
+                                        kernel, ksize,
+                                        vnu::initrd::image(), initrd_size,
+                                        grub_cfg))
         return -5;
 
     vnu::tty::write_cstr("install: done\n");

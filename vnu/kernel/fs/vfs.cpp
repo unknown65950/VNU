@@ -3,6 +3,7 @@
 #include <vnu/version.h>
 #include <vnu/pmm.h>
 #include <vnu/images.h>
+#include <vnu/initrd.h>
 #include <vnu/fb.h>
 #include <vnu/paging.h>
 #include <vnu/vga_gfx.h>
@@ -576,6 +577,11 @@ void regen_synth(Node& n)
     }
     case SynthKind::Mounts:
         a.str("vfs / vfs rw 0 0\ndev /dev devfs rw 0 0\nproc /proc procfs rw 0 0\n");
+        /* The initial ramdisk is a read-only ustar image unpacked once
+         * at boot (see vnu/initrd.h); report it as a mount so nobody
+         * has to guess where /initrd came from. */
+        if (vnu::initrd::present())
+            a.str("initrd /initrd initrd ro 0 0\n");
         break;
     case SynthKind::Disks:
         for (int i = 0; i < vnu::ata::drive_count(); ++i) {
@@ -822,6 +828,17 @@ void regen_synth(Node& n)
         char shell[16];
         a.str("shell\t");
         a.str(vnu::proc::session_shell(shell, sizeof(shell)) == 0 ? shell : "none");
+        a.str("\n");
+        /* The boot-loaded initrd: archive size and regular files
+         * unpacked, or `none` when this boot had no module. */
+        a.str("initrd\t");
+        if (vnu::initrd::present()) {
+            a.num(vnu::initrd::image_size());
+            a.str("\t");
+            a.num(vnu::initrd::files());
+        } else {
+            a.str("none");
+        }
         a.str("\n");
         break;
     }

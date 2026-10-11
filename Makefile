@@ -34,7 +34,8 @@ EMBEDDED := $(wildcard $(KERNEL_DIR)/proc/embedded_*.h)
 # on purpose: they are written into these very trees (embedded_*.h,
 # vnu/kernel/build), so counting them would make the ISO look older than
 # its own sources for ever and rebuild it every time.
-ISO_SOURCES := $(shell find $(KERNEL_DIR) $(VNU)/userspace vlibc tools thams \
+ISO_SOURCES := $(shell find $(KERNEL_DIR) $(VNU)/userspace $(VNU)/initrd \
+                      vlibc tools thams \
                       -type f -not -path '$(KERNEL_DIR)/build/*' \
                       -not -name 'embedded_*.h' -not -name '.off' 2>/dev/null)
 

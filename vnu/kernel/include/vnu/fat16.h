@@ -17,10 +17,12 @@ namespace vnu::fat16 {
 // Format the region [part_lba, part_lba + part_sectors) on `drive` as
 // FAT16 and lay down:
 //   /boot/kernel.elf      <- kernel[0..kernel_size)
+//   /boot/initrd.tar      <- initrd[0..initrd_size), when initrd is not null
 //   /boot/grub/grub.cfg   <- grub_cfg (NUL-terminated text)
 // Returns false if any sector write fails or the volume is too small.
 bool create_boot_volume(int drive, uint32_t part_lba, uint32_t part_sectors,
                         const void* kernel, uint32_t kernel_size,
+                        const void* initrd, uint32_t initrd_size,
                         const char* grub_cfg);
 
 } // namespace vnu::fat16

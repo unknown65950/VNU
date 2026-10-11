@@ -20,6 +20,7 @@
 #include <vnu/net.h>
 #include <vnu/tcp.h>
 #include <vnu/images.h>
+#include <vnu/initrd.h>
 #include <vnu/vga_gfx.h>
 #include <vnu/virtio_gpu.h>
 #include <vnu/audio.h>
@@ -109,6 +110,10 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
     vnu::pmm::init();
     vnu::paging::init();
     vnu::vfs::init();
+    /* The initial ramdisk, if the boot loader passed one, becomes /initrd
+     * before any process can look. Placed here so the unpacked files are
+     * ordinary VFS nodes for the rest of the boot. */
+    vnu::initrd::unpack();
     vnu::proc::init();
     /* Glyph tables are part of the image from the start, whether or not
      * the desktop ever captures the VGA font. */
