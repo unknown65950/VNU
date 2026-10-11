@@ -2332,8 +2332,8 @@ def mouse_button(guest, down):
     click of the run does nothing at all.
 
     That matters most for the click that ends a desktop session (the
-    panel's Exit button): the guest has already turned reporting off by
-    the time the release would be sent, so the host keeps the button
+    system menu's Exit item): the guest has already turned reporting off
+    by the time the release would be sent, so the host keeps the button
     down into the next session."""
     event = {"type": "btn", "data": {"down": down, "button": "left"}}
     guest.qmp.cmd("input-send-event", events=[event])
@@ -2355,20 +2355,33 @@ def mouse_click(guest):
     time.sleep(0.5)
 
 
-def panel_calc_label(shot):
-    """True when the panel shows the calculator's button label.
+def panel_has_calc(shot):
+    """True when the panel shows the calculator's button.
 
-    The panel base is (48, 48, 71) everywhere short of the right-hand
-    clock, and a desktop running only the terminal has nothing in the
-    span x~140..200 that shares the dark (31, 31, 47) of a button
-    outline. Spawning the calculator puts its label there (x~148..154)
-    even though the window itself is fully covered and invisible, so it
-    is a reliable sign the spawn happened."""
+    The panel's running-app list starts after the 26-wide system-menu
+    button at x 6 (with a 6px gap, so at x 40) and holds one button per
+    open window, a 26-wide icon tile for a known app followed by a 3px
+    gap. A desktop running only the terminal has its one tile at x 40..66,
+    so the span x 67..99 is bare panel. Spawning the calculator puts its
+    tile there even though the window itself is fully covered and
+    invisible, so it is a reliable sign the spawn happened.
+
+    What counts as a tile is "not the panel": the span is compared with a
+    pixel of it that is background in both cases, rather than with a fixed
+    colour, because the VGA card's palette indices and a virtio display's
+    B8G8R8X8 words do not spell the same shade the same way."""
     w, h, px = shot
-    for y in range(2, 30):
-        for x in range(140, 200):
-            b = (y * w + x) * 3
-            if px[b] == 0x1F and px[b + 1] == 0x1F and px[b + 2] == 0x2F:
+    if w < 120 or h < PANEL_H:
+        return False
+
+    def at(x, y):
+        i = (y * w + x) * 3
+        return px[i], px[i + 1], px[i + 2]
+
+    base = at(67, 16)
+    for y in range(2, PANEL_H - 4):
+        for x in range(67, 100):
+            if at(x, y) != base:
                 return True
     return False
 
@@ -2410,8 +2423,9 @@ def panel_calc_label(shot):
 #
 # The spots themselves, in the desktop's own terms (gui.cpp: PANEL_H=34,
 # ICON_ORIGIN_Y=PANEL_H+8, 24x24 tiles on 80x48 cells from (8, 42); the
-# left cluster of the panel is Close, Min, Reboot, Exit, each button
-# text_width(label)+10 wide from x 6).
+# panel's left corner is the 26-wide system-menu button from x 6, and the
+# pull-down it opens is a 132-wide panel at (4, 34) whose second item -
+# Exit - sits at y 60).
 MOUSE_STEP_GAP = 0.2                   # the breath between packets
 PARK_TOL = 16                          # a park this close is on the spot
 PARK_PACKET = 60                       # one packet: what a leg moves
@@ -2420,9 +2434,17 @@ OCCL_FLOOR_Y = 500                    # below the windows: open
                                        # desktop the whole width of it
 BEACON = (700, 600)                    # open floor, where both sessions
                                        # park for their screenshot
-EXIT_BUTTON = (22, 16)                 # the panel's Exit button: it starts
-                                       # at x 6 and is 32 wide, and one
-                                       # slot over is Reboot
+MENU_BUTTON = (20, 17)                 # the icon at the panel's left
+                                       # corner; clicking it pulls the menu
+                                       # down
+MENU_EXIT = (70, 72)                   # the pull-down's Exit item, the
+                                       # second one (Reboot is above it)
+MENU_BOX_X, MENU_BOX_Y = 4, PANEL_H    # the pull-down body: a 132x52 white
+MENU_BOX_W, MENU_BOX_H = 132, 52       # panel with a black rule down each
+                                       # side (gui.cpp: MENU_X=4,
+                                       # MENU_Y=PANEL_H, MENU_W=132 and
+                                       # MENU_H=2+1+2*24+1=52, so the rules
+                                       # land on x 4 and x 135)
 OCCL_DBG_DIR = None                    # a dir to trace the frames the
                                        # navigation is measured from
 OCCL_DBG_N = [0]
@@ -2800,7 +2822,8 @@ def occl_goto(guest, target, tries=3):
 # repaints is charged for as the window's whole rectangle joined to the
 # pointer's box, since a transfer presents one bounding box for all of its
 # damage. A session that walks the pointer off the calculator's tile, parks
-# it on the floor and walks it to the Exit button moves about 15MB that
+# it on the floor and walks it to the system menu's Exit item moves about
+# 15MB that
 # way, so OCCLUSION_CEIL is many times over: a sanity bound saying a session
 # costs about what an honest session costs, which is what catches a desktop
 # that has started painting the screen on every pass - a whole frame is 3MB
@@ -2934,9 +2957,9 @@ def run_occlusion(guest, result, verbose):
                 time.sleep(wait)
                 guest.qmp.hmp("screendump " + check)
                 time.sleep(0.4)
-                if panel_calc_label(read_ppm(check)):
+                if panel_has_calc(read_ppm(check)):
                     break
-            if not panel_calc_label(read_ppm(check)):
+            if not panel_has_calc(read_ppm(check)):
                 problems.append("%s: the calculator did not spawn (its panel "
                                 "button never appeared)" % tag)
                 return None, None
@@ -2948,24 +2971,27 @@ def run_occlusion(guest, result, verbose):
                             % tag)
             return None, None
         shot = settled_shot(guest, os.path.join(shotdir, "%s.ppm" % tag))
-        # Leave via the panel's Exit button, carried onto it and checked
-        # by the way back, because one slot over is Reboot: a click that
-        # lands wrong restarts the machine and answers with a login
-        # prompt, which is a loud failure and never a quiet pass. The run
-        # is a straight line up from the floor, so a packet lost on the
-        # way puts the click on the panel's bare background instead -
-        # which does nothing at all, and is caught by the desktop still
-        # being up afterwards.
-        if not occl_goto(guest, EXIT_BUTTON):
-            problems.append("%s: could not carry the pointer to the panel's "
-                            "Exit button" % tag)
+        # Leave via the system menu: the icon is carried onto and
+        # clicked, which drops the pull-down down, and then Exit is
+        # carried onto and clicked. Both legs are checked by the way back,
+        # because the item directly under the icon is Reboot: a click
+        # that lands one item out restarts the machine and answers with a
+        # login prompt, which is a loud failure and never a quiet pass.
+        if not occl_goto(guest, MENU_BUTTON):
+            problems.append("%s: could not carry the pointer to the system "
+                            "menu button" % tag)
+            return None, None
+        mouse_click(guest)
+        if not occl_goto(guest, MENU_EXIT):
+            problems.append("%s: could not carry the pointer onto the "
+                            "system menu's Exit item" % tag)
             return None, None
         mouse_click(guest)
         try:
             guest.wait_ready(exit_frm, timeout=8.0)
         except TimeoutError:
-            problems.append("%s: the desktop did not leave via the panel's "
-                            "Exit button" % tag)
+            problems.append("%s: the desktop did not leave via the system "
+                            "menu's Exit item" % tag)
             return None, None
         after = read_total()
         if after is None or after < before:
@@ -3011,6 +3037,97 @@ def run_occlusion(guest, result, verbose):
             print("    FAIL %s" % p)
         keep_frames(shotdir, "occlusion")
         result.failed.append(("occlusion", "", problems))
+    else:
+        result.passed += 1
+        shutil.rmtree(shotdir, ignore_errors=True)
+
+
+def menu_is_down(frame):
+    """Whether a frame holds the system pull-down rather than a closed
+    desktop.
+
+    The menu is the only thing on the desktop with a black rule drawn the
+    whole 52 rows down both of its sides at x 4 and x 135, right under the
+    panel. A window's border is black too, but it is not at the panel's
+    left corner, and the desktop icons start at x 8; counting the dark
+    pixels of both rules catches the menu and nothing else.
+    """
+    width, height, px = frame
+    if width < MENU_BOX_X + MENU_BOX_W + 2 or height < MENU_BOX_Y + \
+            MENU_BOX_H:
+        return False
+    dark = 0
+    for y in range(MENU_BOX_Y + 2, MENU_BOX_Y + MENU_BOX_H - 2):
+        for x in (MENU_BOX_X, MENU_BOX_X + MENU_BOX_W - 1):
+            i = (y * width + x) * 3
+            if px[i] < 90 and px[i + 1] < 90 and px[i + 2] < 110:
+                dark += 1
+    return dark >= 2 * (MENU_BOX_H - 4) - 4
+
+
+def run_system_menu(guest, result, verbose):
+    """The system menu: the icon opens a pull-down, a second click on the
+    icon closes it, and choosing Exit is what ends the session.
+
+    This is the one check that drives the panel's left corner as a menu
+    rather than a row of buttons. What it asserts is the pull-down itself
+    - the black-outlined panel that drops from under the icon, caught by
+    its two side rules - that a second click on the icon puts it away
+    again, and that the session only ends when the Exit item is chosen.
+    The Reboot item sits directly under the icon and is never clicked,
+    so a test that goes wrong restarts the machine instead of passing
+    quietly. This is not a SUITE case because the desktop swallows every
+    key while it is up, so there is no prompt for sh() to wait on.
+    """
+    print("==> system menu (desktop session)")
+    problems = []
+    shotdir = tempfile.mkdtemp(prefix="vnu-menu-")
+
+    def shot(name):
+        return settled_shot(guest, os.path.join(shotdir, name))
+
+    # The desktop swallows keystrokes, so any prompt in the log from here
+    # on means the desktop left.
+    exit_frm = len(guest.tail(0))
+    guest._type("gui term\n")
+    time.sleep(4.0)
+    mouse_warmup(guest)
+    up = settled_shot(guest, os.path.join(shotdir, "up.ppm"))
+    if not frame_is_desktop(up):
+        problems.append("the desktop did not come up (%dx%d)"
+                        % (up[0], up[1]))
+    elif menu_is_down(up):
+        problems.append("the pull-down was already down before the icon "
+                        "was clicked")
+    elif not occl_goto(guest, MENU_BUTTON):
+        problems.append("could not carry the pointer to the system menu "
+                        "button")
+    else:
+        mouse_click(guest)                     # the icon: open
+        if not menu_is_down(shot("open.ppm")):
+            problems.append("the pull-down did not appear under the icon")
+        mouse_click(guest)                     # the icon again: close
+        if menu_is_down(shot("closed.ppm")):
+            problems.append("the pull-down stayed down after a second click "
+                            "on the icon")
+        if not problems:
+            mouse_click(guest)                 # the icon once more: open
+            if not occl_goto(guest, MENU_EXIT):
+                problems.append("could not carry the pointer onto the menu's "
+                                "Exit item")
+            else:
+                mouse_click(guest)             # the Exit item
+                try:
+                    guest.wait_ready(exit_frm, timeout=8.0)
+                except TimeoutError:
+                    problems.append("the desktop did not leave via the menu's "
+                                    "Exit item")
+
+    if problems:
+        for p in problems:
+            print("    FAIL %s" % p)
+        keep_frames(shotdir, "system-menu")
+        result.failed.append(("system-menu", "", problems))
     else:
         result.passed += 1
         shutil.rmtree(shotdir, ignore_errors=True)
@@ -3703,6 +3820,8 @@ def main():
                             "typing in a window (screendump + /proc/gfx)"))
         print("%-18s %s" % ("gfx-canvas-resize",
                             "gui calc (app request + corner drag)"))
+        print("%-18s %s" % ("system-menu",
+                            "gui term (system menu, click items)"))
         print("%-18s %s" % ("install-write", "vnu install 0 vnu-test"))
         print("%-18s %s" % ("install-wizard", "vnu install (keys)"))
         return 0
@@ -3721,7 +3840,7 @@ def main():
     interactive = ("console-screen", "man-pager", "ctrl-c",
                    "prefs-wallpaper", "imagine-screen", "gfx-surface",
                    "gfx-resolution", "gfx-damage", "gfx-canvas-resize",
-                   "occlusion", "vibecommander")
+                   "occlusion", "system-menu", "vibecommander")
     cases = SUITE
     if args.only:
         cases = [c for c in SUITE
@@ -3777,6 +3896,9 @@ def main():
                 if not args.only or any(sel in "occlusion"
                                         for sel in args.only):
                     run_occlusion(guest, result, args.verbose)
+                if not args.only or any(sel in "system-menu"
+                                        for sel in args.only):
+                    run_system_menu(guest, result, args.verbose)
                 if not args.only or any(sel in "vibecommander"
                                         for sel in args.only):
                     run_vibecommander(guest, result, args.verbose,

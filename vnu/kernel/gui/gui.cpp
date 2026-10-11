@@ -858,7 +858,7 @@ bool hit_test_scrollbar(const Window& win, int mx, int my)
 
 /* --- Taskbar --- */
 
-enum class PB : uint8_t { None = 0, Close, Min, Reboot, Exit, App };
+enum class PB : uint8_t { None = 0, Close, Min, Menu, App };
 
 struct PBtn {
     int x, y, w, h;
@@ -883,8 +883,77 @@ int find_app_by_title(const vnu::apps::AppEntry* apps, int count, const char* ti
     return -1;
 }
 
-void draw_panel(const PBtn* out, int n, const vnu::apps::AppEntry* apps, int app_count);
+void draw_panel(const PBtn* out, int n, const vnu::apps::AppEntry* apps, int app_count,
+                bool menu_open);
 int layout_panel(PBtn* out, int focused, const vnu::apps::AppEntry* apps, int app_count);
+
+/* --- The system menu ---------------------------------------------------
+ *
+ * The panel's left corner carries one icon rather than a label: a small
+ * square that pulls a menu down over the desktop. The two items are the
+ * session commands that used to sit in the strip as buttons - Reboot and
+ * Exit - so the panel stays for windows and the destructive pair is one
+ * click away behind that one icon. The menu is anchored under the button
+ * and anchored to the screen, so it does not move when the panel
+ * relayouts around it. */
+constexpr int MENU_BTN_W = 26;
+constexpr int MENU_X = 4;
+constexpr int MENU_Y = PANEL_H;
+constexpr int MENU_W = 132;
+constexpr int MENU_PAD = 2;
+constexpr int MENU_ITEM_H = 24;
+constexpr int MENU_ITEMS = 2; /* 0 = Reboot, 1 = Exit */
+constexpr int MENU_H = MENU_PAD * 2 + MENU_ITEM_H * MENU_ITEMS;
+constexpr int MENU_SHADOW = 3;
+constexpr int MENU_ICON = 12; /* the button's square, side in pixels */
+
+/* A square with a hairline of its own: filled, then outlined one pixel
+ * wider than the fill, so the two colours are both visible and the glyph
+ * reads at panel size. The button draws it in the normal colours and
+ * swaps fill and rule when the menu is down. */
+void draw_menu_icon(int ox, int oy, int size, uint8_t fill, uint8_t rule)
+{
+    using namespace vnu::vgfx;
+    fill_rect(ox, oy, size, size, fill);
+    rect(ox, oy, size, size, rule);
+}
+
+/* Which item a press at (mx, my) is on: -1 for neither, 0 for Reboot, 1
+ * for Exit. `in_box` reports whether the press was on the pull-down at
+ * all (its body plus the shadow it drops), which is what lets a press on
+ * the menu's own padding be spent dismissing it rather than falling
+ * through to whatever it was drawn over. */
+int menu_item_at(int mx, int my, bool& in_box)
+{
+    in_box = mx >= MENU_X && mx < MENU_X + MENU_W + MENU_SHADOW &&
+             my >= MENU_Y && my < MENU_Y + MENU_H + MENU_SHADOW;
+    if (!in_box)
+        return -1;
+    for (int i = 0; i < MENU_ITEMS; ++i) {
+        int iy = MENU_Y + MENU_PAD + i * MENU_ITEM_H;
+        if (my >= iy && my < iy + MENU_ITEM_H)
+            return i;
+    }
+    return -1;
+}
+
+void draw_menu()
+{
+    using namespace vnu::vgfx;
+    /* A few pixels of shadow, then the panel itself: white with a black
+     * hairline and a rule between the items, the way the classic menus
+     * were drawn. */
+    fill_rect(MENU_X + MENU_SHADOW, MENU_Y + MENU_SHADOW, MENU_W, MENU_H, COLOR_DGRAY);
+    fill_rect(MENU_X, MENU_Y, MENU_W, MENU_H, COLOR_WHITE);
+    rect(MENU_X, MENU_Y, MENU_W, MENU_H, COLOR_BLACK);
+    static const char* const items[MENU_ITEMS] = {"Reboot", "Exit"};
+    for (int i = 0; i < MENU_ITEMS; ++i) {
+        int iy = MENU_Y + MENU_PAD + i * MENU_ITEM_H;
+        if (i)
+            hline(MENU_X + 1, iy, MENU_W - 2, COLOR_LGRAY);
+        draw_string(MENU_X + 10, iy + 4, items[i], COLOR_BLACK);
+    }
+}
 
 /* Set when a resolution change happened while the desktop was up, so the
  * event loop can re-place what it owns (window geometry, the cursor)
@@ -898,18 +967,17 @@ int layout_panel(PBtn* out, int focused, const vnu::apps::AppEntry* apps, int ap
     int n = 0;
     int y = BTN_PAD_Y;
 
-    /* --- Left cluster --- */
+    /* --- Left cluster ---
+     *
+     * The system menu button, then the running-app list. The two session
+     * commands live inside the pull-down now, so the strip starts with
+     * the icon and goes straight to the windows. */
     int x = 6;
 
-    const char* exit_label = "Exit";
-    int w2 = text_width(exit_label) + 10;
-    out[n++] = {x, y, w2, BTN_H, PB::Exit, -1};
-    x += w2 + 4;
+    out[n++] = {x, y, MENU_BTN_W, BTN_H, PB::Menu, -1};
+    x += MENU_BTN_W + 6;
 
-    const char* reb_label = "Reboot";
-    w2 = text_width(reb_label) + 10;
-    out[n++] = {x, y, w2, BTN_H, PB::Reboot, -1};
-    x += w2 + 4;
+    int w2 = 0; /* a text button's width, computed where it is used */
 
     /* Running-app list: one button per open window ("active windows").
      * Known /apps/ entries get a square icon tile; anything else falls
@@ -960,7 +1028,8 @@ int hit_panel(const PBtn* out, int n, int mx, int my)
     return -1;
 }
 
-void draw_panel(const PBtn* out, int n, const vnu::apps::AppEntry* apps, int app_count)
+void draw_panel(const PBtn* out, int n, const vnu::apps::AppEntry* apps, int app_count,
+                bool menu_open)
 {
     using namespace vnu::vgfx;
     fill_rect(0, 0, width(), PANEL_H, COLOR_LGRAY);
@@ -987,16 +1056,19 @@ void draw_panel(const PBtn* out, int n, const vnu::apps::AppEntry* apps, int app
             line(b.x + 4, b.y + 4, b.x + b.w - 5, b.y + b.h - 5, COLOR_WHITE);
             line(b.x + b.w - 5, b.y + 4, b.x + 4, b.y + b.h - 5, COLOR_WHITE);
             break;
-        case PB::Reboot:
-        case PB::Exit:
-            fill_rect(b.x, b.y, b.w, b.h, COLOR_DGRAY);
-            hline(b.x, b.y, b.w, COLOR_WHITE);
-            vline(b.x, b.y, b.h, COLOR_WHITE);
-            hline(b.x, b.y + b.h - 1, b.w, COLOR_BLACK);
-            vline(b.x + b.w - 1, b.y, b.h, COLOR_BLACK);
-            draw_string(b.x + 5, b.y + 5, b.kind == PB::Reboot ? "Reboot" : "Exit",
-                        COLOR_WHITE);
+        case PB::Menu: {
+            /* The icon sits on the bare panel, with no bevel of its own;
+             * while the menu is down the button is inverted so the one
+             * reading as a press is the one that is open. */
+            const bool on = menu_open;
+            if (on)
+                fill_rect(b.x, b.y, b.w, b.h, COLOR_DGRAY);
+            draw_menu_icon(b.x + (b.w - MENU_ICON) / 2,
+                           b.y + (b.h - MENU_ICON) / 2, MENU_ICON,
+                           on ? COLOR_WHITE : COLOR_BLACK,
+                           on ? COLOR_BLACK : COLOR_WHITE);
             break;
+        }
         case PB::App: {
             int ai = find_app_by_title(apps, app_count,
                                        vnu::wintask::console(b.handle)
@@ -1307,6 +1379,11 @@ void run(const char* open_app)
     bool have_gfx_press = false;
     bool dnd_active = false;
     int press_gx = 0, press_gy = 0;
+    /* The system menu is up. `shown_menu_open` is what the frame on the
+     * screen holds, so a pass can tell that it opened (damage it) or
+     * closed (put the strip it covered back). */
+    bool menu_open = false;
+    bool shown_menu_open = false;
 
     PBtn panel_btns[24];
     int panel_n = 0;
@@ -1318,7 +1395,9 @@ void run(const char* open_app)
      * the event loop is not where that belongs; a second session starts
      * by declaring itself a first frame, which resets all of it. */
     static Shown shown[MAX_TASKS];
-    static Rect restore[MAX_TASKS + 3];
+    /* One per window, plus the first frame, the pointer box and the
+     * pull-down's own rectangle when it closes. */
+    static Rect restore[MAX_TASKS + 4];
     static bool redraw[MAX_TASKS];
     /* The part of each window that has to be painted because something
      * under it was put back, as a box: empty (w == 0) for a window that
@@ -1441,7 +1520,11 @@ void run(const char* open_app)
                 break;
             }
         } else if (key >= 0) {
-            if (dnd_active && key == 27) {
+            if (menu_open && key == 27) {
+                /* Esc dismisses the pull-down, rather than being passed
+                 * to whatever window has the focus under it. */
+                menu_open = false;
+            } else if (dnd_active && key == 27) {
                 /* Esc cancels an in-flight drag-and-drop. */
                 dnd_active = false;
                 drag_path[0] = 0;
@@ -1498,7 +1581,34 @@ void run(const char* open_app)
                 dnd_active = false;
                 panel_n = layout_panel(panel_btns, focused, apps, app_count);
                 int pb = hit_panel(panel_btns, panel_n, mx, my);
-                if (pb >= 0) {
+                /* The system menu button and its pull-down take the press
+                 * before anything else: the icon toggles the menu, and a
+                 * press while the menu is down picks an item or, on
+                 * anything else, dismisses it. A press on the menu's own
+                 * rectangle is spent doing that; one elsewhere closes the
+                 * menu and then goes on to do its ordinary work. */
+                bool menu_handled = false;
+                if (pb >= 0 && panel_btns[pb].kind == PB::Menu) {
+                    menu_open = !menu_open;
+                    menu_handled = true;
+                } else if (menu_open) {
+                    bool in_box = false;
+                    int item = menu_item_at(mx, my, in_box);
+                    if (item == 0) {
+                        menu_open = false;
+                        reboot_now();
+                        menu_handled = true;
+                    } else if (item == 1) {
+                        menu_open = false;
+                        goto exit_gui;
+                    } else if (in_box) {
+                        menu_open = false;
+                        menu_handled = true;
+                    } else {
+                        menu_open = false;
+                    }
+                }
+                if (!menu_handled && pb >= 0) {
                     const PBtn& b = panel_btns[pb];
                     switch (b.kind) {
                     case PB::Close:
@@ -1509,11 +1619,6 @@ void run(const char* open_app)
                         if (b.handle != NO_TASK)
                             minimized[b.handle] = true;
                         break;
-                    case PB::Reboot:
-                        reboot_now();
-                        break;
-                    case PB::Exit:
-                        goto exit_gui;
                     case PB::App:
                         if (b.handle != NO_TASK) {
                             minimized[b.handle] = false;
@@ -1523,7 +1628,7 @@ void run(const char* open_app)
                     default:
                         break;
                     }
-                } else if (my >= PANEL_H) {
+                } else if (!menu_handled && my >= PANEL_H) {
                     int hit = hit_test_icon(apps, app_count, mx, my);
                     if (hit >= 0)
                         spawn_from_icon(hit);
@@ -1745,6 +1850,10 @@ void run(const char* open_app)
             redraw_panel = true;
             window_list_changed = false;
         }
+        /* The system menu button's face is a function of the menu being down,
+         * so a pass that opens or closes it repaints the strip. */
+        if (shown_menu_open != menu_open)
+            redraw_panel = true;
 
         /* Redraw, as layers, and only where the layer underneath has
          * actually changed (see the damage notes in vga_gfx.h: at 32bpp
@@ -1838,6 +1947,14 @@ void run(const char* open_app)
                 restore[restore_n++] = {old.x, old.y, old.w, old.h};
             }
         }
+
+        /* The pull-down is ground of its own, like a window that came and
+         * went: when it closes, the strip it covered - and the shadow it
+         * dropped - belongs to the desktop again. It never moves while it
+         * is open, so opening needs no restore, only the damage below. */
+        if (shown_menu_open && !menu_open)
+            restore[restore_n++] = Rect{MENU_X, MENU_Y, MENU_W + MENU_SHADOW,
+                                        MENU_H + MENU_SHADOW};
 
         /* Layer 1: the wallpaper, in the regions that are bare. Drawn
          * once when the frame is new and afterwards only here - it is a
@@ -2009,7 +2126,7 @@ void run(const char* open_app)
                 vnu::vgfx::clip_set(repair_panel.x, repair_panel.y,
                                     repair_panel.w, repair_panel.h);
             panel_n = layout_panel(panel_btns, focused, apps, app_count);
-            draw_panel(panel_btns, panel_n, apps, app_count);
+            draw_panel(panel_btns, panel_n, apps, app_count, menu_open);
             if (whole) {
                 vnu::vgfx::damage_add(0, 0, vnu::vgfx::width(), PANEL_H);
             } else {
@@ -2018,6 +2135,21 @@ void run(const char* open_app)
                                       repair_panel.w, repair_panel.h);
             }
         }
+
+        /* Layer 5: the system menu pull-down, over everything but the pointer.
+         * It is painted whenever it is open - a small rectangle, and the
+         * windows it covers change under it from pass to pass - but it is
+         * only *damaged* when it opens. Anything that changes inside its
+         * rectangle is damaged by the layer that changed (a window, the
+         * pointer) and the menu is painted on top afterwards, so an idle
+         * desktop that leaves the menu down is not charged for it. */
+        if (menu_open) {
+            draw_menu();
+            if (!shown_menu_open)
+                vnu::vgfx::damage_add(MENU_X, MENU_Y, MENU_W + MENU_SHADOW,
+                                      MENU_H + MENU_SHADOW);
+        }
+        shown_menu_open = menu_open;
 
         if (dnd_active && drag_path[0]) {
             /* Drag ghost: a little document page riding the cursor, with
