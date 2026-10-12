@@ -1270,6 +1270,8 @@ void init()
     add("/bin/vibecommander", false);
     add("/bin/df", false);
     add("/bin/ping", false);
+    add("/bin/fetch", false);
+    add("/bin/ip", false);
     add("/bin/id", false);
     add("/bin/whoami", false);
     add("/bin/groups", false);

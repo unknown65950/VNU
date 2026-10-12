@@ -316,7 +316,8 @@ from the node table rather than accumulated.
   `-VNU_EIO` (no NIC), `-VNU_EHOSTUNREACH` (ARP resolution failed),
   `-VNU_ETIMEDOUT` (host did not answer in time). Pinging the machine's
   own address returns 0 without sending anything.
-- `netinfo(ebx)` — writes a `vnu_netinfo` struct to the caller's buffer:
+- `netinfo(ebx)` — writes a `vnu_netinfo` struct (defined in
+  `include/vnu/abi.h` and mirrored into vlibc) to the caller's buffer:
   `mac[6]`, `ip`, `mask`, `gw` (all IPs big-endian uint32s) and `up`
   (1 = the kernel NIC is initialized). Returns 0, or `-VNU_EIO` if there
   is no NIC.

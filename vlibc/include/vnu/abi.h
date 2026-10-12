@@ -84,6 +84,21 @@
 #define VNU_SYS_getrusage    74
 #define VNU_SYS_quota        75
 
+/* Out-parameter of VNU_SYS_netinfo: the interface's MAC, its IPv4
+ * address, netmask and default gateway (all IPs big-endian uint32s, the
+ * same byte order ping/connect take) and whether the kernel brought the
+ * NIC up. `ip', `mask' and `gw' are read-only on this system: they are
+ * the fixed addresses of QEMU's slirp user network, so there is no
+ * setter here. Plain fields, the same struct on both sides of the
+ * boundary (the kernel fills its own vnu::net::Info, same layout). */
+struct vnu_netinfo {
+    uint8_t  mac[6]; /* interface MAC address */
+    uint32_t ip;     /* our IPv4, big-endian */
+    uint32_t mask;   /* netmask, big-endian */
+    uint32_t gw;     /* default gateway, big-endian */
+    uint8_t  up;     /* 1 when the NIC is initialized */
+};
+
 /* Per-user storage quota, VNU_SYS_quota: how many bytes of regular
  * files a user owns and how many they may own. GET/SET act on `uid';
  * GET_DEFAULT/SET_DEFAULT read and write the limit a user without an

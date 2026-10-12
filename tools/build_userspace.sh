@@ -73,8 +73,8 @@ VASH_SRC="$ROOT/vnu/userspace/vash/strbuf.c $ROOT/vnu/userspace/vash/cmd.c $ROOT
 "$VCC" "$ROOT/vnu/userspace/gui/play.c" "$ROOT/vnu/userspace/libwav/wav.c" -o "$ROOT/sysroot/bin/play"
 # coreutils: one separate binary per command (no multi-call applet).
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
-         wc head tail grep sort cp mv basename dirname seq df ping \
-         wallpaper nohup; do
+         wc head tail grep sort cp mv basename dirname seq df ping ip \
+         fetch wallpaper nohup; do
   "$VCC" "$ROOT/vnu/userspace/vibecoreutils/$c.c" -o "$ROOT/sysroot/bin/$c"
 done
 # imagine lives under cli/ rather than vibecoreutils/, so it is built here
@@ -141,8 +141,8 @@ embed "$ROOT/sysroot/bin/vsshd" vsshd
 embed "$ROOT/sysroot/lib/crt0.o" lib_crt0
 embed "$ROOT/sysroot/lib/libvlibc.a" lib_vlibc
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
-         wc head tail grep sort cp mv basename dirname seq df ping \
-         wallpaper imagine nohup; do
+         wc head tail grep sort cp mv basename dirname seq df ping ip \
+         fetch wallpaper imagine nohup; do
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
 for c in id whoami groups useradd passwd su sysctl quota; do

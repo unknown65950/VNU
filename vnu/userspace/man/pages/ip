@@ -1,0 +1,35 @@
+NAME
+    ip - show the network interface and its addressing
+
+SYNOPSIS
+    ip [OBJECT]
+
+DESCRIPTION
+    Shows the addressing of the machine's network interface, eth0.
+    With no OBJECT, or with addr, it prints the link state, the MAC
+    address and the IPv4 address with its netmask and broadcast
+    address. link prints only the link and MAC; route prints the
+    default gateway and the on-link route.
+
+    OBJECT may be abbreviated the way iproute2 abbreviates it: a for
+    addr, l for link, r for route.
+
+    The address, netmask and gateway are those of QEMU's slirp user
+    network (10.0.2.15/24, gateway 10.0.2.2) and are fixed by the
+    kernel; ip reports them, it does not change them. The interface
+    counters are in /proc/net/dev.
+
+OBJECT
+    addr (a)     interface address (default)
+    link (l)     link layer: state and MAC address
+    route (r)    routing table
+
+FILES
+    /proc/net/dev   interface byte and packet counters
+
+EXIT STATUS
+    0 on success, 1 on a bad object or when there is no network
+    interface.
+
+SEE ALSO
+    ping(1), fetch(1)

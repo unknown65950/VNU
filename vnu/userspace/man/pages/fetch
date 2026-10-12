@@ -1,0 +1,40 @@
+NAME
+    fetch - fetch a URL over HTTP or HTTPS
+
+SYNOPSIS
+    fetch [-o FILE] URL
+
+DESCRIPTION
+    Fetches URL and prints the response body. Both http:// and
+    https:// work; https:// runs a TLS 1.2 handshake through the
+    system's TLS client, with SNI from the host name. A dotted-quad
+    host is used as-is, anything else resolves through /etc/hosts
+    first, then DNS (nameservers from /etc/resolv.conf, default
+    1.1.1.1). Up to five redirects are followed.
+
+    The request is HTTP/1.0 with Connection: close, so the body runs
+    to the server's close. Status codes outside 2xx are reported on
+    standard error but the body is still printed.
+
+    Encryption is real but trust is not verified: the server's
+    certificate chain is not checked against a trust store (the TLS
+    library leaves that TODO), so https:// here proves little about
+    who is on the other end.
+
+OPTIONS
+    -o FILE    write the body to FILE instead of standard output
+
+EXAMPLES
+    fetch http://example.com/
+    fetch https://example.com/ -o /tmp/page.html
+
+FILES
+    /etc/hosts        static names, consulted before DNS
+    /etc/resolv.conf  nameservers, one per line
+
+EXIT STATUS
+    0 when the transfer completed, 1 on a bad URL, a DNS, TCP or TLS
+    failure, or a truncated response.
+
+SEE ALSO
+    ping(1)

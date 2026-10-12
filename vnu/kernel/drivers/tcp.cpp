@@ -122,6 +122,10 @@ struct TcpSock {
 
 TcpSock g_socks[MAX_SOCKS];
 
+/* Next ephemeral local port to hand a fresh socket; each connect() gets
+ * a different one so a just-closed four-tuple is not immediately reused. */
+uint16_t g_ephemeral = 49151;
+
 void put_be16(uint8_t* p, uint16_t v)
 {
     p[0] = static_cast<uint8_t>(v >> 8);
@@ -591,8 +595,26 @@ void input_packet(uint32_t src_ip, const uint8_t* f, uint16_t frame_len,
     const uint8_t* pay = f + 34 + tcp_hdr_len;
     uint32_t paylen = static_cast<uint32_t>(ip_len) - 20u - static_cast<uint32_t>(tcp_hdr_len);
 
-    /* SYN goes to the listener path, not to an existing socket. */
+    /* SYN goes to the listener path, not to an existing socket — with
+     * one exception: our own handshake replies come back with SYN set
+     * too. A SYN-ACK for a socket still in ST_SYN_SENT completes our
+     * connect; routing it to the listener below would spawn nothing
+     * (no listener on an ephemeral port) and answer RST, so an
+     * outgoing connection could never complete. */
     if (flags & FLAG_SYN) {
+        int sock = find_peer_sock(src_ip, sport, dport);
+        if (sock >= 0 && g_socks[sock].state == ST_SYN_SENT) {
+            if ((flags & (FLAG_SYN | FLAG_ACK)) == (FLAG_SYN | FLAG_ACK))
+                handle_syn_ack(g_socks[sock], seq, ackno, f + 34,
+                               tcp_hdr_len, window);
+            return;
+        }
+        if (flags & FLAG_ACK) {
+            /* Stray SYN-ACK for no connecting socket: refuse it like
+             * a SYN for a closed port. */
+            send_reset(src_ip, f + 6, dport, sport, seq);
+            return;
+        }
         handle_incoming_syn(src_ip, f + 6, sport, dport, seq, window,
                             f + 34, tcp_hdr_len);
         return;
@@ -683,7 +705,28 @@ int socket_open(int family, int type)
         if (!g_socks[i].used) {
             g_socks[i] = TcpSock{}; /* zero-initialize */
             g_socks[i].used = true;
-            g_socks[i].lport = static_cast<uint16_t>(49152u + 7u * i);
+            /* A fresh local port for every socket, not one tied to the
+             * slot index: a connection that just closed leaves the peer
+             * holding the four-tuple in TIME_WAIT, and reusing the same
+             * source port at once makes the next connect look like a
+             * stale duplicate (the peer resets or drops the SYN). Walk
+             * the ephemeral range and skip ports another live socket
+             * already owns. */
+            for (;;) {
+                g_ephemeral = static_cast<uint16_t>(g_ephemeral + 1);
+                if (g_ephemeral < 49152)
+                    g_ephemeral = 49152;
+                bool taken = false;
+                for (int j = 0; j < MAX_SOCKS; ++j)
+                    if (j != i && g_socks[j].used &&
+                        g_socks[j].lport == g_ephemeral) {
+                        taken = true;
+                        break;
+                    }
+                if (!taken)
+                    break;
+            }
+            g_socks[i].lport = g_ephemeral;
             return i;
         }
     }

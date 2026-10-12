@@ -84,6 +84,20 @@
 #define VNU_SYS_getrusage    74
 #define VNU_SYS_quota        75
 
+/* Out-parameter of VNU_SYS_netinfo: the interface MAC plus the IPv4
+ * address, netmask and default gateway. IPs are big-endian uint32s, the
+ * same byte order the ping/connect syscalls take; `up' is 1 once the
+ * NIC is initialized. Plain fields, so this is the same struct on both
+ * sides of the boundary (the kernel fills its own vnu::net::Info, which
+ * has the same layout). */
+struct vnu_netinfo {
+    uint8_t  mac[6];
+    uint32_t ip;
+    uint32_t mask;
+    uint32_t gw;
+    uint8_t  up;
+};
+
 /* Out-parameter of VNU_SYS_times. All four fields are in units of the
  * scheduler's 100 Hz tick (CLK_TCK 100); the syscall's return value is
  * the tick count since boot. The kernel runs every process at privilege

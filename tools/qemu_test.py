@@ -486,6 +486,20 @@ SUITE = [
     ("proc-net-dev-counts", "cat /proc/net/dev | grep eth0",
      [r"^\s*eth0:[1-9]\d* [1-9]\d* 0 0 0 0 0 0 [1-9]\d* [1-9]\d* 0 0 0 0 0 0$"],
      []),
+    # The NIC and its addressing. `ip' reads the interface from the
+    # netinfo syscall; the fetch tests are a function below (run_net),
+    # because reaching a server needs a host process to serve it.
+    ("ip-addr", "ip addr",
+     [r"^1: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP>$",
+      r"^    link/ether ([0-9a-f]{2}:){5}[0-9a-f]{2}$",
+      r"^    inet 10\.0\.2\.15/24 brd 10\.0\.2\.255 scope global eth0$"],
+     []),
+    ("ip-link", "ip link",
+     [r"^1: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP>$",
+      r"^    link/ether ([0-9a-f]{2}:){5}[0-9a-f]{2}$"], []),
+    ("ip-route", "ip route",
+     [r"^default via 10\.0\.2\.2 dev eth0$",
+      r"^10\.0\.2\.0/24 dev eth0 scope link src 10\.0\.2\.15$"], []),
     ("uname-all", "uname -a",
      [r"^VNU vnu 0\.7\.0 Canyon \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} i386 "],
      []),
@@ -623,6 +637,13 @@ SUITE = [
      [r"press h for help"]),
     ("man-hostname-text", "cat /tmp/man-hostname.out",
      [r"^NAME$", r"hostname -", r"/etc/hostname"], []),
+    ("man-fetch", "man fetch > /tmp/man-fetch.out", [],
+     [r"press h for help"]),
+    ("man-fetch-text", "cat /tmp/man-fetch.out",
+     [r"^NAME$", r"fetch -", r"/etc/resolv\.conf"], []),
+    ("man-ip", "man ip > /tmp/man-ip.out", [], [r"press h for help"]),
+    ("man-ip-text", "cat /tmp/man-ip.out",
+     [r"^NAME$", r"ip -", r"/proc/net/dev"], []),
     # `install` is a `vnu` subcommand now, so it has no page of its own.
     ("man-no-install", "man install",
      [r"^man: no manual page for install$"], []),
@@ -868,6 +889,100 @@ def run_suite(guest, cases, result, verbose, timeout, boot_timeout=120.0):
             continue
         check(name, output, expects, forbids, result, verbose)
     return result
+
+
+def run_net(guest, result, verbose, timeout=60.0):
+    """fetch, end to end.
+
+    The shell cases cover the interface and its addressing; this proves
+    the wire. A tiny HTTP server started here on the host is the first
+    target: the guest reaches it at 10.0.2.2, the address slirp gives the
+    host, so DNS is skipped and the whole path - ARP, TCP out, the
+    request, the body, the redirect through `-o' - is exercised without
+    leaving the machine. The real internet is the second: 1.1.1.1 by
+    ICMP, and example.com by name over HTTP and HTTPS (a full TLS 1.2
+    handshake). Those are skipped, not failed, when the host itself has
+    no egress or no working resolver - slirp resolves the guest's names
+    through the host resolver, and a host without DNS says nothing about
+    the guest.
+
+    A function rather than SUITE rows because the local target has to be
+    alive around the guest typing at it.
+    """
+    root = tempfile.mkdtemp(prefix="vnu-net-")
+    srv = None
+    try:
+        with open(os.path.join(root, "hello.txt"), "w") as fh:
+            fh.write("hello-from-host\n")
+        probe = socket.socket()
+        port = 0
+        try:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        finally:
+            probe.close()
+        srv = subprocess.Popen(
+            [sys.executable, "-m", "http.server", str(port),
+             "--bind", "127.0.0.1"],
+            cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(40):
+            try:
+                probe = socket.create_connection(("127.0.0.1", port), 0.25)
+                probe.close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        try:
+            out, _ = guest.sh(
+                "fetch http://10.0.2.2:%d/hello.txt" % port, timeout)
+            check("net-host-fetch", out, [r"^hello-from-host$"], [],
+                  result, verbose)
+            guest.sh("fetch -o /tmp/hello.txt http://10.0.2.2:%d/hello.txt"
+                     % port, timeout)
+            out, _ = guest.sh("cat /tmp/hello.txt", timeout)
+            check("net-host-file", out, [r"^hello-from-host$"], [],
+                  result, verbose)
+        except (TimeoutError, RuntimeError) as exc:
+            result.failed.append(("net-host", "", [str(exc)]))
+            print("FAIL %-18s %s" % ("net-host", exc))
+    finally:
+        if srv is not None:
+            srv.terminate()
+            try:
+                srv.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                srv.kill()
+        shutil.rmtree(root, ignore_errors=True)
+
+    try:
+        conn = socket.create_connection(("1.1.1.1", 80), 3.0)
+        conn.close()
+    except OSError as exc:
+        print("skip %-18s host has no egress (%s)" % ("net-internet", exc))
+        return
+    try:
+        out, _ = guest.sh("ping 1.1.1.1 1", timeout)
+        check("net-internet-ping", out,
+              [r"1 packets transmitted, 1 received, 0 lost"], [],
+              result, verbose)
+    except (TimeoutError, RuntimeError) as exc:
+        result.failed.append(("net-internet-ping", "", [str(exc)]))
+        print("FAIL %-18s %s" % ("net-internet-ping", exc))
+
+    try:
+        socket.gethostbyname("example.com")
+    except OSError as exc:
+        print("skip %-18s host cannot resolve a name (%s)"
+              % ("net-internet", exc))
+        return
+    try:
+        out, _ = guest.sh("fetch http://example.com/", timeout)
+        check("net-fetch-http", out, [r"Example Domain"], [], result, verbose)
+        out, _ = guest.sh("fetch https://example.com/", timeout)
+        check("net-fetch-https", out, [r"Example Domain"], [], result, verbose)
+    except (TimeoutError, RuntimeError) as exc:
+        result.failed.append(("net-fetch", "", [str(exc)]))
+        print("FAIL %-18s %s" % ("net-fetch", exc))
 
 
 # The status bar the man pager draws on the last console row, and the white
@@ -4012,6 +4127,8 @@ def main():
         for t in SUITE:
             name, command = t[0], t[1]
             print("%-18s %s" % (name, command))
+        print("%-18s %s" % ("net",
+                            "fetch from a host server, then the internet"))
         print("%-18s %s" % ("console-screen",
                             "text prompt on the display (screendump)"))
         print("%-18s %s" % ("man-pager", "man vcc (keys, then q)"))
@@ -4045,7 +4162,7 @@ def main():
 
     # The interactive checks are functions, not SUITE rows, so a filter
     # that names one of them selects no shell case and still runs.
-    interactive = ("console-screen", "man-pager", "ctrl-c",
+    interactive = ("net", "console-screen", "man-pager", "ctrl-c",
                    "prefs-wallpaper", "imagine-screen", "gfx-surface",
                    "gfx-resolution", "gfx-damage", "gfx-canvas-resize",
                    "gfx-drag-frame", "occlusion", "system-menu",
@@ -4065,6 +4182,9 @@ def main():
         if not args.install_only and not args.wizard_only:
             with Guest(iso=args.iso, gpu=args.gpu, log=args.log) as guest:
                 run_suite(guest, cases, result, args.verbose, args.timeout)
+                if not args.only or any(sel in "net"
+                                        for sel in args.only):
+                    run_net(guest, result, args.verbose, args.timeout)
                 if not args.only or any(sel in "console-screen"
                                         for sel in args.only):
                     run_console_screen(guest, result, args.verbose,
