@@ -7,18 +7,20 @@
 // `install(drive, size_mib, hostname)` turns the ATA disk at index
 // `drive` (see ata.h / disk_count()) into a bootable VNU disk: an MBR +
 // GRUB core image are written to the first sectors, and a fresh FAT16
-// partition is created at LBA 2048 holding /boot/kernel.elf (the running
+// boot partition is created at LBA 2048 holding /boot/kernel.elf (the running
 // kernel, obtained from the Multiboot2 module GRUB loaded alongside it)
-// and /boot/grub/grub.cfg. `size_mib` is the partition size in MiB; 0
-// means "as much of the disk / the FAT16 limit allows". After it
-// returns 0 the disk can be booted on its own, with no CD.
+// and /boot/grub/grub.cfg. `size_mib` is the boot partition size in MiB;
+// 0 splits the usable disk in half. A second FAT16 partition (labelled
+// VNUDATA) takes the rest of the disk for user data; it is empty here
+// and seeded from the RAM defaults on the first boot of that disk.
+// After it returns 0 the disk can be booted on its own, with no CD.
 //
 // `hostname` is the node name the machine should boot with (see
 // vnu/host.h: 1..63 characters of letters, digits, '-', '_' and '.',
 // which vnu::host::valid() checks). It is stamped into a small config
 // record in the gap sector before the partition, so the next boot of
-// that disk can put it back into /etc/hostname - this VFS is RAM-backed
-// and has nowhere else to keep a name across a reboot.
+// that disk can put it back into /etc/hostname - which on an installed
+// disk lives on the data volume and keeps the name across reboots.
 //
 // Returns 0 on success, or a negative errno on failure.
 

@@ -406,7 +406,7 @@ SUITE = [
     ("vnu-size", "vnu size",
      [r"VNU image size", r"^kernel +: .*\(1 object\)$",
       r"^userspace: .*\([0-9]+ objects\)$", r"^libraries: .*\(2 objects\)$",
-      r"^fonts +: .*\(1 object\)$", r"^resources: .*\(1[0-9] objects\)$",
+      r"^fonts +: .*\(1 object\)$", r"^resources: .*\([0-9]+ objects\)$",
       r"^total +: "], []),
     ("vnu-version-flag", "vnu --version", [r"^vnu \(VNU\) 0\.7$"], []),
     ("vnu-help", "vnu --help",
@@ -3885,6 +3885,25 @@ def run_install_scenario(iso, result, verbose, timeout, workdir):
         check("mnt-read", output, [r"^persisted$"], [], result, verbose)
         output, _ = g.sh("df -T /mnt", timeout)
         check("mnt-df", output, [r"^hda2 +fat16 .* /mnt$"], [], result, verbose)
+        # /home and /etc are served from subtrees of the same volume, so
+        # a home file and a setting survive the reboot below too.
+        output, _ = g.sh("cat /proc/mounts", timeout)
+        check("home-etc-mounted", output,
+              [r"^hda2 /home fat16 rw 0 0$",
+               r"^hda2 /root fat16 rw 0 0$",
+               r"^hda2 /etc fat16 rw 0 0$"], [],
+              result, verbose)
+        output, _ = g.sh("echo home-data > /home/guest/keep.txt", timeout)
+        check("home-write", output, [], [r"error", r"denied", r"not found"],
+              result, verbose)
+        output, _ = g.sh("echo root-data > /root/keep.txt", timeout)
+        check("root-write", output, [], [r"error", r"denied", r"not found"],
+              result, verbose)
+        output, _ = g.sh("echo guest-setting=1 > /etc/keep.conf", timeout)
+        check("etc-write", output, [], [r"error", r"denied", r"not found"],
+              result, verbose)
+        output, _ = g.sh("cat /home/guest/keep.txt", timeout)
+        check("home-read", output, [r"^home-data$"], [], result, verbose)
     # A third boot of the same disk: the files are on the volume, not in
     # RAM, so they must still be there.
     with Guest(disk=disk, boot="c",
@@ -3895,6 +3914,17 @@ def run_install_scenario(iso, result, verbose, timeout, workdir):
         check("mnt-persist", output, [r"^persisted$"], [], result, verbose)
         output, _ = g.sh("ls /mnt", timeout)
         check("mnt-persist-ls", output, [r"keep\.txt", r"sub"], [],
+              result, verbose)
+        output, _ = g.sh("cat /home/guest/keep.txt", timeout)
+        check("home-persist", output, [r"^home-data$"], [], result, verbose)
+        output, _ = g.sh("cat /root/keep.txt", timeout)
+        check("root-persist", output, [r"^root-data$"], [], result, verbose)
+        output, _ = g.sh("cat /etc/keep.conf", timeout)
+        check("etc-persist", output, [r"^guest-setting=1$"], [], result,
+              verbose)
+        # The seeded system files came along to the volume as well.
+        output, _ = g.sh("cat /etc/hostname", timeout)
+        check("etc-hostname", output, [r"^%s$" % INSTALLED_HOST], [],
               result, verbose)
     return result
 

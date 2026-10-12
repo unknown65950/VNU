@@ -267,8 +267,9 @@ static inline int install_wizard(void)
     for (;;) {
         banner("Choose the partition size");
         ue_out("How much of the disk the boot partition should take, in MiB.\n");
-        ue_out("The rest becomes a data volume mounted at /mnt, where\n");
-        ue_out("files survive a reboot. Leave empty to split the disk in\n");
+        ue_out("The rest becomes a data volume: it is mounted at /mnt and\n");
+        ue_out("carries /home, /root and /etc, where files and settings\n");
+        ue_out("survive a reboot. Leave empty to split the disk in\n");
         ue_out("half (the boot half capped at what FAT16 allows).\n\n");
         ue_out("Size in MiB: ");
         char buf[16];

@@ -114,10 +114,18 @@ uint32_t cluster_to_sector(Fs& fs, uint32_t cluster)
 
 bool fat_get(Fs& fs, uint32_t cluster, uint16_t* out)
 {
+    /* A private sector buffer, not the shared fs.sec scratch: chain
+     * walks run between a caller staging data in fs.sec (a directory
+     * entry to store, a partial sector to patch) and writing it back,
+     * and reusing fs.sec here would silently replace that staged data
+     * with FAT content. This stayed hidden while directories fit in
+     * one cluster (chain_at with n=0 never reads the FAT) and bit the
+     * first directory that grew past it. */
     uint32_t off = cluster * 2;
-    if (!dev_read(fs, fs.first_fat + off / SECTOR, 1, fs.sec))
+    uint8_t tmp[SECTOR];
+    if (!dev_read(fs, fs.first_fat + off / SECTOR, 1, tmp))
         return false;
-    *out = rd16(fs.sec + off % SECTOR);
+    *out = rd16(tmp + off % SECTOR);
     return true;
 }
 
@@ -732,7 +740,10 @@ bool mark_deleted(Fs& fs, uint32_t dir_cluster, uint32_t pos)
 }
 
 /* Append `count` 32-byte entries at the end of a directory, extending a
- * cluster-backed directory by one cluster when it is full. */
+ * cluster-backed directory as needed to hold the whole batch. Room for
+ * every entry is secured before the first one is written, so a name that
+ * needs several slots (an LFN) either lands complete or not at all —
+ * never as a dangling long-name half with no short entry behind it. */
 bool dir_append(Fs& fs, uint32_t dir_cluster, const uint8_t* entries, uint32_t count)
 {
     uint32_t total = dir_total_bytes(fs, dir_cluster);
@@ -748,7 +759,7 @@ bool dir_append(Fs& fs, uint32_t dir_cluster, const uint8_t* entries, uint32_t c
             break;
         pos += 32;
     }
-    if (pos + 32 > total) {
+    while (pos + count * 32 > total) {
         if (dir_cluster == 0)
             return false;
         uint32_t len = 0;
@@ -763,8 +774,6 @@ bool dir_append(Fs& fs, uint32_t dir_cluster, const uint8_t* entries, uint32_t c
         total += fs.spc * SECTOR;
     }
     for (uint32_t i = 0; i < count; ++i) {
-        if (pos + 32 > total)
-            return false;
         if (!write_entry_at(fs, dir_cluster, pos, entries + i * 32))
             return false;
         pos += 32;

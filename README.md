@@ -50,7 +50,8 @@ root@vnu:~$ man ls
   can write itself (GRUB + partition) to a disk, together with the host name
   the machine should boot with (see `/etc/hostname`). Every drive and partition
   is a block device under `/dev` (`hda`, `hda1`, ...), and the data partition
-  `vnu install` creates is auto-mounted at `/mnt`, so user files there survive a
+  `vnu install` creates is auto-mounted at `/mnt`, with `/home`, `/root` and
+  `/etc` served from its subtrees — so user files and settings survive a
   reboot while the rest of the root stays RAM-backed.
 - **initial ramdisk**: `tools/build_initrd.sh` packs `vnu/initrd/` into a
   POSIX ustar archive, GRUB loads it as a Multiboot2 module and the kernel

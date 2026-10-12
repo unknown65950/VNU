@@ -78,14 +78,19 @@ VNU INSTALL
 
     A second FAT16 partition follows the boot one. It is the data
     volume, labelled VNUDATA, and the kernel mounts it at /mnt when the
-    disk boots, so files written under /mnt survive a reboot. The boot
-    partition takes SIZE_MIB, or half the usable disk when SIZE_MIB is
-    omitted; everything left is the data volume, and a disk too small
-    for both gets only the boot volume. /mnt holds ordinary files and
-    directories, but they are FAT16: they carry no owner and no
-    permission bits, so chmod and chown on them do nothing, and names
-    follow the FAT16 rules. The volumes appear in /proc/mounts and the
-    block devices behind them under /dev (hda, hda1, hda2, ...).
+    disk boots, so files written under /mnt survive a reboot. The home
+    directories and the system settings live there too: /home, /root
+    and /etc are served from the volume's home, root and etc subtrees
+    (seeded from the RAM defaults on a fresh disk), so user files and
+    configuration survive a reboot while the rest of the root stays a
+    RAM file system. The boot partition takes SIZE_MIB, or half the
+    usable disk when SIZE_MIB is omitted; everything left is the data
+    volume, and a disk too small for both gets only the boot volume.
+    /mnt holds ordinary files and directories, but they are FAT16: they
+    carry no owner and no permission bits, so chmod and chown on them
+    do nothing, and names follow the FAT16 rules. The volumes appear in
+    /proc/mounts and the block devices behind them under /dev (hda,
+    hda1, hda2, ...).
 
 EXAMPLES
     vnu

@@ -219,6 +219,53 @@ int main(int argc, char** argv)
               "readdir root lists every entry");
     }
 
+    /* A directory grown past its first cluster: forty small files in
+     * one subdirectory, every one found again with its own content.
+     * (A chain walk used to load FAT content into the shared sector
+     * scratch, clobbering the staged entry for anything past the first
+     * cluster, so the 29th file came back as garbage.) Half the names
+     * need LFN entries, so multi-slot batches also cross the growth
+     * point: a batch either lands complete or not at all. */
+    {
+        check(mkdir(fs, 0, "many"), "mkdir many");
+        uint32_t many = 0;
+        check(resolve(fs, "many", &many, &size, &attr) && (attr & ATTR_DIR),
+              "resolve many");
+        bool stored = true;
+        for (int i = 0; i < 40; ++i) {
+            char name[32];
+            if (i % 2)
+                std::snprintf(name, sizeof(name), "f%02d", i);
+            else
+                std::snprintf(name, sizeof(name), "long-file-%02d.txt", i);
+            char data[64];
+            std::snprintf(data, sizeof(data), "payload-%d", i);
+            uint32_t len = static_cast<uint32_t>(std::strlen(data));
+            stored = stored && write(fs, many, name, 0, data, len, &got) &&
+                     got == len;
+        }
+        check(stored, "write 40 files into many/");
+        bool back_ok = true;
+        for (int i = 0; i < 40; ++i) {
+            char name[32];
+            if (i % 2)
+                std::snprintf(name, sizeof(name), "f%02d", i);
+            else
+                std::snprintf(name, sizeof(name), "long-file-%02d.txt", i);
+            char data[64];
+            std::snprintf(data, sizeof(data), "payload-%d", i);
+            uint32_t len = static_cast<uint32_t>(std::strlen(data));
+            char in[64];
+            std::memset(in, 0, sizeof(in));
+            back_ok = back_ok &&
+                      lookup(fs, many, name, &clu, &size, &attr) &&
+                      size == len &&
+                      read(fs, many, name, 0, in, sizeof(in), &got) &&
+                      got == len && std::memcmp(in, data, len) == 0;
+        }
+        check(back_ok, "all 40 files resolve with their own content");
+    }
+
     /* truncate() past and below the current end. */
     check(truncate(fs, 0, "big.bin", 0), "truncate big.bin to 0");
     check(lookup(fs, 0, "big.bin", &clu, &size, &attr) && size == 0, "big.bin is empty");

@@ -128,11 +128,15 @@ int strlen_local(const char* s)
  * A descriptor on a mounted file carries `mount' (one-based index into
  * this table), the cluster of the directory it lives in, its name there
  * and its size (see struct File); the RAM `node' field is -1 for it. */
-constexpr int MAX_MOUNTS = 4;
+constexpr int MAX_MOUNTS = 8;
 
 struct Mount {
     bool used;
     char path[PATH_CAP];
+    /* The subtree of the volume this mount serves, volume-relative
+     * ("" = the whole volume, as for /mnt). A /home mount over the
+     * data volume uses "home", so /home/guest/x is volume home/guest/x. */
+    char subdir[32];
     int blk;
     vnu::fat16::Fs fs;
     uint8_t scratch[vnu::fat16::SECTOR];
@@ -199,21 +203,57 @@ const char* split_parent(const char* rel, char* parent, uint32_t cap)
     return rel + slash + 1;
 }
 
-/* Resolve an in-mount directory path to its first cluster (0 = root). */
+/* The volume-relative path for an in-mount path: the mount's subtree
+ * root joined to it ("home/guest/x" for rel "guest/x" under a /home
+ * mount; the rel unchanged for a whole-volume mount like /mnt). */
+void mount_vol_path(Mount& m, const char* rel, char* out, uint32_t cap)
+{
+    if (cap == 0)
+        return;
+    uint32_t k = 0;
+    for (uint32_t i = 0; m.subdir[i] && k + 1 < cap; ++i)
+        out[k++] = m.subdir[i];
+    if (k != 0 && rel[0] && k + 1 < cap)
+        out[k++] = '/';
+    for (uint32_t i = 0; rel[i] && k + 1 < cap; ++i)
+        out[k++] = rel[i];
+    out[k] = 0;
+}
+
+/* Resolve an in-mount directory path to its first cluster (0 = the
+ * volume root). The mount's subtree is composed first, so "" means the
+ * subtree root for a subdir mount and the volume root for /mnt. */
 bool mount_dir_cluster(Mount& m, const char* rel, uint32_t* clu)
 {
-    if (!rel[0]) {
+    char vol[128];
+    mount_vol_path(m, rel, vol, sizeof(vol));
+    if (!vol[0]) {
         *clu = 0;
         return true;
     }
     uint32_t c = 0, size = 0;
     uint8_t attr = 0;
-    if (!vnu::fat16::resolve(m.fs, rel, &c, &size, &attr))
+    if (!vnu::fat16::resolve(m.fs, vol, &c, &size, &attr))
         return false;
     if (!(attr & vnu::fat16::ATTR_DIR))
         return false;
     *clu = c;
     return true;
+}
+
+/* True when `path` lies anywhere below `prefix` (any depth): e.g.
+ * "/etc/vnu/config" is under "/etc" but "/etc" itself is not. Unlike
+ * is_prefix_child, which only matches direct children, this is the
+ * subtree test a migration needs. */
+bool is_under(const char* prefix, const char* path)
+{
+    if (same(prefix, path))
+        return false;
+    const int pl = strlen_local(prefix);
+    for (int i = 0; i < pl; ++i)
+        if (path[i] != prefix[i])
+            return false;
+    return path[pl] == '/';
 }
 
 /* Resolve relative path against cwd into out (absolute-ish). Also
@@ -1356,6 +1396,92 @@ void init()
     add("/mnt", true);
 }
 
+/* mkdir -p over a volume: every component of the volume-relative
+ * directory `dir` exists afterwards ("" = the root, already there).
+ * Existing directories are kept, so this is safe to run over user data. */
+bool vol_mkdir_p(Mount& m, const char* dir)
+{
+    if (!dir[0])
+        return true;
+    uint32_t c = 0, size = 0;
+    uint8_t attr = 0;
+    if (vnu::fat16::resolve(m.fs, dir, &c, &size, &attr))
+        return (attr & vnu::fat16::ATTR_DIR) != 0;
+    char parent[128];
+    const char* leaf = split_parent(dir, parent, sizeof(parent));
+    if (!leaf[0])
+        return false;
+    if (!vol_mkdir_p(m, parent))
+        return false;
+    uint32_t pclu = 0;
+    if (!mount_dir_cluster(m, parent, &pclu))
+        return false;
+    /* Lost the race with nobody (single-threaded boot), but the entry
+     * may still have appeared when a sibling path created it first. */
+    return vnu::fat16::mkdir(m.fs, pclu, leaf) || mount_dir_cluster(m, dir, &c);
+}
+
+/* Seed a fresh data volume from the RAM tree: copy every regular file
+ * and directory below the VFS `prefix` into the volume's `subdir`. A
+ * volume that already has the subtree is left alone, so user files and
+ * settings are never overwritten — and a deleted subtree heals itself
+ * on the next boot from the same RAM defaults. Device nodes and
+ * generated /proc pages have no bytes to copy and are skipped. */
+bool migrate_tree(Mount& vol, const char* subdir, const char* prefix)
+{
+    uint32_t c = 0, size = 0;
+    uint8_t attr = 0;
+    if (vnu::fat16::resolve(vol.fs, subdir, &c, &size, &attr))
+        return (attr & vnu::fat16::ATTR_DIR) != 0;
+    if (!vnu::fat16::mkdir(vol.fs, 0, subdir))
+        return false;
+
+    const int prelen = strlen_local(prefix);
+    for (int i = 0; i < MAX_N; ++i) {
+        Node& n = nodes[i];
+        if (!n.used)
+            continue;
+        if (!is_under(prefix, n.path))
+            continue;
+        if (n.dev != DevKind::None)
+            continue;
+        if (n.synth != SynthKind::None)
+            continue;
+        char full[128];
+        uint32_t k = 0;
+        for (uint32_t q = 0; subdir[q] && k + 1 < sizeof(full); ++q)
+            full[k++] = subdir[q];
+        if (k + 1 < sizeof(full))
+            full[k++] = '/';
+        for (const char* r = n.path + prelen + 1; *r && k + 1 < sizeof(full);
+             ++r)
+            full[k++] = *r;
+        full[k] = 0;
+        if (n.dir) {
+            if (!vol_mkdir_p(vol, full))
+                return false;
+        } else {
+            char parent[128];
+            const char* leaf = split_parent(full, parent, sizeof(parent));
+            if (!vol_mkdir_p(vol, parent))
+                return false;
+            uint32_t pclu = 0;
+            if (!mount_dir_cluster(vol, parent, &pclu))
+                return false;
+            if (!vnu::fat16::create(vol.fs, pclu, leaf))
+                return false;
+            if (n.size != 0 && n.buf) {
+                uint32_t got = 0;
+                if (!vnu::fat16::write(vol.fs, pclu, leaf, 0, n.buf, n.size,
+                                       &got) ||
+                    got != n.size)
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+
 /* Second half of the VFS bring-up, run after the ATA driver has probed
  * the disks. Every drive and partition becomes a block device node under
  * /dev, and the data volume the installer left behind is mounted at
@@ -1415,11 +1541,48 @@ void init_disks()
         Mount& m = mounts[slot];
         m.used = true;
         copy(m.path, "/mnt", PATH_CAP);
+        m.subdir[0] = 0;
         m.blk = i;
         if (!vnu::fat16::mount(m.fs, vnu::blockdev::fat16_device(i), 0,
                                m.scratch)) {
             m.used = false;
             continue;
+        }
+
+        /* The RAM root stays, but home directories and system settings
+         * live on the volume: seed its "home"/"root"/"etc" subtrees from
+         * the RAM defaults on a fresh disk, then serve /home, /root and
+         * /etc from there. A seed that fails (a disk error mid-copy)
+         * falls back to the RAM tree rather than a half-written one. */
+        struct Seed {
+            const char* path;
+            const char* subdir;
+            const char* prefix;
+        };
+        static const Seed seeds[] = {
+            { "/home", "home", "/home" },
+            { "/root", "root", "/root" },
+            { "/etc", "etc", "/etc" },
+        };
+        for (uint32_t s = 0; s < sizeof(seeds) / sizeof(seeds[0]); ++s) {
+            if (!migrate_tree(m, seeds[s].subdir, seeds[s].prefix))
+                continue;
+            int sub = -1;
+            for (int k = 0; k < MAX_MOUNTS; ++k)
+                if (!mounts[k].used) {
+                    sub = k;
+                    break;
+                }
+            if (sub < 0)
+                break;
+            Mount& sm = mounts[sub];
+            sm.used = true;
+            copy(sm.path, seeds[s].path, PATH_CAP);
+            copy(sm.subdir, seeds[s].subdir, sizeof(sm.subdir));
+            sm.blk = i;
+            if (!vnu::fat16::mount(sm.fs, vnu::blockdev::fat16_device(i), 0,
+                                   sm.scratch))
+                sm.used = false;
         }
         break;
     }
@@ -1435,11 +1598,17 @@ int open_mount(Mount& m, const char* rel, uint32_t flags)
     name[0] = 0;
 
     if (!rel[0]) {
-        is_dir = true; /* the mount point is the volume's root */
+        /* The mount point is the subtree root (the volume root for /mnt):
+         * list it, don't assume cluster 0. */
+        is_dir = true;
+        if (!mount_dir_cluster(m, "", &dir_clu))
+            return -VNU_ENOENT;
     } else {
         uint32_t clu = 0;
         uint8_t attr = 0;
-        if (vnu::fat16::resolve(m.fs, rel, &clu, &size, &attr)) {
+        char vol[128];
+        mount_vol_path(m, rel, vol, sizeof(vol));
+        if (vnu::fat16::resolve(m.fs, vol, &clu, &size, &attr)) {
             if (attr & vnu::fat16::ATTR_DIR) {
                 is_dir = true;
                 dir_clu = clu;
@@ -1932,7 +2101,9 @@ int stat(const char* path, vnu::posix::Stat* st)
         if (!is_dir) {
             uint32_t clu = 0;
             uint8_t attr = 0;
-            if (!vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr))
+            char vol[128];
+            mount_vol_path(*m, mrel, vol, sizeof(vol));
+            if (!vnu::fat16::resolve(m->fs, vol, &clu, &size, &attr))
                 return -VNU_ENOENT;
             is_dir = (attr & vnu::fat16::ATTR_DIR) != 0;
         }
@@ -2092,7 +2263,9 @@ int touch(const char* path)
         const char* leaf = split_parent(mrel, parent, PATH_CAP);
         uint32_t clu = 0, size = 0;
         uint8_t attr = 0;
-        if (vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr))
+        char vol[128];
+        mount_vol_path(*m, mrel, vol, sizeof(vol));
+        if (vnu::fat16::resolve(m->fs, vol, &clu, &size, &attr))
             return 0; /* creating is `touch'; it already exists */
         uint32_t dir_clu = 0;
         if (!mount_dir_cluster(*m, parent, &dir_clu))
@@ -2124,7 +2297,9 @@ int mkdir(const char* path)
             return -VNU_EEXIST; /* the mount point is a directory */
         uint32_t clu = 0, size = 0;
         uint8_t attr = 0;
-        if (vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr))
+        char vol[128];
+        mount_vol_path(*m, mrel, vol, sizeof(vol));
+        if (vnu::fat16::resolve(m->fs, vol, &clu, &size, &attr))
             return -VNU_EEXIST;
         char parent[PATH_CAP];
         const char* leaf = split_parent(mrel, parent, PATH_CAP);
@@ -2157,7 +2332,9 @@ int rmdir(const char* path)
         const char* leaf = split_parent(mrel, parent, PATH_CAP);
         uint32_t clu = 0, size = 0;
         uint8_t attr = 0;
-        if (!vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr))
+        char vol[128];
+        mount_vol_path(*m, mrel, vol, sizeof(vol));
+        if (!vnu::fat16::resolve(m->fs, vol, &clu, &size, &attr))
             return -VNU_ENOENT;
         if (!(attr & vnu::fat16::ATTR_DIR))
             return -VNU_ENOTDIR;
@@ -2201,7 +2378,9 @@ int unlink(const char* path)
         const char* leaf = split_parent(mrel, parent, PATH_CAP);
         uint32_t clu = 0, size = 0;
         uint8_t attr = 0;
-        if (!vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr))
+        char vol[128];
+        mount_vol_path(*m, mrel, vol, sizeof(vol));
+        if (!vnu::fat16::resolve(m->fs, vol, &clu, &size, &attr))
             return -VNU_ENOENT;
         if (attr & vnu::fat16::ATTR_DIR)
             return -VNU_EISDIR;
@@ -2376,7 +2555,9 @@ int set_path(const char* path, const char* data, uint32_t len)
             return -VNU_ENOENT;
         uint32_t clu = 0, size = 0;
         uint8_t attr = 0;
-        if (!vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr) &&
+        char vol[128];
+        mount_vol_path(*m, mrel, vol, sizeof(vol));
+        if (!vnu::fat16::resolve(m->fs, vol, &clu, &size, &attr) &&
             !vnu::fat16::create(m->fs, dir_clu, leaf))
             return -VNU_EIO;
         if (!vnu::fat16::truncate(m->fs, dir_clu, leaf, 0))
@@ -2504,7 +2685,9 @@ int chdir(const char* path)
         if (mrel[0] != 0) {
             uint32_t clu = 0, size = 0;
             uint8_t attr = 0;
-            if (!vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr))
+            char vol[128];
+            mount_vol_path(*m, mrel, vol, sizeof(vol));
+            if (!vnu::fat16::resolve(m->fs, vol, &clu, &size, &attr))
                 return -VNU_ENOENT;
             if (!(attr & vnu::fat16::ATTR_DIR))
                 return -VNU_ENOTDIR;
@@ -2552,7 +2735,9 @@ int chmod(const char* path, uint32_t mode)
             return 0;
         uint32_t clu = 0, size = 0;
         uint8_t attr = 0;
-        return vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr)
+        char vol[128];
+        mount_vol_path(*m, mrel, vol, sizeof(vol));
+        return vnu::fat16::resolve(m->fs, vol, &clu, &size, &attr)
                    ? 0
                    : -VNU_ENOENT;
     }
@@ -2580,7 +2765,9 @@ int chown(const char* path, uint32_t uid, uint32_t gid)
             return 0;
         uint32_t clu = 0, size = 0;
         uint8_t attr = 0;
-        return vnu::fat16::resolve(m->fs, mrel, &clu, &size, &attr)
+        char vol[128];
+        mount_vol_path(*m, mrel, vol, sizeof(vol));
+        return vnu::fat16::resolve(m->fs, vol, &clu, &size, &attr)
                    ? 0
                    : -VNU_ENOENT;
     }
