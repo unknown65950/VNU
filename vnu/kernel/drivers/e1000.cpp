@@ -5,6 +5,7 @@
 #include <vnu/pmm.h>
 #include <vnu/abi.h>
 #include <vnu/vfs.h>
+#include <vnu/arch/io.h>
 #include <stdint.h>
 #include "netcore.h"
 
@@ -127,39 +128,25 @@ bool g_dns_done = false;
 long g_dns_rc = -VNU_ENOENT;
 uint32_t g_dns_ip = 0;
 
-/* --- port I/O helpers (PIT clock) --- */
-
-void outb(uint16_t port, uint8_t val)
-{
-    asm volatile("outb %0,%1" : : "a"(val), "Nd"(port));
-}
-
-uint8_t inb(uint16_t port)
-{
-    uint8_t v;
-    asm volatile("inb %1,%0" : "=a"(v) : "Nd"(port));
-    return v;
-}
-
-/* PIT channel 2 (otherwise unused) in square-wave mode with reload 0
- * (64856 ticks per period ≈ 54.9254 ms) as a polling millisecond clock. */
+/* --- PIT channel 2 (otherwise unused) in square-wave mode with reload
+ * 0 (64856 ticks per period ≈ 54.9254 ms) as a polling millisecond clock. */
 volatile uint32_t g_pit_wraps = 0;
 volatile uint32_t g_pit_prev = 0;
 
 void pit_init_ms()
 {
-    outb(0x43, 0xB6); /* ch2, LSB then MSB, mode 3, binary */
-    outb(0x42, 0x00);
-    outb(0x42, 0x00);
+    vnu::arch::io_out8(0x43, 0xB6); /* ch2, LSB then MSB, mode 3, binary */
+    vnu::arch::io_out8(0x42, 0x00);
+    vnu::arch::io_out8(0x42, 0x00);
     g_pit_prev = 0;
     g_pit_wraps = 0;
 }
 
 uint32_t pit_read_count()
 {
-    outb(0x43, 0x80); /* latch counter 2 */
-    uint8_t l = inb(0x42);
-    uint8_t h = inb(0x42);
+    vnu::arch::io_out8(0x43, 0x80); /* latch counter 2 */
+    uint8_t l = vnu::arch::io_in8(0x42);
+    uint8_t h = vnu::arch::io_in8(0x42);
     return static_cast<uint32_t>(l) | (static_cast<uint32_t>(h) << 8);
 }
 

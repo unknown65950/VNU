@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <vnu/arch/cpu.h>
 
 namespace vnu::sync {
 
@@ -8,25 +9,21 @@ namespace vnu::sync {
  * preempt a critical section anyway); the primitives exist because they
  * are what keep the API honest the day an ISR has to touch the same
  * data as a syscall, and because the sleeping Mutex below builds on
- * them. Text-book test-and-set with a full barrier. */
+ * them. Text-book test-and-set with a full barrier; the atomic and the
+ * spin hint come from the architecture layer. */
 struct Spinlock {
     uint32_t held; // 0 = free, 1 = held
 };
 
 inline void spin_lock(Spinlock& l)
 {
-    uint32_t v = 1;
-    asm volatile("lock xchgl %0, %1" : "+r"(v), "+m"(l.held) :: "memory");
-    while (v) {
-        __builtin_ia32_pause();
-        v = 1;
-        asm volatile("lock xchgl %0, %1" : "+r"(v), "+m"(l.held) :: "memory");
-    }
+    while (vnu::arch::atomic_exchange(&l.held, 1u) != 0)
+        vnu::arch::relax();
 }
 
 inline void spin_unlock(Spinlock& l)
 {
-    asm volatile("" :: "m"(l.held) : "memory");
+    vnu::arch::barrier();
     l.held = 0;
 }
 

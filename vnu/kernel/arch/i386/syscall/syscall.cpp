@@ -17,19 +17,8 @@
 #include <vnu/wallpaper.h>
 #include <vnu/vga_gfx.h>
 #include <vnu/trapframe.h>
-
-extern "C" void vnu_debug_putc(char c);
-void vnu_debug_putc(char c)
-{
-    auto inb = [](std::uint16_t p) {
-        std::uint8_t v;
-        asm volatile("inb %1,%0" : "=a"(v) : "Nd"(p));
-        return v;
-    };
-    while (!(inb(0x3F8 + 5) & 0x20)) {
-    }
-    asm volatile("outb %0,%1" : : "a"((std::uint8_t)c), "Nd"((std::uint16_t)0x3F8));
-}
+#include <vnu/arch/cpu.h>
+#include <vnu/arch/serial.h>
 
 extern "C" void vnu_return_to_console();
 extern "C" std::uint32_t vnu_pending_user_esp;
@@ -59,7 +48,7 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
             /* VGA once per batch (flush cursor at end) — avoids CRTC lag */
             vnu::tty::write(p, n);
             for (std::uint32_t i = 0; i < n; ++i)
-                vnu_debug_putc(p[i]);
+                vnu::arch::debug_putc(p[i]);
             return n;
         }
         if (vnu::vfs::fd_dev_kind(static_cast<int>(tf->ebx)) ==
@@ -408,17 +397,11 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
     case VNU_SYS_chown:
         return static_cast<std::uint32_t>(
             vnu::vfs::chown(reinterpret_cast<const char*>(tf->ebx), tf->ecx, tf->edx));
-    case VNU_SYS_reboot: {
-        /* System reset via the keyboard controller (same 8042 route the
-         * GUI "reboot" button uses). Requires root. */
+    case VNU_SYS_reboot:
+        /* Hard platform reset (root only, same gate as install). */
         if (!vnu::proc::current() || vnu::proc::current()->uid != 0)
             return static_cast<std::uint32_t>(-VNU_EPERM);
-        for (unsigned i = 0; i < 100000; ++i) /* flush port writes */
-            asm volatile("" ::: "memory");
-        asm volatile("outb %0, %1" : : "a"(static_cast<std::uint8_t>(0xFE)),
-                     "Nd"(static_cast<std::uint16_t>(0x64)));
-        return 0;
-    }
+        vnu::arch::reboot();
     case VNU_SYS_brk: {
         std::uint32_t req = tf->ebx;
         /* Windowed tasks get their own heap (BRK_MIN..BRK_MAX, mapped

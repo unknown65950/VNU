@@ -1,18 +1,7 @@
 #include <vnu/ps2mouse.h>
+#include <vnu/arch/io.h>
 
 namespace {
-
-inline void outb(uint16_t port, uint8_t val)
-{
-    asm volatile("outb %0,%1" : : "a"(val), "Nd"(port));
-}
-
-inline uint8_t inb(uint16_t port)
-{
-    uint8_t v;
-    asm volatile("inb %1,%0" : "=a"(v) : "Nd"(port));
-    return v;
-}
 
 constexpr uint16_t PORT_DATA = 0x60;
 constexpr uint16_t PORT_STATUS = 0x64;
@@ -22,7 +11,7 @@ void wait_input_clear()
 {
     /* Bit1 of status: 1 = controller input buffer still full. */
     for (int i = 0; i < 100000; ++i) {
-        if (!(inb(PORT_STATUS) & 0x02))
+        if (!(vnu::arch::io_in8(PORT_STATUS) & 0x02))
             return;
     }
 }
@@ -31,7 +20,7 @@ void wait_output_full()
 {
     /* Bit0 of status: 1 = output buffer has data for us. */
     for (int i = 0; i < 100000; ++i) {
-        if (inb(PORT_STATUS) & 0x01)
+        if (vnu::arch::io_in8(PORT_STATUS) & 0x01)
             return;
     }
 }
@@ -39,15 +28,15 @@ void wait_output_full()
 void send_to_aux(uint8_t byte)
 {
     wait_input_clear();
-    outb(PORT_CMD, 0xD4); /* next byte goes to the aux (mouse) device */
+    vnu::arch::io_out8(PORT_CMD, 0xD4); /* next byte goes to the aux (mouse) device */
     wait_input_clear();
-    outb(PORT_DATA, byte);
+    vnu::arch::io_out8(PORT_DATA, byte);
 }
 
 uint8_t read_ack()
 {
     wait_output_full();
-    return inb(PORT_DATA);
+    return vnu::arch::io_in8(PORT_DATA);
 }
 
 /* Empty the controller's output buffer, and only mouse bytes: the
@@ -59,9 +48,9 @@ uint8_t read_ack()
 void drain_pending()
 {
     for (int i = 0; i < 32; ++i) {
-        if ((inb(PORT_STATUS) & 0x21) != 0x21)
+        if ((vnu::arch::io_in8(PORT_STATUS) & 0x21) != 0x21)
             break;
-        (void)inb(PORT_DATA);
+        (void)vnu::arch::io_in8(PORT_DATA);
     }
 }
 
@@ -87,18 +76,18 @@ void init()
     drain_pending();
 
     wait_input_clear();
-    outb(PORT_CMD, 0xA8); /* enable auxiliary device */
+    vnu::arch::io_out8(PORT_CMD, 0xA8); /* enable auxiliary device */
 
     wait_input_clear();
-    outb(PORT_CMD, 0x20); /* "get compaq status byte" */
+    vnu::arch::io_out8(PORT_CMD, 0x20); /* "get compaq status byte" */
     uint8_t status = read_ack();
     status |= 0x02;  /* enable IRQ12 line (harmless even though we poll) */
     status &= ~0x20; /* make sure aux clock isn't disabled */
 
     wait_input_clear();
-    outb(PORT_CMD, 0x60); /* "set compaq status byte" */
+    vnu::arch::io_out8(PORT_CMD, 0x60); /* "set compaq status byte" */
     wait_input_clear();
-    outb(PORT_DATA, status);
+    vnu::arch::io_out8(PORT_DATA, status);
 
     send_to_aux(0xF6); /* set defaults */
     (void)read_ack();
@@ -156,8 +145,8 @@ bool poll(int& dx, int& dy, uint8_t& buttons, int8_t& wheel)
      * buffer; assemble at most one full packet per call so the caller
      * gets smooth per-frame deltas rather than a burst all at once. */
     const int plen = g_wheel ? 4 : 3;
-    while (!got_full && (inb(PORT_STATUS) & 0x21) == 0x21) {
-        uint8_t byte = inb(PORT_DATA);
+    while (!got_full && (vnu::arch::io_in8(PORT_STATUS) & 0x21) == 0x21) {
+        uint8_t byte = vnu::arch::io_in8(PORT_DATA);
 
         if (g_packet_idx == 0 && !(byte & 0x08)) {
             /* Not the first byte of a packet (sync bit not set) — the

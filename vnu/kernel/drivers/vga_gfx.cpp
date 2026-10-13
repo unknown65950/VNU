@@ -6,34 +6,11 @@
 #include <vnu/tty.h>
 #include <vnu/virtio_gpu.h>
 #include <vnu/wallpaper.h>
+#include <vnu/arch/io.h>
 
 extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
 
 namespace {
-
-inline void outb(uint16_t port, uint8_t val)
-{
-    asm volatile("outb %0,%1" : : "a"(val), "Nd"(port));
-}
-
-inline void outw(uint16_t port, uint16_t val)
-{
-    asm volatile("outw %0,%1" : : "a"(val), "Nd"(port));
-}
-
-inline uint8_t inb(uint16_t port)
-{
-    uint8_t v;
-    asm volatile("inb %1,%0" : "=a"(v) : "Nd"(port));
-    return v;
-}
-
-inline uint16_t inw(uint16_t port)
-{
-    uint16_t v;
-    asm volatile("inw %1,%0" : "=a"(v) : "Nd"(port));
-    return v;
-}
 
 /* --- Bochs VBE "dispi" interface (what QEMU's std VGA emulates).
  * No BIOS calls are needed to switch resolution in protected mode:
@@ -65,8 +42,8 @@ constexpr uintptr_t VBE_LFB_ADDR = 0xFD000000u;
 
 void vbe_write(uint16_t index, uint16_t val)
 {
-    outw(VBE_INDEX_PORT, index);
-    outw(VBE_DATA_PORT, val);
+    vnu::arch::io_out16(VBE_INDEX_PORT, index);
+    vnu::arch::io_out16(VBE_DATA_PORT, val);
 }
 
 struct VgaState {
@@ -83,64 +60,64 @@ bool g_have_saved = false;
 void write_registers(uint8_t misc, const uint8_t* seq, const uint8_t* crtc,
                       const uint8_t* gc, const uint8_t* ac)
 {
-    outb(0x3C2, misc);
+    vnu::arch::io_out8(0x3C2, misc);
 
     for (int i = 0; i < 8; ++i) {
-        outb(0x3C4, static_cast<uint8_t>(i));
-        outb(0x3C5, seq[i]);
+        vnu::arch::io_out8(0x3C4, static_cast<uint8_t>(i));
+        vnu::arch::io_out8(0x3C5, seq[i]);
     }
 
     /* Unlock CRTC indices 0-7 (clear the write-protect bit in index 0x11)
      * before writing the rest of the table. */
-    outb(0x3D4, 0x11);
-    outb(0x3D5, static_cast<uint8_t>(inb(0x3D5) & 0x7F));
+    vnu::arch::io_out8(0x3D4, 0x11);
+    vnu::arch::io_out8(0x3D5, static_cast<uint8_t>(vnu::arch::io_in8(0x3D5) & 0x7F));
     for (int i = 0; i < 25; ++i) {
-        outb(0x3D4, static_cast<uint8_t>(i));
-        outb(0x3D5, crtc[i]);
+        vnu::arch::io_out8(0x3D4, static_cast<uint8_t>(i));
+        vnu::arch::io_out8(0x3D5, crtc[i]);
     }
 
     for (int i = 0; i < 9; ++i) {
-        outb(0x3CE, static_cast<uint8_t>(i));
-        outb(0x3CF, gc[i]);
+        vnu::arch::io_out8(0x3CE, static_cast<uint8_t>(i));
+        vnu::arch::io_out8(0x3CF, gc[i]);
     }
 
     for (int i = 0; i < 21; ++i) {
-        (void)inb(0x3DA); /* reset attribute controller flip-flop */
-        outb(0x3C0, static_cast<uint8_t>(i));
-        outb(0x3C0, ac[i]);
+        (void)vnu::arch::io_in8(0x3DA); /* reset attribute controller flip-flop */
+        vnu::arch::io_out8(0x3C0, static_cast<uint8_t>(i));
+        vnu::arch::io_out8(0x3C0, ac[i]);
     }
     /* Video enable (the attribute controller's index 0x20 write) goes
      * last, and the status read in front of it matters: the attribute
      * controller shares a single flip-flop between its index and its
      * data writes, so without that read the 0x20 below is taken as a
      * data byte instead and the display never comes back. */
-    (void)inb(0x3DA);
-    outb(0x3C0, 0x20);
+    (void)vnu::arch::io_in8(0x3DA);
+    vnu::arch::io_out8(0x3C0, 0x20);
 }
 
 void read_registers(VgaState& s)
 {
-    s.misc = inb(0x3CC);
+    s.misc = vnu::arch::io_in8(0x3CC);
 
     for (int i = 0; i < 8; ++i) {
-        outb(0x3C4, static_cast<uint8_t>(i));
-        s.seq[i] = inb(0x3C5);
+        vnu::arch::io_out8(0x3C4, static_cast<uint8_t>(i));
+        s.seq[i] = vnu::arch::io_in8(0x3C5);
     }
     for (int i = 0; i < 25; ++i) {
-        outb(0x3D4, static_cast<uint8_t>(i));
-        s.crtc[i] = inb(0x3D5);
+        vnu::arch::io_out8(0x3D4, static_cast<uint8_t>(i));
+        s.crtc[i] = vnu::arch::io_in8(0x3D5);
     }
     for (int i = 0; i < 9; ++i) {
-        outb(0x3CE, static_cast<uint8_t>(i));
-        s.gc[i] = inb(0x3CF);
+        vnu::arch::io_out8(0x3CE, static_cast<uint8_t>(i));
+        s.gc[i] = vnu::arch::io_in8(0x3CF);
     }
     for (int i = 0; i < 21; ++i) {
-        (void)inb(0x3DA);
-        outb(0x3C0, static_cast<uint8_t>(i));
-        s.ac[i] = inb(0x3C1);
+        (void)vnu::arch::io_in8(0x3DA);
+        vnu::arch::io_out8(0x3C0, static_cast<uint8_t>(i));
+        s.ac[i] = vnu::arch::io_in8(0x3C1);
     }
-    (void)inb(0x3DA);
-    outb(0x3C0, 0x20);
+    (void)vnu::arch::io_in8(0x3DA);
+    vnu::arch::io_out8(0x3C0, 0x20);
 }
 
 /* --- Font capture: pull the 8x16 glyphs currently loaded in VGA plane 2
@@ -172,42 +149,42 @@ struct FontWindow {
 FontWindow enter_font_window()
 {
     FontWindow w;
-    outb(0x3C4, 2);
-    w.sr2 = inb(0x3C5);
-    outb(0x3C4, 4);
-    w.sr4 = inb(0x3C5);
-    outb(0x3CE, 4);
-    w.gc4 = inb(0x3CF);
-    outb(0x3CE, 5);
-    w.gc5 = inb(0x3CF);
-    outb(0x3CE, 6);
-    w.gc6 = inb(0x3CF);
+    vnu::arch::io_out8(0x3C4, 2);
+    w.sr2 = vnu::arch::io_in8(0x3C5);
+    vnu::arch::io_out8(0x3C4, 4);
+    w.sr4 = vnu::arch::io_in8(0x3C5);
+    vnu::arch::io_out8(0x3CE, 4);
+    w.gc4 = vnu::arch::io_in8(0x3CF);
+    vnu::arch::io_out8(0x3CE, 5);
+    w.gc5 = vnu::arch::io_in8(0x3CF);
+    vnu::arch::io_out8(0x3CE, 6);
+    w.gc6 = vnu::arch::io_in8(0x3CF);
 
-    outb(0x3C4, 2);
-    outb(0x3C5, 0x04); /* write plane 2 only */
-    outb(0x3C4, 4);
-    outb(0x3C5, 0x07); /* sequential addressing */
-    outb(0x3CE, 4);
-    outb(0x3CF, 0x02); /* read plane 2 */
-    outb(0x3CE, 5);
-    outb(0x3CF, 0x00); /* read mode 0 */
-    outb(0x3CE, 6);
-    outb(0x3CF, 0x00); /* map at 0xA0000, no odd/even */
+    vnu::arch::io_out8(0x3C4, 2);
+    vnu::arch::io_out8(0x3C5, 0x04); /* write plane 2 only */
+    vnu::arch::io_out8(0x3C4, 4);
+    vnu::arch::io_out8(0x3C5, 0x07); /* sequential addressing */
+    vnu::arch::io_out8(0x3CE, 4);
+    vnu::arch::io_out8(0x3CF, 0x02); /* read plane 2 */
+    vnu::arch::io_out8(0x3CE, 5);
+    vnu::arch::io_out8(0x3CF, 0x00); /* read mode 0 */
+    vnu::arch::io_out8(0x3CE, 6);
+    vnu::arch::io_out8(0x3CF, 0x00); /* map at 0xA0000, no odd/even */
     return w;
 }
 
 void leave_font_window(const FontWindow& w)
 {
-    outb(0x3C4, 2);
-    outb(0x3C5, w.sr2);
-    outb(0x3C4, 4);
-    outb(0x3C5, w.sr4);
-    outb(0x3CE, 4);
-    outb(0x3CF, w.gc4);
-    outb(0x3CE, 5);
-    outb(0x3CF, w.gc5);
-    outb(0x3CE, 6);
-    outb(0x3CF, w.gc6);
+    vnu::arch::io_out8(0x3C4, 2);
+    vnu::arch::io_out8(0x3C5, w.sr2);
+    vnu::arch::io_out8(0x3C4, 4);
+    vnu::arch::io_out8(0x3C5, w.sr4);
+    vnu::arch::io_out8(0x3CE, 4);
+    vnu::arch::io_out8(0x3CF, w.gc4);
+    vnu::arch::io_out8(0x3CE, 5);
+    vnu::arch::io_out8(0x3CF, w.gc5);
+    vnu::arch::io_out8(0x3CE, 6);
+    vnu::arch::io_out8(0x3CF, w.gc6);
 }
 
 void capture_font()
@@ -365,10 +342,10 @@ void load_palette(const uint8_t (&pal)[PALETTE_SLOTS][3])
      * hardware table, so a picture's colours have to be in the card as
      * well as in software or they never reach the monitor. */
     for (int i = 0; i < PALETTE_SLOTS; ++i) {
-        outb(0x3C8, static_cast<uint8_t>(i));
-        outb(0x3C9, pal[i][0]);
-        outb(0x3C9, pal[i][1]);
-        outb(0x3C9, pal[i][2]);
+        vnu::arch::io_out8(0x3C8, static_cast<uint8_t>(i));
+        vnu::arch::io_out8(0x3C9, pal[i][0]);
+        vnu::arch::io_out8(0x3C9, pal[i][1]);
+        vnu::arch::io_out8(0x3C9, pal[i][2]);
     }
 }
 
@@ -380,27 +357,27 @@ void load_palette(const uint8_t (&pal)[PALETTE_SLOTS][3])
 void load_text_palette()
 {
     for (int i = 0; i < SYSTEM_SLOTS; ++i) {
-        outb(0x3C8, static_cast<uint8_t>(i));
-        outb(0x3C9, g_saved_pal[i][0]);
-        outb(0x3C9, g_saved_pal[i][1]);
-        outb(0x3C9, g_saved_pal[i][2]);
+        vnu::arch::io_out8(0x3C8, static_cast<uint8_t>(i));
+        vnu::arch::io_out8(0x3C9, g_saved_pal[i][0]);
+        vnu::arch::io_out8(0x3C9, g_saved_pal[i][1]);
+        vnu::arch::io_out8(0x3C9, g_saved_pal[i][2]);
     }
 }
 
 void save_palette()
 {
     for (int i = 0; i < 16; ++i) {
-        outb(0x3C7, static_cast<uint8_t>(i));
-        g_saved_pal[i][0] = inb(0x3C9);
-        g_saved_pal[i][1] = inb(0x3C9);
-        g_saved_pal[i][2] = inb(0x3C9);
+        vnu::arch::io_out8(0x3C7, static_cast<uint8_t>(i));
+        g_saved_pal[i][0] = vnu::arch::io_in8(0x3C9);
+        g_saved_pal[i][1] = vnu::arch::io_in8(0x3C9);
+        g_saved_pal[i][2] = vnu::arch::io_in8(0x3C9);
     }
     /* Reading leaves the DAC in read mode with a stale write pointer;
      * reset it by writing index 0 and clocking out three dummies. */
-    outb(0x3C8, 0);
-    inb(0x3C9);
-    inb(0x3C9);
-    inb(0x3C9);
+    vnu::arch::io_out8(0x3C8, 0);
+    vnu::arch::io_in8(0x3C9);
+    vnu::arch::io_in8(0x3C9);
+    vnu::arch::io_in8(0x3C9);
     g_have_saved_pal = true;
 }
 
@@ -2212,9 +2189,9 @@ void present_with(const uint8_t (&pal)[PALETTE_SLOTS][3])
      * subsequent "wait for it to START" reliably catches the next
      * one, giving the memcpy the whole retrace interval to complete
      * safely off-screen. */
-    while (inb(0x3DA) & 0x08) {
+    while (vnu::arch::io_in8(0x3DA) & 0x08) {
     }
-    while (!(inb(0x3DA) & 0x08)) {
+    while (!(vnu::arch::io_in8(0x3DA) & 0x08)) {
     }
     /* The VBE path never gets past resolve_bpp(): a 32bpp frame exists
      * only where a virtio-gpu is presenting, and it went out above. A

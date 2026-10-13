@@ -1,30 +1,7 @@
 #include <vnu/ata.h>
+#include <vnu/arch/io.h>
 
 namespace {
-
-inline void outb(uint16_t port, uint8_t val)
-{
-    asm volatile("outb %0,%1" : : "a"(val), "Nd"(port));
-}
-
-inline uint8_t inb(uint16_t port)
-{
-    uint8_t v;
-    asm volatile("inb %1,%0" : "=a"(v) : "Nd"(port));
-    return v;
-}
-
-inline uint16_t inw(uint16_t port)
-{
-    uint16_t v;
-    asm volatile("inw %1,%0" : "=a"(v) : "Nd"(port));
-    return v;
-}
-
-inline void outw(uint16_t port, uint16_t val)
-{
-    asm volatile("outw %0,%1" : : "a"(val), "Nd"(port));
-}
 
 constexpr uint16_t PRIMARY_IO = 0x1F0;
 constexpr uint16_t PRIMARY_CTRL = 0x3F6;
@@ -63,10 +40,10 @@ constexpr uint8_t CMD_IDENTIFY = 0xEC;
  * portable way to burn that delay on a machine without a usable timer. */
 void io_delay(uint16_t ctrl)
 {
-    inb(ctrl + R_ALTSTATUS);
-    inb(ctrl + R_ALTSTATUS);
-    inb(ctrl + R_ALTSTATUS);
-    inb(ctrl + R_ALTSTATUS);
+    vnu::arch::io_in8(ctrl + R_ALTSTATUS);
+    vnu::arch::io_in8(ctrl + R_ALTSTATUS);
+    vnu::arch::io_in8(ctrl + R_ALTSTATUS);
+    vnu::arch::io_in8(ctrl + R_ALTSTATUS);
 }
 
 enum class Poll { Ready, Error, Timeout };
@@ -75,7 +52,7 @@ enum class Poll { Ready, Error, Timeout };
 Poll wait_ready(uint16_t ctrl, bool want_drq)
 {
     for (int i = 0; i < 1000000; ++i) {
-        uint8_t st = inb(ctrl + R_ALTSTATUS);
+        uint8_t st = vnu::arch::io_in8(ctrl + R_ALTSTATUS);
         if (st & ST_BSY)
             continue;
         if (st & (ST_DF | ST_ERR))
@@ -108,23 +85,23 @@ bool probe(uint16_t io, uint16_t ctrl, bool slave, HwDrive& out)
     out.ctrl = ctrl;
     out.slave = slave;
 
-    outb(io + R_DRIVE, static_cast<uint8_t>(0xA0 | (slave ? 0x10 : 0x00)));
+    vnu::arch::io_out8(io + R_DRIVE, static_cast<uint8_t>(0xA0 | (slave ? 0x10 : 0x00)));
     io_delay(ctrl);
 
     /* Some controllers report "no device" only here: a zero status and
      * zero LBA registers after a select mean there is nothing attached. */
-    uint8_t st = inb(io + R_STATUS);
+    uint8_t st = vnu::arch::io_in8(io + R_STATUS);
     if (st == 0)
         return false;
 
-    outb(io + R_SECCOUNT, 0);
-    outb(io + R_LBA0, 0);
-    outb(io + R_LBA1, 0);
-    outb(io + R_LBA2, 0);
-    outb(io + R_COMMAND, CMD_IDENTIFY);
+    vnu::arch::io_out8(io + R_SECCOUNT, 0);
+    vnu::arch::io_out8(io + R_LBA0, 0);
+    vnu::arch::io_out8(io + R_LBA1, 0);
+    vnu::arch::io_out8(io + R_LBA2, 0);
+    vnu::arch::io_out8(io + R_COMMAND, CMD_IDENTIFY);
     io_delay(ctrl);
 
-    st = inb(io + R_STATUS);
+    st = vnu::arch::io_in8(io + R_STATUS);
     if (st == 0)
         return false;
 
@@ -135,12 +112,12 @@ bool probe(uint16_t io, uint16_t ctrl, bool slave, HwDrive& out)
     }
 
     /* If these are non-zero, this is not a plain ATA disk. */
-    if (inb(io + R_LBA1) != 0 || inb(io + R_LBA2) != 0)
+    if (vnu::arch::io_in8(io + R_LBA1) != 0 || vnu::arch::io_in8(io + R_LBA2) != 0)
         return false;
 
     uint16_t ident[256];
     for (int i = 0; i < 256; ++i)
-        ident[i] = inw(io + R_DATA);
+        ident[i] = vnu::arch::io_in16(io + R_DATA);
 
     bool lba28 = (ident[49] & (1u << 9)) != 0;
     uint32_t sectors = static_cast<uint32_t>(ident[60]) |
@@ -177,15 +154,15 @@ bool issue(int idx, uint32_t lba, uint32_t count, uint8_t cmd)
     if (lba + count > 0x10000000u)
         return false;
 
-    outb(d.io + R_DRIVE, static_cast<uint8_t>(
+    vnu::arch::io_out8(d.io + R_DRIVE, static_cast<uint8_t>(
         0xE0 | (d.slave ? 0x10 : 0x00) | ((lba >> 24) & 0x0F)));
     io_delay(d.ctrl);
     /* A zero sector count here means 256 sectors; keep it literal. */
-    outb(d.io + R_SECCOUNT, static_cast<uint8_t>(count == 256 ? 0 : count));
-    outb(d.io + R_LBA0, static_cast<uint8_t>(lba & 0xFF));
-    outb(d.io + R_LBA1, static_cast<uint8_t>((lba >> 8) & 0xFF));
-    outb(d.io + R_LBA2, static_cast<uint8_t>((lba >> 16) & 0xFF));
-    outb(d.io + R_COMMAND, cmd);
+    vnu::arch::io_out8(d.io + R_SECCOUNT, static_cast<uint8_t>(count == 256 ? 0 : count));
+    vnu::arch::io_out8(d.io + R_LBA0, static_cast<uint8_t>(lba & 0xFF));
+    vnu::arch::io_out8(d.io + R_LBA1, static_cast<uint8_t>((lba >> 8) & 0xFF));
+    vnu::arch::io_out8(d.io + R_LBA2, static_cast<uint8_t>((lba >> 16) & 0xFF));
+    vnu::arch::io_out8(d.io + R_COMMAND, cmd);
     return true;
 }
 
@@ -252,7 +229,7 @@ bool read_sectors(int idx, uint32_t lba, uint32_t count, void* buf)
             if (wait_ready(g_drives[idx].ctrl, true) != Poll::Ready)
                 return false;
             for (int i = 0; i < 256; ++i) {
-                uint16_t w = inw(g_drives[idx].io + R_DATA);
+                uint16_t w = vnu::arch::io_in16(g_drives[idx].io + R_DATA);
                 p[0] = static_cast<uint8_t>(w & 0xFF);
                 p[1] = static_cast<uint8_t>(w >> 8);
                 p += 2;
@@ -281,7 +258,7 @@ bool write_sectors(int idx, uint32_t lba, uint32_t count, const void* buf)
             for (int i = 0; i < 256; ++i) {
                 uint16_t w = static_cast<uint16_t>(p[0]) |
                              (static_cast<uint16_t>(p[1]) << 8);
-                outw(g_drives[idx].io + R_DATA, w);
+                vnu::arch::io_out16(g_drives[idx].io + R_DATA, w);
                 p += 2;
             }
             /* Let the drive absorb the sector before we touch it again:
@@ -302,7 +279,7 @@ bool flush(int idx)
     if (idx < 0 || idx >= g_count)
         return false;
     HwDrive& d = g_drives[idx];
-    outb(d.io + R_COMMAND, CMD_FLUSH);
+    vnu::arch::io_out8(d.io + R_COMMAND, CMD_FLUSH);
     io_delay(d.ctrl);
     return wait_ready(d.ctrl, false) == Poll::Ready;
 }

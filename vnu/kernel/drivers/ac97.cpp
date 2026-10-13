@@ -40,9 +40,9 @@
 #include <vnu/pci.h>
 #include <vnu/pmm.h>
 #include <vnu/abi.h>
+#include <vnu/arch/io.h>
+#include <vnu/arch/serial.h>
 #include <stdint.h>
-
-extern "C" void vnu_debug_putc(char c);
 
 namespace {
 
@@ -123,43 +123,12 @@ uint16_t g_nabm_port = 0;
 
 /* --- port I/O --- */
 
-inline uint8_t inb(uint16_t p)
-{
-    uint8_t v;
-    asm volatile("inb %1,%0" : "=a"(v) : "Nd"(p));
-    return v;
-}
-inline void outb(uint16_t p, uint8_t v)
-{
-    asm volatile("outb %0,%1" : : "a"(v), "Nd"(p));
-}
-inline uint16_t inw(uint16_t p)
-{
-    uint16_t v;
-    asm volatile("inw %1,%0" : "=a"(v) : "Nd"(p));
-    return v;
-}
-inline void outw(uint16_t p, uint16_t v)
-{
-    asm volatile("outw %0,%1" : : "a"(v), "Nd"(p));
-}
-inline uint32_t inl(uint16_t p)
-{
-    uint32_t v;
-    asm volatile("inl %1,%0" : "=a"(v) : "Nd"(p));
-    return v;
-}
-inline void outl(uint16_t p, uint32_t v)
-{
-    asm volatile("outl %0,%1" : : "a"(v), "Nd"(p));
-}
-
-inline uint8_t nab_b(uint16_t off) { return inb(g_nabm_port + off); }
-inline void nab_wb(uint16_t off, uint8_t v) { outb(g_nabm_port + off, v); }
-inline uint16_t nab_w(uint16_t off) { return inw(g_nabm_port + off); }
-inline uint32_t nab_l(uint16_t off) { return inl(g_nabm_port + off); }
-inline void nab_wl(uint16_t off, uint32_t v) { outl(g_nabm_port + off, v); }
-inline void nam_ww(uint16_t off, uint16_t v) { outw(g_nam_port + off, v); }
+inline uint8_t nab_b(uint16_t off) { return vnu::arch::io_in8(g_nabm_port + off); }
+inline void nab_wb(uint16_t off, uint8_t v) { vnu::arch::io_out8(g_nabm_port + off, v); }
+inline uint16_t nab_w(uint16_t off) { return vnu::arch::io_in16(g_nabm_port + off); }
+inline uint32_t nab_l(uint16_t off) { return vnu::arch::io_in32(g_nabm_port + off); }
+inline void nab_wl(uint16_t off, uint32_t v) { vnu::arch::io_out32(g_nabm_port + off, v); }
+inline void nam_ww(uint16_t off, uint16_t v) { vnu::arch::io_out16(g_nam_port + off, v); }
 
 /* --- session state --- */
 
@@ -187,7 +156,7 @@ uint32_t g_ring_phys = 0;
 void puts_debug(const char* s)
 {
     while (*s)
-        vnu_debug_putc(*s++);
+        vnu::arch::debug_putc(*s++);
 }
 
 void poll_hw()

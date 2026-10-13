@@ -16,6 +16,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# The architecture the kernel is built for: a directory under arch/ that
+# implements the interfaces in include/vnu/arch/. Only i386 exists today;
+# a new port adds arch/<name>/ and the toolchain flags immediately below.
+# See arch/README.md.
+set(VNU_KERNEL_ARCH "i386" CACHE STRING "Kernel target architecture")
+
 # Note: this is NOT a real cross-compiler. We use the ordinary host
 # g++ with -m32 and a freestanding environment, which is enough for an
 # x86 kernel as long as nothing of the libc/host ABI is touched. For a
@@ -66,10 +72,10 @@ set(KERNEL_COMPILE_FLAGS
 )
 
 set_source_files_properties(
-    arch/i386/boot/boot.s
-    arch/i386/syscall/syscall.s
-    proc/switch.s
-    proc/ctxswitch.s
+    arch/${VNU_KERNEL_ARCH}/boot/boot.s
+    arch/${VNU_KERNEL_ARCH}/syscall/syscall.s
+    arch/${VNU_KERNEL_ARCH}/switch.s
+    arch/${VNU_KERNEL_ARCH}/ctxswitch.s
     install/blobs.s
     PROPERTIES LANGUAGE ASM_NASM
 )
@@ -113,11 +119,19 @@ add_custom_target(install_blobs
     DEPENDS ${INSTALL_BLOB_DIR}/vnu_install_blobs.inc)
 
 add_executable(kernel.elf
-    arch/i386/boot/boot.s
-    arch/i386/boot/gdt.cpp
-    arch/i386/syscall/syscall.s
-    arch/i386/syscall/syscall.cpp
-    arch/i386/syscall/idt.cpp
+    arch/${VNU_KERNEL_ARCH}/cpu.cpp
+    arch/${VNU_KERNEL_ARCH}/io.cpp
+    arch/${VNU_KERNEL_ARCH}/serial.cpp
+    arch/${VNU_KERNEL_ARCH}/rtc.cpp
+    arch/${VNU_KERNEL_ARCH}/mmu.cpp
+    arch/${VNU_KERNEL_ARCH}/paging.cpp
+    arch/${VNU_KERNEL_ARCH}/switch.s
+    arch/${VNU_KERNEL_ARCH}/ctxswitch.s
+    arch/${VNU_KERNEL_ARCH}/boot/boot.s
+    arch/${VNU_KERNEL_ARCH}/boot/gdt.cpp
+    arch/${VNU_KERNEL_ARCH}/syscall/syscall.s
+    arch/${VNU_KERNEL_ARCH}/syscall/syscall.cpp
+    arch/${VNU_KERNEL_ARCH}/syscall/idt.cpp
     fs/vfs.cpp
     fs/pipe.cpp
     fs/fat16.cpp
@@ -148,15 +162,12 @@ add_executable(kernel.elf
     kernel/kernel.cpp
     kernel/clipboard.cpp
     mm/pmm.cpp
-    mm/paging.cpp
     proc/elf.cpp
     proc/process.cpp
     proc/thams.cpp
     proc/mboot.cpp
     proc/images.cpp
     proc/initrd.cpp
-    proc/switch.s
-    proc/ctxswitch.s
     sync/locking.cpp
 )
 add_dependencies(kernel.elf install_blobs)

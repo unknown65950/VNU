@@ -1,5 +1,6 @@
 #include <vnu/paging.h>
 #include <vnu/pmm.h>
+#include <vnu/arch/mmu.h>
 
 extern "C" void* memset(void* dst, int val, unsigned long count);
 extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
@@ -118,7 +119,7 @@ void init()
     uint32_t pgdir_phys = reinterpret_cast<uint32_t>(&g_kernel_pgdir[0]);
     g_current_pgdir = pgdir_phys;
 
-    asm volatile("mov %0, %%cr3" : : "r"(pgdir_phys) : "memory");
+    vnu::arch::write_cr3(pgdir_phys);
     uint32_t cr0;
     asm volatile("mov %%cr0, %0" : "=r"(cr0));
     cr0 |= 0x80000000u; /* PG on */
@@ -164,7 +165,7 @@ uint32_t map_device_region(uint32_t phys, uint32_t size)
     /* Reload CR3 so the new PDE is live immediately (boot-time, cheap). */
     uint32_t pgdir = reinterpret_cast<uint32_t>(&g_kernel_pgdir[0]);
     g_current_pgdir = pgdir;
-    asm volatile("mov %0, %%cr3" : : "r"(pgdir) : "memory");
+    vnu::arch::write_cr3(pgdir);
     return DEV_MMIO_BASE + offset;
 }
 
@@ -461,7 +462,7 @@ void switch_to(uint32_t pgdir_phys)
     if (pgdir_phys == g_current_pgdir)
         return;
     g_current_pgdir = pgdir_phys;
-    asm volatile("mov %0, %%cr3" : : "r"(pgdir_phys) : "memory");
+    vnu::arch::write_cr3(pgdir_phys);
 }
 
 uint32_t current_pgdir()

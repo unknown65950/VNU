@@ -1,6 +1,8 @@
 #include <vnu/vfs.h>
 #include <vnu/abi.h>
 #include <vnu/version.h>
+#include <vnu/arch/cpu.h>
+#include <vnu/arch/rtc.h>
 #include <vnu/pmm.h>
 #include <vnu/images.h>
 #include <vnu/initrd.h>
@@ -564,39 +566,6 @@ struct Appender {
     }
 };
 
-inline uint8_t cmos_read(uint8_t reg)
-{
-    asm volatile("outb %0, $0x70" : : "a"(reg));
-    uint8_t v;
-    asm volatile("inb $0x71, %0" : "=a"(v));
-    return v;
-}
-
-/* Seconds since midnight from the RTC. Used only for /proc/uptime,
- * as a delta against a boot-time snapshot — this kernel has no timer
- * interrupt, so the RTC is the only real monotonic-ish clock
- * available. BCD-encoded unless the CMOS status register says
- * otherwise, which is the usual default on PC hardware and QEMU. */
-uint32_t rtc_seconds_of_day()
-{
-    while (cmos_read(0x0A) & 0x80) {
-    } /* wait out an update-in-progress */
-    uint8_t sec = cmos_read(0x00);
-    uint8_t min = cmos_read(0x02);
-    uint8_t hour = cmos_read(0x04);
-    uint8_t status_b = cmos_read(0x0B);
-    if (!(status_b & 0x04)) { /* BCD mode */
-        auto unbcd = [](uint8_t v) -> uint8_t {
-            return static_cast<uint8_t>((v & 0x0F) + ((v >> 4) * 10));
-        };
-        sec = unbcd(sec);
-        min = unbcd(min);
-        hour = unbcd(static_cast<uint8_t>(hour & 0x7F));
-    }
-    return static_cast<uint32_t>(hour) * 3600u + static_cast<uint32_t>(min) * 60u +
-           static_cast<uint32_t>(sec);
-}
-
 uint32_t g_boot_seconds = 0;
 
 /* Simple xorshift, for /dev/random and /dev/urandom. Not a CSPRNG —
@@ -610,22 +579,6 @@ uint8_t next_random_byte()
     g_rand_state ^= g_rand_state >> 17;
     g_rand_state ^= g_rand_state << 5;
     return static_cast<uint8_t>(g_rand_state & 0xFF);
-}
-
-void cpu_vendor(char out[13])
-{
-    uint32_t eax, ebx, ecx, edx;
-    asm volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0));
-    auto put4 = [&](int off, uint32_t v) {
-        out[off + 0] = static_cast<char>(v & 0xFF);
-        out[off + 1] = static_cast<char>((v >> 8) & 0xFF);
-        out[off + 2] = static_cast<char>((v >> 16) & 0xFF);
-        out[off + 3] = static_cast<char>((v >> 24) & 0xFF);
-    };
-    put4(0, ebx);
-    put4(4, edx);
-    put4(8, ecx);
-    out[12] = 0;
 }
 
 void regen_synth(Node& n)
@@ -667,21 +620,18 @@ void regen_synth(Node& n)
         a.str("\n");
         break;
     case SynthKind::CpuInfo: {
-        char vendor[13];
-        cpu_vendor(vendor);
-        uint32_t eax, ebx, ecx, edx;
-        asm volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(1));
+        const vnu::arch::CpuId id = vnu::arch::cpu_id();
         a.str("processor\t: 0\n");
         a.str("vendor_id\t: ");
-        a.str(vendor);
+        a.str(id.vendor);
         a.str("\ncpu family\t: ");
-        a.num((eax >> 8) & 0xF);
+        a.num(id.family);
         a.str("\nmodel\t\t: ");
-        a.num((eax >> 4) & 0xF);
+        a.num(id.model);
         a.str("\nstepping\t: ");
-        a.num(eax & 0xF);
+        a.num(id.stepping);
         a.str("\nfpu\t\t: ");
-        a.str((edx & 1) ? "yes" : "no");
+        a.str(id.fpu ? "yes" : "no");
         a.str("\n");
         break;
     }
@@ -790,7 +740,7 @@ void regen_synth(Node& n)
         break;
     }
     case SynthKind::Uptime: {
-        uint32_t now = rtc_seconds_of_day();
+        uint32_t now = vnu::arch::rtc_seconds_of_day();
         uint32_t delta = now >= g_boot_seconds ? now - g_boot_seconds
                                                : (86400u - g_boot_seconds) + now;
         a.num(delta);
@@ -1105,12 +1055,12 @@ void quota_set_default(uint32_t limit)
  * boot-time snapshot so it re-wraps then too). */
 uint32_t time_seconds()
 {
-    return rtc_seconds_of_day();
+    return vnu::arch::rtc_seconds_of_day();
 }
 
 uint32_t uptime_seconds()
 {
-    const uint32_t now = rtc_seconds_of_day();
+    const uint32_t now = vnu::arch::rtc_seconds_of_day();
     return now >= g_boot_seconds ? now - g_boot_seconds
                                  : (86400u - g_boot_seconds) + now;
 }
@@ -1332,7 +1282,7 @@ void init()
             nodes[i].perm = 0666u;
 
     /* --- FHS: /proc, regenerated per open() (see regen_synth) --- */
-    g_boot_seconds = rtc_seconds_of_day();
+    g_boot_seconds = vnu::arch::rtc_seconds_of_day();
     g_rand_state ^= g_boot_seconds * 2654435761u;
     if (g_rand_state == 0)
         g_rand_state = 0x12345678;

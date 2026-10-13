@@ -5,6 +5,7 @@
 #include <vnu/process.h>
 #include <vnu/paging.h>
 #include <vnu/pmm.h>
+#include <vnu/arch/mmu.h>
 #include <vnu/vfs.h>
 
 extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
@@ -312,9 +313,9 @@ void init()
         for (int i = 0; i < MAX_TASKS; ++i)
             g_tasks[i] = Task{};
     {
-        uint32_t real_cr3;
-        asm volatile("mov %%cr3, %0" : "=r"(real_cr3));
-        g_base_pgdir = real_cr3;
+        /* The directory the kernel is already running under: the tasks
+         * manager builds every other space on top of it. */
+        g_base_pgdir = vnu::arch::read_cr3();
     }
     g_active = false;
     g_active_index = -1;

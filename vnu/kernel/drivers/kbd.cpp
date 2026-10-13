@@ -1,15 +1,9 @@
 #include <vnu/kbd.h>
+#include <vnu/arch/cpu.h>
+#include <vnu/arch/io.h>
+#include <vnu/arch/serial.h>
 
 namespace {
-
-extern "C" void vnu_debug_putc(char c); /* serial (COM1), like every driver */
-
-uint8_t inb(uint16_t p)
-{
-    uint8_t x;
-    asm volatile("inb %1,%0" : "=a"(x) : "Nd"(p));
-    return x;
-}
 
 constexpr char K_ESC = 27;
 constexpr char K_LEFT = (char)0x81;
@@ -211,7 +205,7 @@ void note_overflow()
         return;
     said = true;
     for (const char* s = "kbd: scancode queue overflow\n"; *s; ++s)
-        vnu_debug_putc(*s);
+        vnu::arch::debug_putc(*s);
 }
 
 /* Move everything the controller has into the queue. The cli is the
@@ -224,17 +218,15 @@ void note_overflow()
  * of inb instructions and there is nothing here to block on. */
 void fill_queue()
 {
-    uint32_t flags;
-    asm volatile("pushfl; popl %0" : "=r"(flags));
-    asm volatile("cli" ::: "memory");
+    const vnu::arch::IrqState state = vnu::arch::irq_save();
     for (;;) {
         /* Status bit0 = output buffer full, bit5 = the byte came from
          * the aux (mouse) device rather than the keyboard. Both are
          * checked, or a pending mouse packet byte is stolen and
          * dropped here before vnu::mouse::poll() ever sees it. */
-        if ((inb(0x64) & 0x21) != 0x01)
+        if ((vnu::arch::io_in8(0x64) & 0x21) != 0x01)
             break;
-        uint8_t s = inb(0x60);
+        uint8_t s = vnu::arch::io_in8(0x60);
         int next = (scan_tail + 1) % SCAN_QUEUE;
         if (next == scan_head) {
             note_overflow();
@@ -243,8 +235,7 @@ void fill_queue()
         scan_queue[scan_tail] = s;
         scan_tail = next;
     }
-    if (flags & 0x200u)
-        asm volatile("sti" ::: "memory");
+    vnu::arch::irq_restore(state);
 }
 
 } // namespace
@@ -267,7 +258,7 @@ char getch_blocking()
          * the fallback reader for contexts with nothing else to run
          * (the native console); the shell's read goes through
          * poll_char() so the machine can run other processes. */
-        asm volatile("pause");
+        vnu::arch::relax();
     }
 }
 

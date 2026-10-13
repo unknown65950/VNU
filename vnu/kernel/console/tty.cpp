@@ -1,4 +1,5 @@
 #include <vnu/tty.h>
+#include <vnu/arch/io.h>
 
 namespace {
 
@@ -169,18 +170,13 @@ const uint32_t cell = 0x20u | (static_cast<uint32_t>(attr) << 8);
     }
 }
 
-void outb(uint16_t port, uint8_t val)
-{
-    asm volatile("outb %0,%1" : : "a"(val), "Nd"(port));
-}
-
 void hw_cursor_now()
 {
     uint16_t pos = static_cast<uint16_t>(row * W + col);
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, static_cast<uint8_t>(pos & 0xFF));
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, static_cast<uint8_t>((pos >> 8) & 0xFF));
+    vnu::arch::io_out8(0x3D4, 0x0F);
+    vnu::arch::io_out8(0x3D5, static_cast<uint8_t>(pos & 0xFF));
+    vnu::arch::io_out8(0x3D4, 0x0E);
+    vnu::arch::io_out8(0x3D5, static_cast<uint8_t>((pos >> 8) & 0xFF));
     cursor_dirty = false;
 }
 

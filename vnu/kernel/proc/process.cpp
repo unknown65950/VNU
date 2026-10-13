@@ -3,6 +3,7 @@
 #include <vnu/elf.h>
 #include <vnu/images.h>
 #include <vnu/abi.h>
+#include <vnu/arch/cpu.h>
 #include <vnu/paging.h>
 #include <vnu/pmm.h>
 #include <vnu/vga_gfx.h>   /* console_tick(): the console on a pixelless display */
@@ -1794,7 +1795,7 @@ void setup_and_enter()
      * cascading into a triple fault. Booting `term` from the GUI
      * reproduced it non-deterministically (exact timing-dependent),
      * which is what made it look like a paging bug at first. */
-    asm volatile("cli");
+    vnu::arch::irq_disable();
 
     /* Now running on g_setup_stack — safe to switch CR3 here, unlike
      * on the caller's own stack (see g_setup_stack's comment). */
@@ -1810,7 +1811,7 @@ void setup_and_enter()
          * reverse). Still safe to do from g_setup_stack, which is
          * mapped identically under every CR3. */
         vnu::paging::switch_to(pl.prev_pgdir);
-        asm volatile("sti");
+        vnu::arch::irq_enable();
         uint32_t dummy;
         vnu_swtch(&dummy, g_caller_esp);
         for (;;) {
@@ -2395,7 +2396,7 @@ int run_scheduler(const char* primary, const char* fallback)
          * the flag is set found nothing runnable and is counted as idle
          * for /proc/stat (see g_idle_jiffies). */
         g_cpu_parked = true;
-        asm volatile("sti; hlt; cli");
+        vnu::arch::wait_for_interrupt();
         g_cpu_parked = false;
 
         /* Wake timed sleepers whose deadline has passed (the 100 Hz

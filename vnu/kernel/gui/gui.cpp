@@ -10,6 +10,7 @@
 #include <vnu/gfxconf.h>
 #include <vnu/abi.h>
 #include <vnu/pmm.h>
+#include <vnu/arch/cpu.h>
 
 /* The freestanding kernel has no <string.h>: the two routines this file
  * needs are declared here, as vga_gfx.cpp declares its memcpy. */
@@ -1193,9 +1194,7 @@ void draw_panel(const PBtn* out, int n, const vnu::apps::AppEntry* apps, int app
 
 void reboot_now()
 {
-    asm volatile("outb %0, %1" : : "a"((uint8_t)0xFE), "Nd"((uint16_t)0x64));
-    for (;;) {
-    }
+    vnu::arch::reboot();
 }
 
 bool name_is(const char* a, const char* b)

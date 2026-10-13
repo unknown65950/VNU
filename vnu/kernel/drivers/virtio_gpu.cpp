@@ -22,9 +22,10 @@
 #include <vnu/vga_gfx.h>
 #include <vnu/tty.h>
 #include <stdint.h>
+#include <vnu/arch/cpu.h>
+#include <vnu/arch/serial.h>
 
 extern "C" void* memset(void* dst, int val, unsigned long count);
-extern "C" void vnu_debug_putc(char c); /* serial (COM1) — mirrors the boot log */
 
 namespace {
 
@@ -313,7 +314,7 @@ inline void mmio8_w(volatile uint8_t* p, uint8_t v)
 
 inline void wmb()
 {
-    asm volatile("" ::: "memory");
+    vnu::arch::barrier();
 }
 
 /* Byte-granular PCI config reads (capability fields are not necessarily
@@ -347,7 +348,7 @@ void set_status(uint32_t bits)
 void out(char c)
 {
     vnu::tty::putc(c);
-    vnu_debug_putc(c);
+    vnu::arch::debug_putc(c);
 }
 
 void outstr(const char* s)
@@ -560,7 +561,7 @@ bool submit_and_wait(uint32_t cmd_len, uint32_t expect)
     const uint32_t sent = reinterpret_cast<const GpuHdr*>(g_cmd_buf)->type;
 
     for (unsigned spin = 0; spin < 20000000u && g_q.used->idx == last; ++spin)
-        asm volatile("pause" ::: "memory");
+        vnu::arch::relax();
     if (g_q.used->idx == last) {
         if (complaints) {
             --complaints;
@@ -682,7 +683,7 @@ void gpu_unref(uint32_t id)
     mmio32_w(g_notify + g_q.notify_off * g_cap[CAP_NOTIFY_CFG].mult, 0);
 
     for (unsigned spin = 0; spin < 20000000u && g_q.used->idx == last; ++spin)
-        asm volatile("pause" ::: "memory");
+        vnu::arch::relax();
     g_q.next_desc = static_cast<uint16_t>((head + 1) % g_q.size);
 }
 

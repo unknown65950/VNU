@@ -1,18 +1,7 @@
 #include <vnu/pci.h>
+#include <vnu/arch/io.h>
 
 namespace {
-
-void outl(uint16_t port, uint32_t val)
-{
-    asm volatile("outl %0,%1" : : "a"(val), "Nd"(port));
-}
-
-uint32_t inl(uint16_t port)
-{
-    uint32_t v;
-    asm volatile("inl %1,%0" : "=a"(v) : "Nd"(port));
-    return v;
-}
 
 uint32_t config_addr(uint8_t bus, uint8_t dev, uint8_t func,
                           uint16_t reg)
@@ -28,14 +17,14 @@ namespace vnu::pci {
 
 uint32_t read_dword(Address a, uint16_t reg)
 {
-    outl(0xCF8, config_addr(a.bus, a.dev, a.func, reg));
-    return inl(0xCFC);
+    vnu::arch::io_out32(0xCF8, config_addr(a.bus, a.dev, a.func, reg));
+    return vnu::arch::io_in32(0xCFC);
 }
 
 void write_dword(Address a, uint16_t reg, uint32_t val)
 {
-    outl(0xCF8, config_addr(a.bus, a.dev, a.func, reg));
-    outl(0xCFC, val);
+    vnu::arch::io_out32(0xCF8, config_addr(a.bus, a.dev, a.func, reg));
+    vnu::arch::io_out32(0xCFC, val);
 }
 
 uint16_t read_word(Address a, uint16_t reg)

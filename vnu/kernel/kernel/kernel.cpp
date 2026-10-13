@@ -24,8 +24,9 @@
 #include <vnu/vga_gfx.h>
 #include <vnu/virtio_gpu.h>
 #include <vnu/audio.h>
+#include <vnu/arch/cpu.h>
+#include <vnu/arch/serial.h>
 extern "C" void vnu_console_start();
-extern "C" void vnu_debug_putc(char c);
 
 namespace
 {
@@ -40,39 +41,6 @@ namespace
     {
         vnu::tty::write_cstr(str);
     }
-
-    // Output also goes to the COM1 serial port (0x3F8), so the log is
-    // visible through `qemu -serial stdio` even without graphics, which
-    // is convenient for CI.
-    void outb(std::uint16_t port, std::uint8_t value)
-    {
-        asm volatile("outb %0, %1" : : "a"(value), "Nd"(port));
-    }
-
-    std::uint8_t inb(std::uint16_t port)
-    {
-        std::uint8_t value;
-        asm volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
-        return value;
-    }
-
-    void serial_init()
-    {
-        outb(0x3F8 + 1, 0x00); // disable interrupts
-        outb(0x3F8 + 3, 0x80); // enable DLAB
-        outb(0x3F8 + 0, 0x03); // divisor = 3 -> 38400 baud
-        outb(0x3F8 + 1, 0x00);
-        outb(0x3F8 + 3, 0x03); // 8 bits, no parity, 1 stop bit
-        outb(0x3F8 + 2, 0xC7); // enable the FIFO
-        outb(0x3F8 + 4, 0x0B); // IRQs enabled, RTS/DSR set
-    }
-
-    bool serial_transmit_empty()
-    {
-        return (inb(0x3F8 + 5) & 0x20) != 0;
-    }
-
-
 }
 
 
@@ -128,10 +96,10 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
      * partition at /mnt. Ordered after ata::init(), before any process
      * can open a file. */
     vnu::vfs::init_disks();
-    serial_init();
+    vnu::arch::debug_init();
     /* An installed disk carries the node name the installer was given;
      * adopt it into /etc/hostname. A live session keeps the default.
-     * After serial_init(), so the note reaches the console log. */
+     * After the debug log is up, so the note reaches the console log. */
     if (vnu::host::load())
         vga_print("VNU: host name from installed disk\n");
     vnu::tty::init();
@@ -143,20 +111,19 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
                                 silent no-op otherwise (desktop stays on VBE) */
     if (magic != 0x36d76289) {
         vga_print("invalid multiboot2 magic\n", 4);
-        for (;;)
-            asm volatile("hlt");
+        vnu::arch::halt_forever();
     }
     vga_print("VNU: starting init (/sbin/init)\n");
 
     /* Network self-test: verify ARP + ICMP ping to the gateway. */
     {
         auto putdec = [](unsigned long v) {
-            if (v == 0) { vnu_debug_putc('0'); return; }
+            if (v == 0) { vnu::arch::debug_putc('0'); return; }
             char buf[12]; int n = 0;
             while (v) { buf[n++] = static_cast<char>('0' + v % 10); v /= 10; }
-            while (n) vnu_debug_putc(buf[--n]);
+            while (n) vnu::arch::debug_putc(buf[--n]);
         };
-        auto putstr = [](const char* s) { for (; *s; ++s) vnu_debug_putc(*s); };
+        auto putstr = [](const char* s) { for (; *s; ++s) vnu::arch::debug_putc(*s); };
         long rtt = vnu::net::ping(vnu::net::GW_IP, 4000);
         putstr("NET SELFTEST ping 10.0.2.2 > ");
         if (rtt >= 0) { putdec(rtt); putstr(" ms\n"); }
@@ -169,12 +136,12 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
      * purely to validate the connect()/send()/recv() path end-to-end. */
     {
         auto putdec = [](unsigned long v) {
-            if (v == 0) { vnu_debug_putc('0'); return; }
+            if (v == 0) { vnu::arch::debug_putc('0'); return; }
             char buf[12]; int n = 0;
             while (v) { buf[n++] = static_cast<char>('0' + v % 10); v /= 10; }
-            while (n) vnu_debug_putc(buf[--n]);
+            while (n) vnu::arch::debug_putc(buf[--n]);
         };
-        auto putstr = [](const char* s) { for (; *s; ++s) vnu_debug_putc(*s); };
+        auto putstr = [](const char* s) { for (; *s; ++s) vnu::arch::debug_putc(*s); };
         int sock = vnu::tcp::socket_open(2, 1); /* AF_INET, SOCK_STREAM */
         if (sock < 0) {
             putstr("TCP SELFTEST socket: "); putdec(-sock); putstr("\n");
@@ -194,7 +161,7 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
                     rc = vnu::tcp::socket_recv(sock, in, sizeof(in), 8000);
                     putstr("TCP SELFTEST recv: "); putdec(rc); putstr(" :");
                     if (rc > 0) {
-                        for (long i = 0; i < rc; ++i) vnu_debug_putc(in[i]);
+                        for (long i = 0; i < rc; ++i) vnu::arch::debug_putc(in[i]);
                     }
                     putstr("\n");
                 }
@@ -218,8 +185,7 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
         if (rc < 0) {
             vga_print("init failed — falling back to native console\n", 4);
             vnu_console_start();
-            for (;;)
-                asm volatile("hlt");
+            vnu::arch::halt_forever();
         }
         vga_print("[init exited — respawning init]\n");
     }

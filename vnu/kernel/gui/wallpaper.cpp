@@ -59,6 +59,7 @@
 #include <vnu/vfs.h>
 #include <vnu/posix.h>
 #include <vnu/vga_gfx.h>
+#include <vnu/arch/cpu.h>
 #include <cstdint>
 
 #undef malloc
@@ -520,46 +521,17 @@ void stretch()
 /* px.h's JPEG IDCT is IEEE single-precision float code, and this is the
  * one file the kernel builds with the FPU on (see kernel/CMakeLists.txt).
  * Everything else the kernel does with a processor state - the IDCT
- * included - happens between an fxsave and an fxrstor of the same 512
- * bytes, so what a program left in the registers is what it finds again
- * even though the kernel borrowed them for a megapixel of JPEG. The
- * buffer is 512 bytes because that is the format's size and not one byte
- * less, with 16 more so it can be lined up: fxsave faults without a
- * 16-byte aligned operand, and __attribute__((aligned)) only promises
- * alignment relative to the stack the frame was built on - which here is
- * not the kernel's own stack at all. A wallpaper is decoded inside a
- * syscall (see arch/i386/syscall/syscall.s, which hands the handler the
- * process's stack), so the alignment is worked out here instead of
- * trusted from the frame GCC laid out. */
-struct FpuState {
-    uint8_t raw[512 + 16];
-};
-
-inline void* fpu_operand(FpuState& s)
-{
-    const std::uintptr_t p = reinterpret_cast<std::uintptr_t>(s.raw);
-    return reinterpret_cast<void*>(p & ~static_cast<std::uintptr_t>(15));
-}
-
-inline void fpu_save(void* p)
-{
-    asm volatile("fxsave %0" : : "m"(*static_cast<uint8_t*>(p)) : "memory");
-}
-
-inline void fpu_restore(const void* p)
-{
-    asm volatile("fxrstor %0"
-                 : : "m"(*static_cast<const uint8_t*>(p)) : "memory");
-}
-
+ * included - happens between an arch::fpu_save() and an arch::fpu_restore()
+ * of the same 512 bytes (the arch layer owns the buffer and its x86
+ * 16-byte alignment), so what a program left in the registers is what it
+ * finds again even though the kernel borrowed them for a megapixel of
+ * JPEG. */
 class FpuBorrow {
 public:
-    FpuBorrow() { fpu_save(fpu_operand(m_state)); }
-    ~FpuBorrow() { fpu_restore(fpu_operand(m_state)); }
+    FpuBorrow() { vnu::arch::fpu_save(); }
+    ~FpuBorrow() { vnu::arch::fpu_restore(); }
     FpuBorrow(const FpuBorrow&) = delete;
     FpuBorrow& operator=(const FpuBorrow&) = delete;
-private:
-    FpuState m_state;
 };
 
 /* How much scratch a decode of this format at this size can ask for, so
