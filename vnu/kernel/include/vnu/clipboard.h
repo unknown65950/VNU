@@ -4,7 +4,7 @@
 // The system clipboard: one buffer of text that any program can put
 // something into and any other program can read back. It is what
 // backing /dev/clipboard with a device rather than a syscall buys:
-// `clipboard copy' in a shell, Ctrl+C in a window and `cat
+// Ctrl+C in a window, the `clipboard` app and `echo ... >
 // /dev/clipboard` in a script all go through the same open/read/write
 // the VFS already serves, so every program - console or windowed, C or
 // shell - shares one clipboard without an API of its own.

@@ -490,6 +490,28 @@ void glyph_music(int x, int y)
     put_pixel(ox + 13, oy + 4, COLOR_BLACK);
 }
 
+void glyph_clipboard(int x, int y)
+{
+    using namespace vnu::vgfx;
+    const int ox = x + 4, oy = y + 4;
+    rect(ox + 1, oy + 1, 14, 14, COLOR_BLACK);          /* board */
+    fill_rect(ox + 2, oy + 2, 12, 12, COLOR_WHITE);
+    fill_rect(ox + 6, oy, 4, 3, COLOR_BLACK);           /* the clip */
+    hline(ox + 4, oy + 6, 8, COLOR_BLACK);              /* what is held */
+    hline(ox + 4, oy + 9, 8, COLOR_BLACK);
+    hline(ox + 4, oy + 12, 5, COLOR_BLACK);
+}
+
+void glyph_eyes(int x, int y)
+{
+    using namespace vnu::vgfx;
+    const int ox = x + 4, oy = y + 4;
+    fill_circle(ox + 5, oy + 8, 4, COLOR_WHITE);        /* the whites */
+    fill_circle(ox + 11, oy + 8, 4, COLOR_WHITE);
+    fill_circle(ox + 6, oy + 8, 2, COLOR_BLACK);        /* pupils */
+    fill_circle(ox + 12, oy + 8, 2, COLOR_BLACK);
+}
+
 /* 24x24 app tile with the accent fill, crisp border and pictogram —
  * shared by the desktop icons and the taskbar's running-app buttons. */
 void draw_app_tile(int x, int y, const vnu::apps::AppEntry& app)
@@ -514,6 +536,8 @@ void draw_app_tile(int x, int y, const vnu::apps::AppEntry& app)
     case vnu::apps::IconGlyph::ICON_SLIDERS: glyph_sliders(x, y); break;
     case vnu::apps::IconGlyph::ICON_CLOCK:   glyph_clock(x, y); break;
     case vnu::apps::IconGlyph::ICON_MUSIC:   glyph_music(x, y); break;
+    case vnu::apps::IconGlyph::ICON_CLIPBOARD: glyph_clipboard(x, y); break;
+    case vnu::apps::IconGlyph::ICON_EYES:    glyph_eyes(x, y); break;
     default: {
         char letter[2] = {app.name[0], 0};
         draw_char(x + (ICON_SIZE - 8) / 2, y + (ICON_SIZE - 16) / 2,
@@ -1643,6 +1667,57 @@ void run(const char* open_app)
             if (my < 0) my = 0;
             if (mx >= vnu::vgfx::width()) mx = vnu::vgfx::width() - 1;
             if (my >= vnu::vgfx::height()) my = vnu::vgfx::height() - 1;
+
+            /* A moving pointer is news to a pixel app that follows it
+             * (vibeeyes): the window under the pointer hears it first,
+             * and if the pointer is over the desktop or the panel the
+             * focused window is told instead - that is what keeps an
+             * eye on a cursor that has left the window, the way xeyes
+             * does. Coordinates are client-area pixels and may fall
+             * outside the canvas; an app that only wants a direction
+             * clamps them itself. Only motion is sent, so leaning on a
+             * button in one place does not wake anyone. */
+            if (dx != 0 || dy != 0) {
+                TaskHandle mh = NO_TASK;
+                for (int i = order_len - 1; i >= 0; --i) {
+                    TaskHandle h = order[i];
+                    if (!window_exists(h) || minimized[h])
+                        continue;
+                    const Window& win = geom[h];
+                    vnu::wintask::Console* con = vnu::wintask::console(h);
+                    if (!win.w || !win.h || !con || !con->gfx)
+                        continue;
+                    if (mx < win.x || mx >= win.x + win.w)
+                        continue;
+                    if (my < win.y || my >= win.y + win.h)
+                        continue;
+                    mh = h;
+                    break;
+                }
+                if (mh == NO_TASK && focused != NO_TASK &&
+                    window_exists(focused) && !minimized[focused]) {
+                    vnu::wintask::Console* con = vnu::wintask::console(focused);
+                    if (con && con->gfx)
+                        mh = focused;
+                }
+                if (mh != NO_TASK) {
+                    vnu::wintask::Console* con = vnu::wintask::console(mh);
+                    const Window& win = geom[mh];
+                    int cw = win.w - 8;
+                    int ch = win.h - TITLE_H - 12;
+                    if (cw < 1)
+                        cw = 1;
+                    if (ch < 1)
+                        ch = 1;
+                    const int src_w = con->pix_w > 0 ? con->pix_w
+                                                     : vnu::wintask::GFX_W;
+                    const int src_h = con->pix_h > 0 ? con->pix_h
+                                                     : vnu::wintask::GFX_H;
+                    vnu::wintask::feed_mouse(
+                        mh, 5, (mx - (win.x + 2)) * src_w / cw,
+                        (my - (win.y + TITLE_H + 2)) * src_h / ch);
+                }
+            }
 
             bool left_down = (buttons & 0x01) != 0;
             bool just_pressed = left_down && !left_was_down;

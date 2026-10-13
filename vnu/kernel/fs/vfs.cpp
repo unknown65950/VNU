@@ -1311,8 +1311,9 @@ void init()
     add_dev("/dev/console", DevKind::Tty);
     /* The system clipboard: reading walks whatever text was last put
      * in, writing replaces it (opening for write clears it, see open).
-     * The `clipboard` command and every windowed app's Ctrl+C/Ctrl+V
-     * meet here, which is the whole point of it being a device. */
+     * The `clipboard` app, every windowed app's Ctrl+C/Ctrl+V and a
+     * script's redirection all meet here, which is the whole point of
+     * it being a device. */
     add_dev("/dev/clipboard", DevKind::Clipboard);
     /* Classic OSS name for the sound card's DAC: writes to /dev/dsp
      * stream 16-bit stereo PCM (the AC'97 driver's native format) into

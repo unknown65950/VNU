@@ -45,6 +45,8 @@ enum IconGlyph {
     ICON_CLOCK,      // clock — analogue face
     ICON_MUSIC,      // play — quarter note
     ICON_NOTE,       // sticky — a note with its corner turned up
+    ICON_CLIPBOARD,  // clipboard — a board with a clip and text lines
+    ICON_EYES,       // vibeeyes — a pair of eyes
 };
 
 struct AppEntry {

@@ -1,0 +1,20 @@
+NAME
+    vibeeyes - a pair of eyes that follow the pointer
+
+SYNOPSIS
+    vibeeyes
+
+DESCRIPTION
+    A window with two eyes whose pupils follow the mouse pointer, the
+    old xeyes joke. As the pointer moves, the kernel hands the window
+    the pixel under it and the pupils turn to look at it. When the
+    pointer is over the desktop rather than over a window, the focused
+    window still hears where it is, so the eyes keep tracking after the
+    cursor has left their window; a position past the edge is still a
+    direction to look in.
+
+    The eyes blink now and then, on the one-second heartbeat every
+    windowed program is given.
+
+KEYS
+    Esc   close the window

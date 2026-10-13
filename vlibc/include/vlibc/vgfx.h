@@ -16,6 +16,14 @@
  *   <button>: 1 = left press, 2 = left released, 3 = Esc key,
  *             4 = drag cancelled (the click turned into a drag and no
  *                 release will ever come for it)
+ *             5 = pointer moved.  Sent while the cursor is over this
+ *                 window, and to the focused window when the cursor is
+ *                 not over any pixel window, so a program that follows
+ *                 the cursor (vibeeyes) can aim without an API of its
+ *                 own.  The coordinates are the same client-area pixels
+ *                 as a press; they may fall outside the canvas when the
+ *                 cursor has left the window, which is the point - the
+ *                 direction is still the cursor's.
  *   <xl>/<xh>, <yl>/<yh>: little-endian 16-bit client-area pixel
  *   coordinates (0..479 / 0..339).
  *   ESC '[' 'D' <len_lo> <len_hi> <path...> — drag-and-drop: the GUI
@@ -74,11 +82,12 @@
 #define VGFX_EV_DROP    4
 #define VGFX_EV_DRAG_CANCEL 5
 #define VGFX_EV_RESIZE  6
+#define VGFX_EV_MOVE    7
 
 typedef struct {
     int type;     /* VGFX_EV_* */
-    int x, y;    /* valid for PRESS / RELEASE */
-    int button;  /* 1 = left press, 2 = release, 4 = drag cancelled */
+    int x, y;    /* valid for PRESS, RELEASE and MOVE */
+    int button;  /* 1 = press, 2 = release, 4 = drag cancelled, 5 = move */
     /* Unsigned on purpose: the kernel normalises the PS/2 scancodes for
      * the arrows into 0x81..0x87 (see keys.h), and a signed char would
      * make every comparison against them false. */

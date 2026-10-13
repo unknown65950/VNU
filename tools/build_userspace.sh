@@ -60,6 +60,8 @@ VASH_SRC="$ROOT/vnu/userspace/vash/strbuf.c $ROOT/vnu/userspace/vash/cmd.c $ROOT
 "$VCC" "$ROOT/vnu/userspace/gui/browser.c" -o "$ROOT/sysroot/bin/browser"
 "$VCC" "$ROOT/vnu/userspace/gui/clock.c" -o "$ROOT/sysroot/bin/clock"
 "$VCC" "$ROOT/vnu/userspace/gui/sticky.c" -o "$ROOT/sysroot/bin/sticky"
+"$VCC" "$ROOT/vnu/userspace/gui/clipboard.c" -o "$ROOT/sysroot/bin/clipboard"
+"$VCC" "$ROOT/vnu/userspace/gui/vibeeyes.c" -o "$ROOT/sysroot/bin/vibeeyes"
 "$VCC" "$ROOT/vnu/userspace/examples/hello/hello.c" -o "$ROOT/sysroot/bin/hello"
 "$VCC" "$ROOT/vnu/userspace/examples/vprobe.c" -o "$ROOT/sysroot/bin/vprobe"
 "$VCC" "$ROOT/vnu/userspace/examples/tlsdemo.c" -o "$ROOT/sysroot/bin/tlsdemo"
@@ -74,7 +76,7 @@ VASH_SRC="$ROOT/vnu/userspace/vash/strbuf.c $ROOT/vnu/userspace/vash/cmd.c $ROOT
 # coreutils: one separate binary per command (no multi-call applet).
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wc head tail grep sort cp mv basename dirname seq df ping ip \
-         fetch clipboard wallpaper nohup; do
+         fetch wallpaper nohup; do
   "$VCC" "$ROOT/vnu/userspace/vibecoreutils/$c.c" -o "$ROOT/sysroot/bin/$c"
 done
 # imagine lives under cli/ rather than vibecoreutils/, so it is built here
@@ -105,6 +107,8 @@ embed "$ROOT/sysroot/bin/browser" browser
 embed "$ROOT/sysroot/bin/clock" clock
 embed "$ROOT/sysroot/bin/play" play
 embed "$ROOT/sysroot/bin/sticky" sticky
+embed "$ROOT/sysroot/bin/clipboard" clipboard
+embed "$ROOT/sysroot/bin/vibeeyes" vibeeyes
 embed "$ROOT/vnu/userspace/gui/sounds/chime.wav" wav_chime
 embed "$ROOT/vnu/userspace/gui/sounds/melody.wav" wav_melody
 embed "$ROOT/vnu/userspace/gui/sounds/beep.wav" wav_beep
@@ -142,7 +146,7 @@ embed "$ROOT/sysroot/lib/crt0.o" lib_crt0
 embed "$ROOT/sysroot/lib/libvlibc.a" lib_vlibc
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wc head tail grep sort cp mv basename dirname seq df ping ip \
-         fetch clipboard wallpaper imagine nohup; do
+         fetch wallpaper imagine nohup; do
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
 for c in id whoami groups useradd passwd su sysctl quota; do

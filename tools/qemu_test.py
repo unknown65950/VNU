@@ -500,17 +500,18 @@ SUITE = [
     ("ip-route", "ip route",
      [r"^default via 10\.0\.2\.2 dev eth0$",
       r"^10\.0\.2\.0/24 dev eth0 scope link src 10\.0\.2\.15$"], []),
-    # The clipboard is the /dev/clipboard character device: one command
-    # writes it, another reads it, and the shell's own redirection lands
-    # in the same place. State carries from one case to the next in the
-    # same boot, which is what lets these read what the previous one set.
-    ("clipboard-copy", "clipboard copy hello-clipboard", [], []),
-    ("clipboard-paste", "clipboard", [r"^hello-clipboard$"], []),
-    ("clipboard-device", "cat /dev/clipboard", [r"^hello-clipboard$"], []),
-    ("clipboard-args", "clipboard copy alpha beta", [], []),
-    ("clipboard-args-read", "clipboard", [r"^alpha beta$"], []),
-    ("clipboard-clear", "clipboard clear", [], []),
-    ("clipboard-empty", "clipboard", [r"^$"], [r"\S"]),
+    # The clipboard is the /dev/clipboard character device, and shell
+    # redirection is how a script reaches it now that the clipboard is a
+    # desktop app rather than a coreutils command. Writing the device
+    # replaces its text; reading walks it from the start. State carries
+    # from one case to the next in the same boot, which is what lets
+    # these read what the previous one set.
+    ("clipboard-copy", "echo hello-clipboard > /dev/clipboard", [], []),
+    ("clipboard-paste", "cat /dev/clipboard", [r"^hello-clipboard$"], []),
+    ("clipboard-spaces", "echo alpha beta > /dev/clipboard", [], []),
+    ("clipboard-spaces-read", "cat /dev/clipboard", [r"^alpha beta$"], []),
+    ("clipboard-clear", "cat /dev/null > /dev/clipboard", [], []),
+    ("clipboard-empty", "cat /dev/clipboard", [r"^$"], [r"\S"]),
     ("uname-all", "uname -a",
      [r"^VNU vnu 0\.7\.0 Canyon \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} i386 "],
      []),
@@ -672,6 +673,10 @@ SUITE = [
     ("man-sticky-text", "cat /tmp/man-sticky.out",
      [r"^NAME$", r"sticky - a sticky note for the desktop",
       r"^KEYS$", r"^FILES$", r"/root/\.sticky-note"], []),
+    ("man-vibeeyes", "man vibeeyes > /tmp/man-vibeeyes.out",
+     [], [r"press h for help"]),
+    ("man-vibeeyes-text", "cat /tmp/man-vibeeyes.out",
+     [r"^NAME$", r"vibeeyes - a pair of eyes", r"pointer"], []),
     # -- the `#!' line, in the kernel ----------------------------------
     # A `#!' file is run by the interpreter it names, and POSIX puts one
     # optional argument on that line between the interpreter and the

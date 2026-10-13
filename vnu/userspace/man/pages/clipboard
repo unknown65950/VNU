@@ -1,37 +1,57 @@
 NAME
-    clipboard - read and write the system clipboard
+    clipboard - the system clipboard, in a window
 
 SYNOPSIS
     clipboard
-    clipboard paste
-    clipboard copy [TEXT...]
-    clipboard clear
 
 DESCRIPTION
-    Reads and writes the system clipboard: the one piece of text that
-    every program on the machine shares. A windowed program's Ctrl+C
-    puts its selection there, Ctrl+V reads it back, and this command
-    does the same from a shell or a script.
+    The clipboard is one piece of text every program shares. Windowed
+    programs put a selection there with Ctrl+C and read it back with
+    Ctrl+V, a shell reaches it through the /dev/clipboard character
+    device, and this window shows that same text and lets it be edited.
 
-    With no argument, or with paste, it prints the clipboard to
-    standard output. With copy it replaces the clipboard: the TEXT
-    arguments are joined with spaces and a newline is appended, so
-    `clipboard copy hello world` copies one line; with no TEXT it reads
-    standard input instead, so `command | clipboard copy` and
-    `clipboard copy < file` both work. With clear it empties the
-    clipboard.
+    The window opens on whatever is in the clipboard and loads it into
+    an editor. Typing changes the buffer on screen; the copy button
+    writes it back to the clipboard, reload throws the screen away and
+    reads the clipboard again, and clear empties both. Closing the
+    window with Esc copies an edit that has not been copied yet, so
+    nothing typed is lost by accident.
 
-    The clipboard is the /dev/clipboard character device. Writing the
-    device replaces what was there; reading it walks the current text
-    from the beginning to the end. It lives in RAM and does not survive
-    a reboot.
+    The title bar names the device the text lives in, and the status
+    line says whether the buffer and the clipboard agree and how many
+    bytes the buffer holds.
+
+    From a shell the clipboard is reached by redirection, since it is a
+    device like any other:
+
+        cat /dev/clipboard              print the clipboard
+        echo hello > /dev/clipboard     replace it with "hello"
+        cat /dev/clipboard > file       save it to a file
+        a-command > /dev/clipboard      copy a command's output
+
+    Writing the device replaces its whole contents, so the redirection
+    is a copy and not an append.
+
+KEYS
+    printable keys     type into the buffer
+    Enter              start a new line
+    Backspace          delete backwards, joining lines at the start
+    Delete             delete forwards
+    Arrows, Home, End  move the caret
+    a click            put the caret where it landed
+    Ctrl+C             copy the line the caret is on
+    Ctrl+X             cut the line the caret is on
+    Ctrl+V             paste the clipboard at the caret
+    Ctrl+A             copy the whole buffer to the clipboard
+    Esc                copy a pending edit and close the window
+
+    The three buttons under the buffer copy it to the clipboard,
+    reload it from the clipboard, and clear both.
 
 FILES
-    /dev/clipboard   the clipboard itself
-
-EXIT STATUS
-    0 on success, 1 on an unknown command or when the device cannot be
-    opened.
+    /dev/clipboard   the clipboard itself: writing replaces it and
+                     reading walks the current text from start to end.
+                     It lives in RAM and does not survive a reboot.
 
 SEE ALSO
-    cat(1), vedit(1), sticky(1)
+    sticky(1), vedit(1)

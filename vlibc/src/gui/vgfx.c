@@ -10,7 +10,8 @@
  *   ESC '[' 'M' <button> <xl> <xh> <yl> <yh>
  * (little-endian 16-bit coordinates; a 480-wide canvas doesn't fit in
  * a single byte). vgfx_poll() parses that stream and returns
- * vgfx_event_t structs.
+ * vgfx_event_t structs; button 5 is the pointer moving, which is what
+ * lets an app follow the cursor (see vgfx.h).
  */
 #include <vlibc/vgfx.h>
 #include <vlibc/stdlib.h>
@@ -649,6 +650,8 @@ int vgfx_poll(vgfx_event_t* ev)
                 ev->type = VGFX_EV_RELEASE;
             else if (ev->button == 4)
                 ev->type = VGFX_EV_DRAG_CANCEL;
+            else if (ev->button == 5)
+                ev->type = VGFX_EV_MOVE; /* pointer moved over/beside us */
             else {
                 /* Button 3: the GUI wraps a bare Esc keypress this way
                  * (a lone 0x1B byte would stall the parser). */

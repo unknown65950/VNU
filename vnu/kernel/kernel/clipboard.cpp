@@ -3,8 +3,9 @@
 // One buffer, global to the kernel and therefore shared by every process:
 // a windowed app, a console command and the shell all see the same text.
 // The VFS character-device handlers in fs/vfs.cpp call in here; nothing
-// about the clipboard depends on the desktop running, so `clipboard` and
-// `cat /dev/clipboard` work from a plain console too.
+// about the clipboard depends on the desktop running, so `cat
+// /dev/clipboard` and `echo ... > /dev/clipboard` work from a plain
+// console too.
 //
 // There is no locking, on purpose: like the rest of the kernel it is
 // single-threaded and cooperatively scheduled (see wintask.h), so a
