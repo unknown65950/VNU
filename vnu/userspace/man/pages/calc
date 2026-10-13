@@ -11,5 +11,7 @@ DESCRIPTION
 
 KEYS
     digits 0-9, . + - * / % and = operators, Backspace to clear
-    the last digit, Esc closes the window. Launched from the
-    desktop or as /apps/calc/bin; not reachable from the shell.
+    the last digit, Esc closes the window. Ctrl+C copies the
+    display and Ctrl+V types the clipboard in as keys. Launched
+    from the desktop or as /apps/calc/bin; not reachable from the
+    shell.

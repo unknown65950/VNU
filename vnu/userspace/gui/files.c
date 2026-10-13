@@ -25,8 +25,10 @@
  * bevels, no legacy window dressing.
  *
  * Keys: j/k select (h/l too in icon view), Enter open, v toggle view,
- * Esc close. Mouse: click to select, release on the same entry to
- * open it. Drag-and-drop: press a file and drag it away — onto another
+ * Esc close. Ctrl+C copies the selected path to the system
+ * clipboard, Ctrl+V browses to a path the clipboard holds. Mouse:
+ * click to select, release on the same entry to open it.
+ * Drag-and-drop: press a file and drag it away — onto another
  * gfx window (picview opens it), onto an app icon (that app opens it)
  * or onto the bare desktop (the file moves into /root/desktop). Opening
  * a picture (png/jpg/jpeg) runs it in picview inside this window; Esc
@@ -37,6 +39,7 @@
 #include <vlibc/sys/stat.h>
 #include <vlibc/unistd.h>
 #include <vlibc/string.h>
+#include <vlibc/clipboard.h>
 
 #define MAX_ENTS 32
 #define NAME_LEN 255
@@ -77,6 +80,15 @@ static int sel = 0;           /* selected item: 0 = "..", n = n-th entry */
 static int error_flag = 0;
 static int press_item = -1;
 static int view_icons = 0;
+static char note[64];         /* last copy/paste result, or empty */
+
+static void set_note(const char* s)
+{
+    int i = 0;
+    for (; s[i] && i < (int)sizeof(note) - 1; ++i)
+        note[i] = s[i];
+    note[i] = 0;
+}
 
 static void pcat(char* dst, const char* a, const char* b)
 {
@@ -515,7 +527,9 @@ static void draw(void)
     if (error_flag) {
         vgfx_str(4, STATUS_Y + 1, "cannot open directory", VGFX_LRED);
     } else {
-        if (view_icons)
+        if (note[0])
+            vgfx_str(4, STATUS_Y + 1, note, VGFX_LCYAN);
+        else if (view_icons)
             vgfx_str(4, STATUS_Y + 1, "h/j/k/l move  enter open  v:list",
                      VGFX_WHITE);
         else
@@ -552,6 +566,80 @@ static int hit_item(int x, int y)
     return (it <= list_n) ? it : -1;
 }
 
+/* Ctrl+C: copy the selected entry's path. ".." is not an entry, so it
+ * copies the directory being shown - the other thing worth handing on
+ * from a file manager. */
+static void copy_path(void)
+{
+    char fp[PATH_LEN];
+    if (sel > 0 && sel <= list_n) {
+        pcat(fp, cwd, list[sel - 1].name);
+    } else {
+        int i = 0;
+        while (cwd[i] && i < PATH_LEN - 1) {
+            fp[i] = cwd[i];
+            ++i;
+        }
+        fp[i] = 0;
+    }
+    vclip_set(fp, (unsigned long)strlen(fp));
+    set_note("path copied");
+}
+
+/* Ctrl+V: browse to the path on the clipboard - a directory is entered,
+ * a file is entered through and selected. This is the other half of
+ * what makes Ctrl+C in here useful: copy a path in a shell or the
+ * browser, paste it and look at it. A path that is not there says so
+ * and leaves the view alone. */
+static void paste_path(void)
+{
+    char buf[PATH_LEN];
+    long n = vclip_get(buf, sizeof(buf) - 1);
+    if (n <= 0)
+        return;
+    buf[n] = 0;
+    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r' ||
+                     buf[n - 1] == ' ' || buf[n - 1] == '\t'))
+        buf[--n] = 0;
+    if (n <= 0)
+        return;
+
+    struct stat st;
+    if (stat(buf, &st) != 0) {
+        set_note("no such path");
+        return;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        enter_path(buf);
+        set_note("pasted");
+        return;
+    }
+
+    /* A file: open its directory, then put the cursor on it. */
+    char parent[PATH_LEN];
+    int slash = -1;
+    for (int i = 0; buf[i]; ++i)
+        if (buf[i] == '/')
+            slash = i;
+    if (slash <= 0) {
+        enter_path("/");
+    } else {
+        int j = 0;
+        for (; j < slash && j < PATH_LEN - 1; ++j)
+            parent[j] = buf[j];
+        parent[j] = 0;
+        enter_path(parent);
+    }
+    const char* base = slash >= 0 ? buf + slash + 1 : buf;
+    for (int i = 0; i < list_n; ++i) {
+        if (!strcmp(list[i].name, base)) {
+            sel = i + 1;
+            break;
+        }
+    }
+    set_note("pasted");
+}
+
 int main(void)
 {
     load_dir(cwd);
@@ -562,8 +650,13 @@ int main(void)
         vgfx_event_t ev;
         vgfx_poll(&ev);
         if (ev.type == VGFX_EV_KEY) {
+            note[0] = 0;
             if (ev.key == 0x1B)
                 exit(0);
+            else if (ev.key == 0x03)
+                copy_path();
+            else if (ev.key == 0x16)
+                paste_path();
             else if (ev.key == 'j' || ev.key == 'J')
                 sel_j();
             else if (ev.key == 'k' || ev.key == 'K')
@@ -583,6 +676,7 @@ int main(void)
             draw();
             vgfx_flush();
         } else if (ev.type == VGFX_EV_PRESS) {
+            note[0] = 0;
             int it = hit_item(ev.x, ev.y);
             if (it >= 0) {
                 sel = it;

@@ -68,6 +68,8 @@ KEYS
     Enter      fetch the address, or follow the selected link
     Up Down    choose a link; Home End the first or the last
     F5         fetch the last address again
+    Ctrl+C     copy the address to the system clipboard
+    Ctrl+V     paste the clipboard into the address bar
     Esc        back to the address bar, and from there close the window
 
 NOTES

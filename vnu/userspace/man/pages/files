@@ -25,6 +25,8 @@ KEYS
     v        toggle between the list and icon views
     Enter    open the selected directory, or a .png/.jpg/.jpeg
              picture in picview (Esc hands the window back here)
+    Ctrl+C   copy the selected path to the system clipboard
+    Ctrl+V   browse to the path the clipboard holds
     Esc      close the window
     Mouse: click to select, release on the same entry to open.
 

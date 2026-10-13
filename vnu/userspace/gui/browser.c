@@ -34,6 +34,8 @@
  *   Up Down       choose a link
  *   Esc           back to the bar, then close the window
  *   F5            fetch the last address again
+ *   Ctrl+C        copy the address being shown
+ *   Ctrl+V        paste the clipboard into the address bar
  */
 #include <stdint.h>
 
@@ -43,6 +45,7 @@
 #include <vlibc/stdio.h>
 #include <vlibc/socket.h>
 #include <vlibc/netdb.h>
+#include <vlibc/clipboard.h>
 
 #define BAR_H 20
 #define PAGE_TOP (BAR_H + 4)
@@ -824,6 +827,26 @@ int main(void)
         }
         if (k == VNU_KEY_F5) {
             refetch();
+            continue;
+        }
+
+        /* The clipboard, on the address: Ctrl+C copies what is shown,
+         * Ctrl+V pastes into the bar and moves the focus there so the
+         * pasted text is where it can be edited and fetched. Control
+         * bytes never reach the bar as characters, so this is the only
+         * way they can mean anything. */
+        if (k == 0x03) {
+            vclip_set(g_url, (unsigned long)strlen(g_url));
+            snprintf(g_note, sizeof(g_note), "address copied");
+            continue;
+        }
+        if (k == 0x16) {
+            char buf[256];
+            long n = vclip_get(buf, sizeof(buf));
+            for (long i = 0; i < n; ++i)
+                if (buf[i] >= 32 && buf[i] < 127)
+                    bar_insert((char)buf[i]);
+            g_focus = 1;
             continue;
         }
 

@@ -21,6 +21,12 @@ DESCRIPTION
     keep the caret on screen, and a note longer than the window is
     scrolled vertically to keep the row being edited in view.
 
+    The system clipboard (see man clipboard) is on Ctrl+C, Ctrl+X,
+    Ctrl+V and Ctrl+A: the row the caret is on is copied or cut, the
+    whole note is copied, and pasting puts the clipboard text in at
+    the caret, with its newlines starting new rows of the note. The
+    status line says what was done, in place of the file's name.
+
 KEYS
     printable keys  type into the note
     Enter            start a new line

@@ -10,11 +10,14 @@
  * the bottom.
  *
  * Keys: digits, '.' '+', '-', '*', '/', '=', '+', '%', Backspace, Esc
- * (close the window).
+ * (close the window). Ctrl+C copies the display to the system
+ * clipboard and Ctrl+V types the clipboard in as keys, so a number from
+ * anywhere can be pasted into the sum.
  */
 #include <vlibc/vgfx.h>
 #include <vlibc/unistd.h>
 #include <vlibc/string.h>
+#include <vlibc/clipboard.h>
 
 /* --- Geometry ---
  *
@@ -364,6 +367,29 @@ static void handle_key(char k)
         reset_all();
 }
 
+/* Ctrl+C: the number on the display goes to the system clipboard, for
+ * pasting into a document or another calculator. */
+static void copy_display(void)
+{
+    vclip_set(disp, (unsigned long)strlen(disp));
+}
+
+/* Ctrl+V: the clipboard is typed in, key by key, through the same
+ * handle_key() the keypad uses - so pasting "2+3=" computes it. Only
+ * what a key could have been goes through; anything else is left out
+ * rather than treated as an error. */
+static void paste_display(void)
+{
+    char buf[64];
+    long n = vclip_get(buf, sizeof(buf));
+    for (long i = 0; i < n; ++i) {
+        char c = buf[i];
+        if ((c >= '0' && c <= '9') || c == '.' || c == '+' ||
+            c == '-' || c == '*' || c == '/')
+            handle_key(c);
+    }
+}
+
 /* --- Drawing --- */
 /* The layout, recomputed from the canvas size by layout(). Keeping it
  * in globals rather than passing it around is what lets draw() and
@@ -504,7 +530,11 @@ int main(void)
             if (ev.key == 0x1B) {
                 exit(0); /* Esc closes the calculator window */
             }
-            if (ev.key == '\n' || ev.key == '\r')
+            if (ev.key == 0x03)
+                copy_display();
+            else if (ev.key == 0x16)
+                paste_display();
+            else if (ev.key == '\n' || ev.key == '\r')
                 handle_key('=');
             else if (ev.key == 0x7F || ev.key == '\b')
                 handle_key('B');

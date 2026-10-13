@@ -10,7 +10,8 @@ This directory is the VNU port: **one binary per command**, built with `vcc`
 
 Commands: `echo`, `true`, `false`, `pwd`, `cat`, `ls`, `mkdir`, `rm`,
 `touch`, `uname`, `clear`, `wc`, `head`, `tail`, `grep`, `sort`, `cp`, `mv`,
-`basename`, `dirname`, `seq`.
+`basename`, `dirname`, `seq`, `df`, `ping`, `ip`, `fetch`, `clipboard`,
+`wallpaper`, `nohup`.
 
 `vash` (the shell) and `man` live in their own directories
 (`userspace/vash/`, `userspace/man/`).

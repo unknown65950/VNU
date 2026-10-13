@@ -21,12 +21,18 @@
  * Keys: printable keys type, Enter a new line, Backspace deletes
  * backwards, VNU_KEY_DEL forwards, arrows and Home/End move, Esc
  * closes the window.
+ *
+ * Copy and paste go through the system clipboard (/dev/clipboard):
+ * Ctrl+C copies the line the caret is on, Ctrl+X cuts it, Ctrl+V
+ * pastes the clipboard at the caret (newlines start new lines), and
+ * Ctrl+A copies the whole note. The status line says what happened.
  */
 #include <vlibc/vgfx.h>
 #include <vlibc/keys.h>
 #include <vlibc/fcntl.h>
 #include <vlibc/unistd.h>
 #include <vlibc/string.h>
+#include <vlibc/clipboard.h>
 
 /* --- geometry ------------------------------------------------------- */
 
@@ -54,6 +60,7 @@ static int top;                /* first line drawn */
 static int left;               /* first column drawn */
 static int dirty;              /* changed since the last write */
 static int caret_on = 1;
+static char msg[20];           /* last copy/paste result, or empty */
 
 /* What the kernel granted, measured once: every primitive below is
  * laid out from this rather than from the header's default, because
@@ -325,11 +332,13 @@ static void draw(void)
     vgfx_fill_rect(PAD_X + 82, BTN_Y, 96, BTN_H, C_TITLE);
     vgfx_str(PAD_X + 88, BTN_Y + 1, "clear note", C_INK);
 
-    /* Status line: where the note lives and whether it is written. */
+    /* Status line: where the note lives and whether it is written, or
+     * the last copy/paste result in the same place. */
     vgfx_fill_rect(0, h - STATUS_H, w, STATUS_H, C_DIM);
     vgfx_str(PAD_X, h - STATUS_H + 1,
              dirty ? "not saved - saved on the next tick   " : "saved   ", C_TXT);
-    vgfx_str(PAD_X + 28 * CW + 6, h - STATUS_H + 1, SAVE_PATH, C_ACCENT);
+    vgfx_str(PAD_X + 28 * CW + 6, h - STATUS_H + 1,
+             msg[0] ? msg : SAVE_PATH, msg[0] ? C_INK : C_ACCENT);
 }
 
 static int hit_button(int x, int y, int* which)
@@ -355,6 +364,107 @@ static void clear_note(void)
     dirty = 1;
 }
 
+/* --- clipboard ------------------------------------------------------ */
+
+static void set_msg(const char* s)
+{
+    int i = 0;
+    for (; s[i] && i < (int)sizeof(msg) - 1; ++i)
+        msg[i] = s[i];
+    msg[i] = 0;
+}
+
+/* The line the caret is on, newline included: the unit a note's copy
+ * and cut work on, since a note has no selection to speak of. */
+static void copy_line(void)
+{
+    char buf[COLS + 2];
+    int len = (int)strlen(lines[cur_r]);
+    for (int i = 0; i < len; ++i)
+        buf[i] = lines[cur_r][i];
+    buf[len] = '\n';
+    vclip_set(buf, (unsigned long)(len + 1));
+    set_msg("line copied");
+}
+
+/* All of the note, written line by line so no second copy of the text
+ * has to fit in the window: opening the device empties it, each write
+ * appends. */
+static void copy_all(void)
+{
+    int fd = open(VCLIP_DEV, O_WRONLY);
+    if (fd < 0) {
+        set_msg("clipboard error");
+        return;
+    }
+    for (int i = 0; i < nlines; ++i) {
+        int len = (int)strlen(lines[i]);
+        if (len > 0)
+            write(fd, lines[i], (unsigned long)len);
+        if (i + 1 < nlines)
+            write(fd, "\n", 1);
+    }
+    close(fd);
+    set_msg("note copied");
+}
+
+/* Drop the line the caret is on, which is what Ctrl+X leaves behind. */
+static void delete_line(void)
+{
+    if (nlines <= 1) {
+        lines[0][0] = 0;
+        cur_c = 0;
+    } else {
+        for (int r = cur_r; r < nlines - 1; ++r)
+            for (int i = 0; i <= COLS; ++i)
+                lines[r][i] = lines[r + 1][i];
+        --nlines;
+        if (cur_r >= nlines)
+            cur_r = nlines - 1;
+        cur_c = 0;
+    }
+    dirty = 1;
+    clamp_caret();
+}
+
+static void cut_line(void)
+{
+    copy_line();
+    delete_line();
+    set_msg("line cut");
+}
+
+/* Put the clipboard in at the caret. A newline in the text starts a new
+ * line of the note, so pasting a paragraph works the way reading it
+ * does; carriage returns are dropped (the newline was the line break). */
+static void paste(void)
+{
+    int fd = open(VCLIP_DEV, O_RDONLY);
+    if (fd < 0) {
+        set_msg("clipboard error");
+        return;
+    }
+    char buf[256];
+    long total = 0;
+    for (;;) {
+        long n = read(fd, buf, sizeof(buf));
+        if (n <= 0)
+            break;
+        for (long i = 0; i < n; ++i) {
+            char c = buf[i];
+            if (c == '\r')
+                continue;
+            if (c == '\n')
+                split_line();
+            else if (c >= 0x20)
+                insert_char(c);
+        }
+        total += n;
+    }
+    close(fd);
+    set_msg(total > 0 ? "pasted" : "clipboard empty");
+}
+
 int main(void)
 {
     (void)vgfx_canvas(VGFX_W, VGFX_H);
@@ -374,12 +484,25 @@ int main(void)
                     (void)save_note();
                 exit(0);      /* Esc closes the window */
             }
+            /* A real key supersedes the last "copied" note; the
+             * heartbeat does not, so the message stays readable for
+             * more than the second it takes the caret to blink. */
+            if (ev.key != 0x06)
+                msg[0] = 0;
             if (ev.key == 0x06) {
                 /* the kernel's one-second heartbeat: the moment to put
                  * a note that has changed on disk, and to blink */
                 if (dirty)
                     (void)save_note();
                 caret_on = !caret_on;
+            } else if (ev.key == 0x03) {
+                copy_line();
+            } else if (ev.key == 0x18) {
+                cut_line();
+            } else if (ev.key == 0x16) {
+                paste();
+            } else if (ev.key == 0x01) {
+                copy_all();
             } else if (ev.key == '\r' || ev.key == '\n') {
                 split_line();
             } else if (ev.key == 0x08 || ev.key == 0x7F) {
