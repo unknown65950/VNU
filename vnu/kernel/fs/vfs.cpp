@@ -10,6 +10,7 @@
 #include <vnu/wallpaper.h>
 #include <vnu/virtio_gpu.h>
 #include <vnu/install.h>
+#include <vnu/clipboard.h>
 #include <vnu/host.h>
 #include <vnu/mboot.h>
 #include <vnu/process.h>
@@ -1272,6 +1273,7 @@ void init()
     add("/bin/ping", false);
     add("/bin/fetch", false);
     add("/bin/ip", false);
+    add("/bin/clipboard", false);
     add("/bin/id", false);
     add("/bin/whoami", false);
     add("/bin/groups", false);
@@ -1307,6 +1309,11 @@ void init()
     add_dev("/dev/urandom", DevKind::Random);
     add_dev("/dev/tty", DevKind::Tty);
     add_dev("/dev/console", DevKind::Tty);
+    /* The system clipboard: reading walks whatever text was last put
+     * in, writing replaces it (opening for write clears it, see open).
+     * The `clipboard` command and every windowed app's Ctrl+C/Ctrl+V
+     * meet here, which is the whole point of it being a device. */
+    add_dev("/dev/clipboard", DevKind::Clipboard);
     /* Classic OSS name for the sound card's DAC: writes to /dev/dsp
      * stream 16-bit stereo PCM (the AC'97 driver's native format) into
      * the DMA ring; the syscall layer routes them to the audio device
@@ -1726,6 +1733,13 @@ int open(const char* path, uint32_t flags)
             return -VNU_ENODEV;
         }
     }
+    /* Opening the clipboard for writing empties it: a writer replaces
+     * what was there - the shell's `clipboard copy' or `> /dev/clipboard',
+     * a window's Ctrl+C - rather than appending to the previous owner's
+     * text, and a plain open+close is all `clipboard clear' has to do.
+     * A read-only open leaves the text alone. */
+    if (nodes[ni].dev == DevKind::Clipboard && (flags & 3u) != 0)
+        vnu::clip::clear();
     /* Real descriptors start at 3, right after stdio: a windowed app's
      * canvas is shared memory it holds a virtual address for now (see
      * wintask::GFX_SURFACE_VA), not a descriptor. */
@@ -1858,6 +1872,12 @@ int read(int fd, void* buf, uint32_t count)
                                static_cast<vnu_fb_info*>(buf)))
                 return -VNU_ENODEV;
             return static_cast<int>(sizeof(vnu_fb_info));
+        case DevKind::Clipboard: {
+            const uint32_t got = vnu::clip::read_at(files[fd].position,
+                                                    buf, count);
+            files[fd].position += got;
+            return static_cast<int>(got);
+        }
         case DevKind::Block: {
             const int r = vnu::blockdev::read(n.blk, files[fd].position,
                                               buf, count);
@@ -1964,6 +1984,11 @@ int write(int fd, const void* buf, uint32_t count)
                 return put; /* the errno, not a position to advance */
             files[fd].position += static_cast<uint32_t>(put);
             return put;
+        }
+        case DevKind::Clipboard: {
+            const uint32_t put = vnu::clip::append(buf, count);
+            files[fd].position += put;
+            return static_cast<int>(put);
         }
         case DevKind::Block: {
             const int r = vnu::blockdev::write(n.blk, files[fd].position,

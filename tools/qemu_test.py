@@ -500,6 +500,17 @@ SUITE = [
     ("ip-route", "ip route",
      [r"^default via 10\.0\.2\.2 dev eth0$",
       r"^10\.0\.2\.0/24 dev eth0 scope link src 10\.0\.2\.15$"], []),
+    # The clipboard is the /dev/clipboard character device: one command
+    # writes it, another reads it, and the shell's own redirection lands
+    # in the same place. State carries from one case to the next in the
+    # same boot, which is what lets these read what the previous one set.
+    ("clipboard-copy", "clipboard copy hello-clipboard", [], []),
+    ("clipboard-paste", "clipboard", [r"^hello-clipboard$"], []),
+    ("clipboard-device", "cat /dev/clipboard", [r"^hello-clipboard$"], []),
+    ("clipboard-args", "clipboard copy alpha beta", [], []),
+    ("clipboard-args-read", "clipboard", [r"^alpha beta$"], []),
+    ("clipboard-clear", "clipboard clear", [], []),
+    ("clipboard-empty", "clipboard", [r"^$"], [r"\S"]),
     ("uname-all", "uname -a",
      [r"^VNU vnu 0\.7\.0 Canyon \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} i386 "],
      []),
@@ -644,6 +655,10 @@ SUITE = [
     ("man-ip", "man ip > /tmp/man-ip.out", [], [r"press h for help"]),
     ("man-ip-text", "cat /tmp/man-ip.out",
      [r"^NAME$", r"ip -", r"/proc/net/dev"], []),
+    ("man-clipboard", "man clipboard > /tmp/man-clipboard.out", [],
+     [r"press h for help"]),
+    ("man-clipboard-text", "cat /tmp/man-clipboard.out",
+     [r"^NAME$", r"clipboard -", r"/dev/clipboard"], []),
     # `install` is a `vnu` subcommand now, so it has no page of its own.
     ("man-no-install", "man install",
      [r"^man: no manual page for install$"], []),

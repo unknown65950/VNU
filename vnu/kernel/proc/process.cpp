@@ -46,6 +46,7 @@
 #include "embedded_ping.h"
 #include "embedded_fetch.h"
 #include "embedded_ip.h"
+#include "embedded_clipboard.h"
 #include "embedded_id.h"
 #include "embedded_whoami.h"
 #include "embedded_groups.h"
@@ -126,6 +127,7 @@ const EmbeddedProg embedded[] = {
     {"/bin/ping", embedded_ping_elf, embedded_ping_elf_size},
     {"/bin/fetch", embedded_fetch_elf, embedded_fetch_elf_size},
     {"/bin/ip", embedded_ip_elf, embedded_ip_elf_size},
+    {"/bin/clipboard", embedded_clipboard_elf, embedded_clipboard_elf_size},
     {"/bin/man", embedded_man_elf, embedded_man_elf_size},
     {"/bin/vibecommander", embedded_vibecommander_elf, embedded_vibecommander_elf_size},
     {"/bin/sticky", embedded_sticky_elf, embedded_sticky_elf_size},

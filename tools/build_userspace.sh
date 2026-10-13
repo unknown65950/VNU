@@ -74,7 +74,7 @@ VASH_SRC="$ROOT/vnu/userspace/vash/strbuf.c $ROOT/vnu/userspace/vash/cmd.c $ROOT
 # coreutils: one separate binary per command (no multi-call applet).
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wc head tail grep sort cp mv basename dirname seq df ping ip \
-         fetch wallpaper nohup; do
+         fetch clipboard wallpaper nohup; do
   "$VCC" "$ROOT/vnu/userspace/vibecoreutils/$c.c" -o "$ROOT/sysroot/bin/$c"
 done
 # imagine lives under cli/ rather than vibecoreutils/, so it is built here
@@ -142,7 +142,7 @@ embed "$ROOT/sysroot/lib/crt0.o" lib_crt0
 embed "$ROOT/sysroot/lib/libvlibc.a" lib_vlibc
 for c in echo true false pwd cat ls mkdir rm touch uname clear \
          wc head tail grep sort cp mv basename dirname seq df ping ip \
-         fetch wallpaper imagine nohup; do
+         fetch clipboard wallpaper imagine nohup; do
   embed "$ROOT/sysroot/bin/$c" "$c"
 done
 for c in id whoami groups useradd passwd su sysctl quota; do

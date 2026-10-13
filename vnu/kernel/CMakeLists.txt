@@ -146,6 +146,7 @@ add_executable(kernel.elf
     host/host.cpp
     runtime/string.cpp
     kernel/kernel.cpp
+    kernel/clipboard.cpp
     mm/pmm.cpp
     mm/paging.cpp
     proc/elf.cpp

@@ -1,0 +1,37 @@
+NAME
+    clipboard - read and write the system clipboard
+
+SYNOPSIS
+    clipboard
+    clipboard paste
+    clipboard copy [TEXT...]
+    clipboard clear
+
+DESCRIPTION
+    Reads and writes the system clipboard: the one piece of text that
+    every program on the machine shares. A windowed program's Ctrl+C
+    puts its selection there, Ctrl+V reads it back, and this command
+    does the same from a shell or a script.
+
+    With no argument, or with paste, it prints the clipboard to
+    standard output. With copy it replaces the clipboard: the TEXT
+    arguments are joined with spaces and a newline is appended, so
+    `clipboard copy hello world` copies one line; with no TEXT it reads
+    standard input instead, so `command | clipboard copy` and
+    `clipboard copy < file` both work. With clear it empties the
+    clipboard.
+
+    The clipboard is the /dev/clipboard character device. Writing the
+    device replaces what was there; reading it walks the current text
+    from the beginning to the end. It lives in RAM and does not survive
+    a reboot.
+
+FILES
+    /dev/clipboard   the clipboard itself
+
+EXIT STATUS
+    0 on success, 1 on an unknown command or when the device cannot be
+    opened.
+
+SEE ALSO
+    cat(1), vedit(1), sticky(1)
