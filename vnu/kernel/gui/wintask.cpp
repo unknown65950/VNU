@@ -10,8 +10,6 @@
 
 extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
 extern "C" void vnu_swtch_pd(uint32_t* old_esp_out, uint32_t new_esp);
-extern "C" void vnu_wintask_trampoline();
-extern "C" uint32_t vnu_wintask_pending_entry, vnu_wintask_pending_stack;
 extern "C" uint32_t vnu_wintask_new_pd, vnu_wintask_old_pd;
 
 namespace {
@@ -101,6 +99,13 @@ inline void phys_store32(uint32_t pgdir, uint32_t vaddr, uint32_t v)
 {
     uint32_t pa = vnu::paging::phys_frame_at(pgdir, vaddr & ~0xFFFu) + (vaddr & 0xFFF);
     *reinterpret_cast<uint32_t*>(pa) = v;
+}
+
+/* A vnu::arch::WordWriter over phys_store32: the context layer builds a
+ * task's first frame in its private address space without owning paging. */
+void write_word(void* ctx, uint32_t vaddr, uint32_t v)
+{
+    phys_store32(*static_cast<uint32_t*>(ctx), vaddr, v);
 }
 
 /* How many NAME=value strings a task's environment can hold. */
@@ -243,18 +248,13 @@ uint32_t elf_load_into(uint32_t pgdir, const uint8_t* image, uint32_t size)
 
 void setup_switch_frame(uint32_t pgdir, Task& t)
 {
-    /* Craft the initial swtch stack just below the argv frame: five
-     * words that vnu_swtch_pd's epilogue will pop as if a prior call
-     * had pushed ebp/ebx/esi/edi and a return address — landing on the
+    /* Craft the initial swtch stack just below the argv frame: the words
+     * vnu_swtch_pd's epilogue pops as if a prior call had pushed the
+     * callee-saved registers and a return address — landing on the
      * trampoline the first time this task is switched into. */
     const uint32_t fbase = STACK_BASE + 0x1000;
-    uint32_t va = fbase - 20;
-    phys_store32(pgdir, va + 0, 0); /* edi */
-    phys_store32(pgdir, va + 4, 0); /* esi */
-    phys_store32(pgdir, va + 8, 0); /* ebx */
-    phys_store32(pgdir, va + 12, 0); /* ebp */
-    phys_store32(pgdir, va + 16, reinterpret_cast<uint32_t>(&vnu_wintask_trampoline));
-    t.saved_esp = va;
+    t.saved_esp = vnu::arch::build_first_frame(write_word, &pgdir, fbase,
+                                               vnu::arch::wintask_trampoline());
 }
 
 void console_putc(Console& c, char ch)
@@ -379,8 +379,7 @@ TaskHandle spawn_common(const char* argv0_path, const char* arg1, const uint8_t*
         nullptr, 0);
     setup_switch_frame(pgdir, t);
 
-    vnu_wintask_pending_entry = entry;
-    vnu_wintask_pending_stack = user_esp;
+    vnu::arch::set_wintask_entry(entry, user_esp);
 
     t.state = State::Runnable;
     return h;

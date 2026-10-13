@@ -124,6 +124,7 @@ add_executable(kernel.elf
     arch/${VNU_KERNEL_ARCH}/serial.cpp
     arch/${VNU_KERNEL_ARCH}/rtc.cpp
     arch/${VNU_KERNEL_ARCH}/mmu.cpp
+    arch/${VNU_KERNEL_ARCH}/context.cpp
     arch/${VNU_KERNEL_ARCH}/paging.cpp
     arch/${VNU_KERNEL_ARCH}/switch.s
     arch/${VNU_KERNEL_ARCH}/ctxswitch.s
@@ -199,6 +200,7 @@ endif()
 
 target_include_directories(kernel.elf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/${VNU_KERNEL_ARCH}/include
     ${INSTALL_BLOB_DIR}
 )
 

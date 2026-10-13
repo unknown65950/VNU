@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <vnu/abi.h>
-#include <vnu/trapframe.h>
+#include <vnu/arch/context.h>
 #include <vnu/wintask.h>
 
 namespace vnu::proc {
@@ -13,18 +13,11 @@ constexpr uint32_t USER_STACK_SIZE = 0x10000;
 
 enum class State : uint8_t { Unused=0, Runnable, Running, Blocked, Zombie };
 
-struct Registers {
-    uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
-    uint32_t eip, eflags;
-    /* Where this snapshot was read from, when the caller can say: the
-     * address of the interrupt frame the CPU pushed on the *process's
-     * own* stack (a syscall runs on it - this kernel has one address
-     * space and no TSS ring stack), as a virtual address in that
-     * process. A forked child resumes from its copy of exactly this
-     * frame, which is why the value has to be a virtual address and
-     * not just a register set (see sys_fork). 0 = not recorded. */
-    uint32_t frame;
-};
+/* The user register context is the port's business (vnu/arch/context.h);
+ * the process table stores one saved copy per process and otherwise only
+ * hands the interface pointers. */
+using Registers = vnu::arch::Registers;
+using TrapFrame = vnu::arch::TrapFrame;
 
 struct Process {
     int pid;
@@ -177,8 +170,8 @@ bool interrupt_pending();
  * nothing to deliver. A signal whose action is to terminate does not
  * come through here: it ends the process where it was raised.
  *
- *   frame_base  base of the context being abandoned, where the saved
- *               cs/eflags to run the handler with are read from.
+ *   frame_base  base of the context being abandoned, from which the port
+ *               reads what the handler's return path needs.
  *   stack_anchor an address on the process's stack to build the frame
  *               below, or 0 to use this function's own frame - which is
  *               the right answer for a caller running on the interrupted

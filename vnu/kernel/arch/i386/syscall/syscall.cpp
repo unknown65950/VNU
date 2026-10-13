@@ -16,15 +16,15 @@
 #include <vnu/audio.h>
 #include <vnu/wallpaper.h>
 #include <vnu/vga_gfx.h>
-#include <vnu/trapframe.h>
+#include <vnu/arch/context.h>
 #include <vnu/arch/cpu.h>
 #include <vnu/arch/serial.h>
 
+/* The i386 register context (see vnu/arch/context.h). The dispatcher
+ * reads the trap frame's fields directly: it is the port, so it may. */
+using vnu::arch::TrapFrame;
+
 extern "C" void vnu_return_to_console();
-extern "C" std::uint32_t vnu_pending_user_esp;
-extern "C" std::uint8_t vnu_pending_user_esp_flag;
-extern "C" std::uint32_t vnu_pending_user_eip;
-extern "C" std::uint8_t vnu_pending_jump_flag;
 
 static std::uint32_t dispatch_syscall(TrapFrame* tf)
 {
@@ -220,9 +220,7 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
              * to that shell rather than killing the window. */
             uint32_t new_eip = 0, new_esp = 0;
             if (vnu::wintask::exit_respawns_root(new_eip, new_esp)) {
-                vnu_pending_user_eip = new_eip;
-                vnu_pending_user_esp = new_esp;
-                vnu_pending_jump_flag = 1;
+                vnu::arch::request_jump(new_eip, new_esp);
                 return 0;
             }
             vnu::wintask::task_exit(); /* noreturn: switches back to the GUI */
@@ -297,9 +295,7 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
                 reinterpret_cast<char* const*>(tf->edx), new_eip, new_esp);
             if (!ok)
                 return static_cast<std::uint32_t>(-VNU_ENOENT);
-            vnu_pending_user_eip = new_eip;
-            vnu_pending_user_esp = new_esp;
-            vnu_pending_jump_flag = 1;
+            vnu::arch::request_jump(new_eip, new_esp);
             return 0;
         }
 
@@ -358,9 +354,7 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
                                        reinterpret_cast<char* const*>(tf->edx));
         if (rc == 0) {
             /* Must not iretd onto user stack — jump cleanly to new entry. */
-            vnu_pending_user_eip = trap.eip;
-            vnu_pending_user_esp = trap.esp;
-            vnu_pending_jump_flag = 1;
+            vnu::arch::request_jump(trap.eip, trap.esp);
             return 0;
         }
         return static_cast<std::uint32_t>(rc);
@@ -870,19 +864,12 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
     if (task) {
         /* A windowed task's signals live in its Console, not in the
          * process table, so delivery goes through that door. */
-        if (!vnu_pending_jump_flag &&
+        if (!vnu::arch::jump_pending() &&
             vnu::proc::deliver_task_pending_signal(task, reinterpret_cast<std::uint32_t>(tf)) != 0)
             rc = static_cast<std::uint32_t>(-VNU_EINTR);
-    } else if (!vnu_pending_jump_flag &&
+    } else if (!vnu::arch::jump_pending() &&
                vnu::proc::deliver_pending_signal(reinterpret_cast<std::uint32_t>(tf)) != 0) {
         rc = static_cast<std::uint32_t>(-VNU_EINTR);
     }
     return rc;
-}
-
-extern "C" {
-std::uint32_t vnu_pending_user_esp = 0;
-std::uint8_t vnu_pending_user_esp_flag = 0;
-std::uint32_t vnu_pending_user_eip = 0;
-std::uint8_t vnu_pending_jump_flag = 0;
 }

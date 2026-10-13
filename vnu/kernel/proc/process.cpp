@@ -68,8 +68,6 @@
 #include "embedded_quota.h"
 
 extern "C" void vnu_proc_switch(uint32_t* old_esp_out, uint32_t new_esp);
-extern "C" void vnu_proc_trampoline();
-extern "C" uint32_t vnu_proc_pending_entry, vnu_proc_pending_stack;
 extern "C" uint32_t vnu_proc_new_pd, vnu_proc_old_pd;
 extern "C" void vnu_proc_preempt(uint32_t sched_esp);
 extern "C" void vnu_proc_resume_preempted(uint32_t* old_esp_out, uint32_t new_esp);
@@ -328,7 +326,7 @@ void setup_user_stack(vnu::proc::Process& p, int argc, char* const* argv, const 
     /* argc */
     sp -= 4;
     *reinterpret_cast<uint32_t*>(sp) = static_cast<uint32_t>(argc);
-    p.regs.esp = sp;
+    vnu::arch::regs_set_stack(&p.regs, sp);
 }
 
 } // namespace
@@ -344,8 +342,8 @@ namespace {
  * read — at which point yield_current() swaps back to the scheduler
  * (parking the process's ESP inside the very syscall handler that
  * blocked) and the scheduler gives the next runnable process a slice.
- * See ctxswitch.s's vnu_proc_switch (separate new/old pd globals from
- * the GUI's vnu_wintask_*) and vnu_proc_trampoline (first-run entry). */
+ * See arch/i386/ctxswitch.s's vnu_proc_switch (separate new/old pd
+ * globals from the GUI's vnu_wintask_*). */
 
 /* Byte/word stores into a *different* address space, same helpers as
  * the wintask manager: resolve the physical frame backing `vaddr` in
@@ -362,6 +360,19 @@ void phys_store32(uint32_t pgdir, uint32_t vaddr, uint32_t v)
 {
     uint32_t pa = vnu::paging::phys_frame_at(pgdir, vaddr & ~0xFFFu) + (vaddr & 0xFFF);
     *reinterpret_cast<uint32_t*>(pa) = v;
+}
+
+/* A vnu::arch::WordWriter over phys_store32: the context layer builds
+ * frames in a foreign address space without owning paging itself. */
+void write_word(void* ctx, uint32_t vaddr, uint32_t v)
+{
+    phys_store32(*static_cast<uint32_t*>(ctx), vaddr, v);
+}
+
+/* A WordWriter for whatever address space is current (identity-mapped). */
+void current_writer(void* /*ctx*/, uint32_t vaddr, uint32_t v)
+{
+    *reinterpret_cast<uint32_t*>(vaddr) = v;
 }
 
 /* ELF loader variant for a not-yet-running process: writes segments
@@ -417,16 +428,11 @@ uint32_t build_argv_frame_into(uint32_t pgdir, uint32_t stack_top, const char* p
 
 /* First-run switch frame just below the argv frame: what vnu_proc_switch's
  * epilogue pops on the very first time the scheduler enters this process,
- * landing the `ret` on vnu_proc_trampoline. Returns its address. */
+ * landing the `ret` on the trampoline. Returns its address. */
 uint32_t setup_switch_frame(uint32_t pgdir, uint32_t stack_top)
 {
-    uint32_t va = stack_top - 20;
-    phys_store32(pgdir, va + 0, 0); /* edi */
-    phys_store32(pgdir, va + 4, 0); /* esi */
-    phys_store32(pgdir, va + 8, 0); /* ebx */
-    phys_store32(pgdir, va + 12, 0); /* ebp */
-    phys_store32(pgdir, va + 16, reinterpret_cast<uint32_t>(&vnu_proc_trampoline));
-    return va;
+    return vnu::arch::build_first_frame(write_word, &pgdir, stack_top,
+                                        vnu::arch::proc_trampoline());
 }
 
 uint32_t g_sched_esp = 0;   /* scheduler coroutine's parked stack (in its
@@ -648,11 +654,10 @@ int sys_fork(Registers* trap)
         vnu::paging::destroy_address_space(pgdir);
         return -VNU_ENOMEM;
     }
-    /* The child's own copy of the frame, with fork()'s return value:
-     * eax sits 28 bytes into a pushad frame (edi esi ebp esp(ignored)
-     * ebx edx ecx eax). The parent's frame is untouched - it is about
-     * to be popped with the pid in eax. */
-    phys_store32(pgdir, trap->frame + 28, 0);
+    /* The child's own copy of the frame, patched so the fork() it is
+     * about to return from yields 0. The parent's frame is untouched -
+     * it is popped with the pid. */
+    vnu::arch::fork_child_return(write_word, &pgdir, vnu::arch::regs_frame(trap), 0);
 
     Process& child = table[slot];
     child = {};
@@ -669,11 +674,13 @@ int sys_fork(Registers* trap)
     child.coro = true;
     child.started = true;
     child.preempted = true;   /* the frame above is a full one: popad+iret */
-    child.coro_esp = trap->frame;
+    child.coro_esp = vnu::arch::regs_frame(trap);
     child.regs = *trap;       /* for /proc's sake; the resume path above */
-    child.regs.eax = 0;
-    child.regs.esp = trap->frame + 44; /* where the iret leaves it */
-    child.regs.eflags = trap->eflags ? trap->eflags : 0x202;
+    vnu::arch::regs_set_return(&child.regs, 0);
+    /* Where the iret leaves the child's stack. */
+    vnu::arch::regs_set_stack(&child.regs, vnu::arch::frame_resume_stack(child.coro_esp));
+    vnu::arch::regs_set_flags(&child.regs,
+                              vnu::arch::regs_flags(trap) ? vnu::arch::regs_flags(trap) : 0x202);
     copy_str(child.name, parent.name, sizeof(child.name));
     /* The pipe ends this process holds are the child's too, and its own
      * references to them — see pipe.h. */
@@ -958,9 +965,9 @@ static int exec_prepared(Registers* trap, const char* path,
         return -VNU_ENOEXEC;
 
     Process& p = table[current_idx];
-    p.regs = {};
-    p.regs.eip = entry;
-    p.regs.eflags = 0x202;
+    vnu::arch::regs_clear(&p.regs);
+    vnu::arch::regs_set_entry(&p.regs, entry);
+    vnu::arch::regs_set_flags(&p.regs, 0x202);
     /* The new image gets a new heap, and this is what makes it one. The
      * slot, its pid and its address space are all inherited from the
      * program that called execve(), and p.brk was inherited with them:
@@ -999,12 +1006,11 @@ static int exec_prepared(Registers* trap, const char* path,
     p.sig_saved_mask = 0;
     p.alarm_at = 0;
 
-    trap->eip = p.regs.eip;
-    trap->esp = p.regs.esp;
-    trap->eflags = p.regs.eflags;
-    trap->eax = 0;
-    trap->ebx = trap->ecx = trap->edx = 0;
-    trap->esi = trap->edi = trap->ebp = 0;
+    /* Hand back the state a fresh image starts in - the caller (the
+     * syscall tail) reads the entry and stack and jumps there, zeroing
+     * the argument registers. */
+    vnu::arch::regs_set_image(trap, vnu::arch::regs_entry(&p.regs), vnu::arch::regs_stack(&p.regs),
+                              vnu::arch::regs_flags(&p.regs));
     return 0;
 }
 
@@ -1016,8 +1022,6 @@ int sys_execve(Registers* trap, const char* path, char* const* argv,
     return exec_prepared(trap, snap.path_copy, snap.arg_ptrs, snap.argc,
                          snap.env_ptrs, snap.envc, 0);
 }
-
-extern "C" void vnu_enter_user(uint32_t entry, uint32_t user_esp);
 
 /* Hand over the children of a process that is on its way out. Linux does
  * this in exit_notify(); without it an orphan is not merely unreaped but
@@ -1288,33 +1292,6 @@ int sys_kill(int pid, int sig)
  * continues exactly where it was, with exactly the values it had - which
  * is why a signal can interrupt a program anywhere, not just between
  * two convenient places in the kernel. */
-extern "C" std::uint32_t vnu_pending_user_esp;
-extern "C" std::uint8_t vnu_pending_user_esp_flag;
-
-namespace {
-
-/* The interrupted frame both delivery points see: pushad's 8 dwords
- * followed by the 3 dwords the gate pushed (eip, cs, eflags). See
- * arch/i386/syscall/syscall.s and proc/ctxswitch.s, which both popad
- * from it and then iretd out of the last 3 words. */
-constexpr uint32_t FRAME_EIP = 32;
-constexpr uint32_t FRAME_CS = 36;
-constexpr uint32_t FRAME_EFLAGS = 40;
-
-/* Below the interrupted frame: a 16-byte-aligned slot holding what the
- * handler's `return` pops ([0] = the restorer, [4] = the signal number,
- * so a handler written as `void h(int sig)` gets its argument from the
- * same place a `ret` would leave it), and just below that the three
- * words an iret pops (handler, cs, eflags). The slot is not built on the
- * interrupted frame itself but below the kernel's own C frames, which sit
- * between the two: the kernel runs on the interrupted process's stack, so
- * a frame placed right under the pushad frame would land in the locals of
- * the call that is still running. Nothing writes below the anchor the
- * caller passes until the iret, a few instructions later. */
-constexpr uint32_t SIG_BLOCK_WORDS = 4; /* restorer, signo */
-constexpr uint32_t SIG_IRET_WORDS = 3;  /* handler, cs, eflags */
-
-} // namespace
 
 int pending_delivery(const Process* p)
 {
@@ -1351,29 +1328,11 @@ static int deliver_common(uint32_t* act, uint32_t& pending, uint32_t& mask,
         *reinterpret_cast<const struct vnu_sigaction*>(&act[sig * 4]);
     if (a.handler <= VNU_SIG_IGN || !a.restorer)
         return 0;
-    /* The block goes at the very bottom of what the kernel is using of
-     * this process's stack, so that nothing that is still live - a
-     * caller's locals on the way out of here, the frame the iret is
-     * about to pop - writes over it. Usually that is this function's own
-     * frame, the deepest thing on the stack right now. A caller that is
-     * running on a *different* stack (the scheduler handing a preempted
-     * process back in) has no frames on the process's stack to avoid and
-     * passes the parked frame instead. */
-    volatile char here = 0;
-    uint32_t low = stack_anchor ? stack_anchor : reinterpret_cast<uint32_t>(&here);
-    uint32_t block = (low - SIG_BLOCK_WORDS * 4) & ~0xFu;
-    uint32_t* w = reinterpret_cast<uint32_t*>(block);
-    w[0] = a.restorer; /* where the handler's `return` lands */
-    w[1] = static_cast<uint32_t>(sig);
-    /* The iret pops its three words in increasing address order, and it
-     * runs with esp = &w[-3]: eip, cs, eflags. */
-    w[-3] = a.handler;
-    w[-2] = *reinterpret_cast<uint32_t*>(frame_base + FRAME_CS);
-    /* Same flags the context had, except that the handler runs with
-     * interrupts on (the syscall path saved eflags with IF cleared by
-     * the trap gate) and never with the trap flag still set, which would
-     * fire a single-step interrupt out of the first instruction. */
-    w[-1] = (*reinterpret_cast<uint32_t*>(frame_base + FRAME_EFLAGS) | 0x200u) & ~0x100u;
+    /* The port lays the handler's entry words out below the interrupted
+     * frame (or below `stack_anchor`, when the caller knows better than
+     * this call chain does) and arms the return path to switch to them. */
+    vnu::arch::build_signal_frame(frame_base, stack_anchor, a.handler, a.restorer,
+                                  static_cast<uint32_t>(sig));
 
     pending &= ~(1u << sig);
     saved_mask = mask;
@@ -1389,14 +1348,6 @@ static int deliver_common(uint32_t* act, uint32_t& pending, uint32_t& mask,
         act[sig * 4 + 3] = 0;
     }
     frame_out = frame_base;
-
-    /* Tell the assembly return path to switch stacks instead of popping
-     * the frame it is looking at. The flag is a single slot on purpose:
-     * it is set and consumed within one return path, with interrupts
-     * off (a syscall handler runs cli'd, the timer with the CLI in
-     * vnu_timer_isr), so no other process can ever see it. */
-    vnu_pending_user_esp = block - SIG_IRET_WORDS * 4;
-    vnu_pending_user_esp_flag = 1;
     return sig;
 }
 
@@ -1416,7 +1367,7 @@ int deliver_console_signal(vnu::wintask::Console& c, uint32_t frame_base,
 int deliver_pending_signal(uint32_t frame_base)
 {
     Process& p = table[current_idx];
-    if (!p.coro || vnu_pending_user_esp_flag)
+    if (!p.coro || vnu::arch::stack_switch_pending())
         return 0;
     /* This runs on the process's own stack, in between the syscall's
      * frame and the assembly that is about to iret, so there is nothing
@@ -1490,7 +1441,7 @@ int signal_task(vnu::wintask::Console* c, int sig)
 
 int deliver_task_pending_signal(vnu::wintask::Console* c, uint32_t frame_base)
 {
-    if (!c || vnu_pending_user_esp_flag)
+    if (!c || vnu::arch::stack_switch_pending())
         return 0;
     return deliver_console_signal(*c, frame_base, 0, pending_task_delivery(c));
 }
@@ -1566,16 +1517,12 @@ uint32_t sys_rt_sigreturn(TrapFrame* cur)
     TrapFrame* interrupted = reinterpret_cast<TrapFrame*>(frame);
     frame = 0;
     *cur = *interrupted;
-    /* popad restores the eight registers but *discards* the ESP the frame
-     * saved, so a copy alone resumes the process with esp = tf + 32, in
-     * the middle of this frame instead of where it was interrupted. The
-     * interrupted frame's own esp is the address its eip/cs/eflags sit
-     * at, so pointing the return path there hands the iret exactly the
-     * words the copy just wrote, and leaves the process with the esp the
-     * interrupted instruction had. */
-    vnu_pending_user_esp = interrupted->esp;
-    vnu_pending_user_esp_flag = 1;
-    return cur->eax;
+    /* popad restores the eight registers but discards the ESP the frame
+     * saved, so a copy alone would resume the process in the middle of
+     * this frame; the port says where the return path must point to hand
+     * the iret exactly the words the copy just wrote and nothing else. */
+    vnu::arch::request_stack_switch(vnu::arch::frame_iret_stack(interrupted));
+    return vnu::arch::frame_return(cur);
 }
 
 int sys_sigraise(int sig)
@@ -1731,7 +1678,6 @@ bool schedule()
     return false;
 }
 
-extern "C" uint32_t vnu_saved_eip, vnu_saved_esp, vnu_saved_ebp;
 extern "C" void vnu_swtch(uint32_t* old_esp_out, uint32_t new_esp);
 
 namespace {
@@ -1783,7 +1729,7 @@ uint32_t g_caller_esp;
 
 void setup_and_enter()
 {
-    /* Interrupts stay off from here through vnu_enter_user() (which
+    /* Interrupts stay off from here through vnu::arch::enter_user() (which
      * itself does its own `cli`, with no matching `sti` — this kernel
      * relies on polling PS/2 status registers directly for keyboard
      * and mouse input, not on interrupt delivery, so this costs
@@ -1821,19 +1767,19 @@ void setup_and_enter()
     brk_reset();
 
     Process& p = *pl.p;
-    p.regs.eip = entry;
-    p.regs.eflags = 0x202;
+    vnu::arch::regs_set_entry(&p.regs, entry);
+    vnu::arch::regs_set_flags(&p.regs, 0x202);
     char* av[] = {const_cast<char*>(pl.argv0_path), nullptr};
     setup_user_stack(p, 1, av, pl.argv0_path, nullptr, 0);
 
     pl.ok = true;
-    vnu_enter_user(p.regs.eip, p.regs.esp);
+    vnu::arch::enter_user(vnu::arch::regs_entry(&p.regs), vnu::arch::regs_stack(&p.regs));
 
     /* Resumed here once the process has fully exited (its own exit()
-     * unwound back to right after that vnu_enter_user call above, via
-     * proc/switch.s's single-slot trampoline — same mechanism as the
-     * classic non-windowed path). Still running on g_setup_stack under
-     * the process's own (now-finished) CR3 — restore the caller's
+     * unwound back to right after that enter_user call above, via
+     * arch/i386/switch.s's single-slot trampoline — same mechanism as
+     * the classic non-windowed path). Still running on g_setup_stack
+     * under the process's own (now-finished) CR3 — restore the caller's
      * before handing back control, for the same reason as above. */
     vnu::paging::switch_to(pl.prev_pgdir);
     uint32_t dummy;
@@ -1848,13 +1794,8 @@ void setup_and_enter()
 uint32_t prime_setup_stack()
 {
     uint32_t top = reinterpret_cast<uint32_t>(g_setup_stack) + sizeof(g_setup_stack);
-    uint32_t* frame = reinterpret_cast<uint32_t*>(top) - 5;
-    frame[0] = 0; /* edi */
-    frame[1] = 0; /* esi */
-    frame[2] = 0; /* ebx */
-    frame[3] = 0; /* ebp */
-    frame[4] = reinterpret_cast<uint32_t>(&setup_and_enter);
-    return reinterpret_cast<uint32_t>(&frame[0]);
+    return vnu::arch::build_first_frame(current_writer, nullptr, top,
+                                        reinterpret_cast<const void*>(&setup_and_enter));
 }
 
 } // namespace
@@ -1947,19 +1888,18 @@ int run_program_from_memory(const char* argv0_path, const uint8_t* data, uint32_
     current_idx = slot;
     console_session = true;
 
-    /* vnu_enter_user() (called from setup_and_enter() below) stashes a
-     * *single* continuation (eip/esp/ebp) for vnu_return_to_console()
-     * to resume later - see proc/switch.s. That makes it non-reentrant:
-     * if we're already nested inside an earlier vnu_enter_user (e.g.
-     * the GUI's app launcher calling this from inside a vash session
-     * that itself got here through one), jumping in again clobbers the
-     * outer continuation. Save it here and put it back once this
-     * nested program has run and unwound back to us, so whoever owns
-     * the outer continuation still lands in the right place later
-     * instead of jumping into a stale, already-reused stack. */
-    uint32_t prev_eip = vnu_saved_eip;
-    uint32_t prev_esp = vnu_saved_esp;
-    uint32_t prev_ebp = vnu_saved_ebp;
+    /* vnu::arch::enter_user() (called from setup_and_enter() below)
+     * stashes a *single* continuation (eip/esp/ebp) for the console
+     * return path to resume later - see arch/i386/switch.s. That makes
+     * it non-reentrant: if we're already nested inside an earlier
+     * enter_user (e.g. the GUI's app launcher calling this from inside
+     * a vash session that itself got here through one), jumping in
+     * again clobbers the outer continuation. Save it here and put it
+     * back once this nested program has run and unwound back to us, so
+     * whoever owns the outer continuation still lands in the right
+     * place later instead of jumping into a stale, already-reused
+     * stack. */
+    const vnu::arch::ConsoleContinuation prev = vnu::arch::console_continuation();
 
     uint32_t prev_pgdir = vnu::paging::current_pgdir();
 
@@ -1990,9 +1930,7 @@ int run_program_from_memory(const char* argv0_path, const uint8_t* data, uint32_
      * once setup_and_enter() has either failed to load the ELF or the
      * process it launched has run to completion and exited. */
 
-    vnu_saved_eip = prev_eip;
-    vnu_saved_esp = prev_esp;
-    vnu_saved_ebp = prev_ebp;
+    vnu::arch::set_console_continuation(prev);
 
     bool ok = g_pending.ok;
     vnu::paging::destroy_address_space(pgdir);
@@ -2332,8 +2270,7 @@ void run_slice(int i)
     if (!p.started) {
         /* First switch into this process: prime the trampoline's globals
          * with this process's own ELF entry + freshly built argv stack. */
-        vnu_proc_pending_entry = p.entry;
-        vnu_proc_pending_stack = p.argv_esp;
+        vnu::arch::set_proc_entry(p.entry, p.argv_esp);
         p.started = true;
     }
     vnu_proc_new_pd = p.pgdir_phys;
