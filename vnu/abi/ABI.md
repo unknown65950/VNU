@@ -601,6 +601,32 @@ reaches by identity, so a private mapping over any of it would be a page
 of somebody else's memory. `VNU_FB_MAX_PAGES` (2048, i.e. 8 MiB) is the
 window, which covers the top mode (1280x1024 at 32bpp is 5 MiB).
 
+### /dev/clipboard — one buffer shared by the whole system
+
+No syscall: the clipboard is the `/dev/clipboard` character node, reached
+through `open`, `read` and `write` like any other device. There is one
+store, in kernel RAM, shared by every process — the console command
+`clipboard` (see `man clipboard`) is only a small program over it, and so
+is the Ctrl+C/Ctrl+V a desktop application sends.
+
+`open("/dev/clipboard")` read-only leaves the store alone; an open with
+write intent (`O_WRONLY` or `O_RDWR`) empties it first. A copy therefore
+replaces the previous clipboard rather than appending to it, and a plain
+open-and-close is all `clipboard clear` has to do. `write` appends its
+bytes, up to `VCLIP_CAP` (64 KiB) in total; a write past the cap is
+truncated to the room left and answers that smaller count. A read starts
+at the descriptor's position and answers the bytes from there to the end,
+then 0 once the position is at the end — so `cat /dev/clipboard` reads the
+clipboard once and stops instead of waiting for more. `lseek` works on a
+read descriptor, and every other device behaviour (a missing node, a bad
+descriptor) is the ordinary one.
+
+The store is not persistent: it lives in RAM, is on no volume, and is
+gone at reboot. `vnu/kernel/kernel/clipboard.cpp` is the storage;
+`vlibc/include/vlibc/clipboard.h` gives userspace `vclip_set(data, len)`,
+`vclip_get(buf, cap)` and `vclip_clear()`, so an application never needs
+the node path or the read/write dance itself.
+
 ### Errors added with networking
 
 `VNU_ETIMEDOUT` (110) and `VNU_EHOSTUNREACH` (113) were added in the
