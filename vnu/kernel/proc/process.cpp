@@ -346,13 +346,13 @@ namespace {
  * switching CR3 away from the kernel's own directory. */
 void phys_store(uint32_t pgdir, uint32_t vaddr, uint8_t v)
 {
-    uint32_t pa = vnu::paging::phys_frame_at(pgdir, vaddr & ~0xFFFu) + (vaddr & 0xFFF);
+    uint32_t pa = (uint32_t)vnu::paging::phys_frame_at((uintptr_t)pgdir, vaddr & ~0xFFFu) + (vaddr & 0xFFF);
     *reinterpret_cast<uint8_t*>(pa) = v;
 }
 
 void phys_store32(uint32_t pgdir, uint32_t vaddr, uint32_t v)
 {
-    uint32_t pa = vnu::paging::phys_frame_at(pgdir, vaddr & ~0xFFFu) + (vaddr & 0xFFF);
+    uint32_t pa = (uint32_t)vnu::paging::phys_frame_at((uintptr_t)pgdir, vaddr & ~0xFFFu) + (vaddr & 0xFFF);
     *reinterpret_cast<uint32_t*>(pa) = v;
 }
 
@@ -387,7 +387,7 @@ uint32_t elf_load_into(uint32_t pgdir, const uint8_t* image, uint32_t size)
             continue;
         for (uint32_t k = 0; k < ph->p_memsz; ++k) {
             uint32_t va = ph->p_vaddr + k;
-            uint32_t pa = vnu::paging::phys_frame_at(pgdir, va & ~0xFFFu);
+            uint32_t pa = (uint32_t)vnu::paging::phys_frame_at((uintptr_t)pgdir, va & ~0xFFFu);
             if (!pa)
                 return 0;
             pa += va & 0xFFF;
@@ -632,13 +632,13 @@ int sys_fork(Registers* trap)
         {0x00400000, parent.app_pages},
         {stack_base, stack_pages},
     };
-    uint32_t pgdir = vnu::paging::create_address_space(ranges, 2);
+    uint32_t pgdir = (uint32_t)vnu::paging::create_address_space(ranges, 2);
     if (!pgdir)
         return -VNU_ENOMEM;
 
-    const uint32_t src = parent.pgdir_phys;
-    bool ok = vnu::paging::copy_pages(pgdir, src, 0x00400000, parent.app_pages) &&
-              vnu::paging::copy_pages(pgdir, src, stack_base, stack_pages);
+    const uint32_t src = (uint32_t)parent.pgdir_phys;
+    bool ok = vnu::paging::copy_pages((uintptr_t)pgdir, (uintptr_t)src, 0x00400000, parent.app_pages) &&
+              vnu::paging::copy_pages((uintptr_t)pgdir, (uintptr_t)src, stack_base, stack_pages);
     if (ok && heap_in_use) {
         ok = vnu::paging::extend_address_space(pgdir, BRK_MIN, heap_in_use) &&
              vnu::paging::copy_pages(pgdir, src, BRK_MIN, heap_in_use);

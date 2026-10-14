@@ -436,7 +436,7 @@ volatile uint8_t* map_bar(int idx)
         return nullptr;
     uint32_t phys = bar & ~0xFu;
     uint32_t size = vnu::pci::bar_size(g_card, idx);
-    uint32_t virt = vnu::paging::map_device_region(phys, size);
+    uint32_t virt = (uint32_t)vnu::paging::map_device_region((uintptr_t)phys, (uintptr_t)size);
     if (!virt)
         return nullptr;
     g_bar_virt[idx] = virt;

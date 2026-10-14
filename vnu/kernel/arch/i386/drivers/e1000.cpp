@@ -779,7 +779,7 @@ int init()
     uint32_t cmd = pci::read_dword(card, 0x04);
     pci::write_dword(card, 0x04, cmd | (1u << 1) /* mem space */ | (1u << 2) /* bus master */);
 
-    g_mmio = reinterpret_cast<volatile uint8_t*>(paging::map_device_region(phys, size));
+    g_mmio = reinterpret_cast<volatile uint8_t*>(paging::map_device_region((uintptr_t)phys, (uintptr_t)size));
     if (!g_mmio)
         return -VNU_EIO;
 

@@ -90,13 +90,13 @@ Task& cur_task()
  * its argv stack without ever switching CR3 in the GUI's context. */
 inline void phys_store(uint32_t pgdir, uint32_t vaddr, uint8_t v)
 {
-    uint32_t pa = vnu::paging::phys_frame_at(pgdir, vaddr & ~0xFFFu) + (vaddr & 0xFFF);
+    uint32_t pa = (uint32_t)vnu::paging::phys_frame_at((uintptr_t)pgdir, vaddr & ~0xFFFu) + (vaddr & 0xFFF);
     *reinterpret_cast<uint8_t*>(pa) = v;
 }
 
 inline void phys_store32(uint32_t pgdir, uint32_t vaddr, uint32_t v)
 {
-    uint32_t pa = vnu::paging::phys_frame_at(pgdir, vaddr & ~0xFFFu) + (vaddr & 0xFFF);
+    uint32_t pa = (uint32_t)vnu::paging::phys_frame_at((uintptr_t)pgdir, vaddr & ~0xFFFu) + (vaddr & 0xFFF);
     *reinterpret_cast<uint32_t*>(pa) = v;
 }
 
@@ -235,7 +235,7 @@ uint32_t elf_load_into(uint32_t pgdir, const uint8_t* image, uint32_t size)
             continue;
         for (uint32_t k = 0; k < ph->p_memsz; ++k) {
             uint32_t va = ph->p_vaddr + k;
-            uint32_t pa = vnu::paging::phys_frame_at(pgdir, va & ~0xFFFu);
+            uint32_t pa = (uint32_t)vnu::paging::phys_frame_at((uintptr_t)pgdir, va & ~0xFFFu);
             if (!pa)
                 return 0;
             pa += va & 0xFFF;
@@ -314,7 +314,7 @@ void init()
     {
         /* The directory the kernel is already running under: the tasks
          * manager builds every other space on top of it. */
-        g_base_pgdir = vnu::arch::read_cr3();
+        g_base_pgdir = (uint32_t)vnu::arch::read_cr3();
     }
     g_active = false;
     g_active_index = -1;
@@ -346,7 +346,7 @@ TaskHandle spawn_common(const char* argv0_path, const char* arg1, const uint8_t*
         {APP_BASE, APP_PAGES},
         {STACK_BASE, STACK_SIZE / vnu::paging::PAGE_SIZE},
     };
-    uint32_t pgdir = vnu::paging::create_address_space(ranges, 2);
+    uint32_t pgdir = (uint32_t)vnu::paging::create_address_space(ranges, 2);
     if (!pgdir) {
         vnu::pmm::free_contig(root_base, root_pages);
         return NO_TASK;
