@@ -1,9 +1,20 @@
-#include <vnu/syscall.h>
+#include <vnu/arch/boot.h>
 #include <cstdint>
+
+extern "C" void vnu_syscall_entry();
 
 namespace {
 
-vnu_idt_gate idt[256];
+/* The i386 interrupt gate the IDT is made of. It used to live in the
+ * core's include/vnu/syscall.h, which is exactly the kind of x86-shaped
+ * detail that belongs on this side of the interface. */
+struct IdtGate {
+    std::uint16_t off_lo, sel;
+    std::uint8_t zero, flags;
+    std::uint16_t off_hi;
+} __attribute__((packed));
+
+IdtGate idt[256];
 
 struct IdtPtr {
     std::uint16_t limit;
@@ -83,7 +94,7 @@ __asm__(
  * CPU exception vectors (0x08 = #DF, 0x0D = #GP, 0x0E = #PF, ...).
  * MUST run before the first `sti` anywhere in the kernel. */
 extern "C" void vnu_timer_isr(); /* PIT IRQ0 -> preemptive scheduler */
-extern "C" void vnu_pic_remap()
+void vnu::arch::interrupt_controller_init()
 {
     std::uint8_t mask1 = inb(0x21);
     std::uint8_t mask2 = inb(0xA1);
@@ -101,14 +112,15 @@ extern "C" void vnu_pic_remap()
     outb(0xA1, mask2);
 }
 
-void vnu_syscall_install(vnu_idt_gate* /*unused*/)
+static void install_idt()
 {
     for (int i = 0; i < 256; ++i)
         set_gate(i, vnu_ignore_irq, 0x8E); /* present, DPL0, 32-bit interrupt gate */
 
-    /* Hardware IRQs, now remapped to 0x20-0x2F by vnu_pic_remap().
-     * IRQ0 (the PIT timer) gets its own handler — it drives the
-     * preemptive round-robin scheduler, see kernel/proc/ctxswitch.s. */
+    /* Hardware IRQs, now remapped to 0x20-0x2F by
+     * interrupt_controller_init(). IRQ0 (the PIT timer) gets its own
+     * handler — it drives the preemptive round-robin scheduler, see
+     * kernel/proc/ctxswitch.s. */
     set_gate(0x20, vnu_timer_isr, 0x8E);
     for (int i = 0x21; i <= 0x27; ++i)
         set_gate(i, vnu_irq_master_ack, 0x8E);
@@ -141,7 +153,7 @@ extern "C" void vnu_timer_init()
     outb(0x21, inb(0x21) & static_cast<std::uint8_t>(~0x01u)); /* unmask IRQ0 */
 }
 
-extern "C" void vnu_idt_init()
+void vnu::arch::idt_init()
 {
-    vnu_syscall_install(nullptr);
+    install_idt();
 }

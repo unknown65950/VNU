@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <vnu/vfs.h>
 #include <vnu/process.h>
-#include <vnu/syscall.h>
 #include <vnu/tty.h>
 #include <vnu/pipe.h>
 #include <vnu/apps.h>
@@ -25,8 +24,9 @@
 #include <vnu/virtio_gpu.h>
 #include <vnu/audio.h>
 #include <vnu/arch/cpu.h>
+#include <vnu/arch/boot.h>
 #include <vnu/arch/serial.h>
-extern "C" void vnu_console_start();
+#include <vnu/console.h>
 
 namespace
 {
@@ -44,12 +44,6 @@ namespace
 }
 
 
-extern "C" void vnu_gdt_init();
-extern "C" void vnu_disable_paging();
-extern "C" void vnu_idt_init();
-extern "C" void vnu_pic_remap();
-extern "C" void vnu_console_start();
-
 extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
 {
     // Remember the Multiboot2 info pointer so the disk installer can
@@ -57,24 +51,24 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
     // it onto the target volume.
     if (magic == 0x36d76289)
         vnu::mboot::set_info(info_addr);
-    // The order is critical: GDT -> IDT -> PIC remap must be in place
-    // BEFORE a single byte of code runs that can fault (proc::init(),
-    // vfs::init() and so on), and certainly before the first sti (it
-    // hides in proc/switch.s on the return from a userspace process).
-    // Otherwise nobody is there to service a fault or an IRQ - either a
-    // triple fault, or IRQ0/IRQ1 colliding with the CPU exception
-    // vectors 0x08/0x09 (the PIC is not remapped yet).
-    // vnu_disable_paging() first, defensively: makes sure we start
+    // The order is critical: GDT -> IDT -> interrupt controller must be
+    // in place BEFORE a single byte of code runs that can fault
+    // (proc::init(), vfs::init() and so on), and certainly before the
+    // first sti (it hides in proc/switch.s on the return from a userspace
+    // process). Otherwise nobody is there to service a fault or an IRQ -
+    // either a triple fault, or IRQ0/IRQ1 colliding with the CPU
+    // exception vectors 0x08/0x09 (the controller is not remapped yet).
+    // vnu::arch::disable_paging() first, defensively: makes sure we start
     // from a known state (PE on, PG off) regardless of what the
     // bootloader left behind, before vnu::paging::init() builds real
     // page tables and turns PG back on for good. Without this, a
     // future bootloader change that happened to leave stray page
     // tables mapped could make paging::init()'s CR3 load do something
     // unexpected before our own tables are actually in place.
-    vnu_disable_paging();
-    vnu_gdt_init();
-    vnu_idt_init();
-    vnu_pic_remap();
+    vnu::arch::disable_paging();
+    vnu::arch::gdt_init();
+    vnu::arch::idt_init();
+    vnu::arch::interrupt_controller_init();
     vnu::pmm::init();
     vnu::paging::init();
     vnu::vfs::init();
@@ -184,7 +178,7 @@ extern "C" void kernel_main(std::uint32_t magic, std::uint32_t info_addr)
         int rc = vnu::proc::run_scheduler("/sbin/init", "/bin/vash");
         if (rc < 0) {
             vga_print("init failed — falling back to native console\n", 4);
-            vnu_console_start();
+            vnu::console::run();
             vnu::arch::halt_forever();
         }
         vga_print("[init exited — respawning init]\n");

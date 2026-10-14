@@ -1,3 +1,4 @@
+#include <vnu/arch/boot.h>
 #include <cstdint>
 
 namespace {
@@ -30,7 +31,7 @@ void set_entry(int i, std::uint32_t base, std::uint32_t limit, std::uint8_t acce
 
 } // namespace
 
-extern "C" void vnu_disable_paging()
+void vnu::arch::disable_paging()
 {
     std::uint32_t cr0;
     asm volatile("mov %%cr0, %0" : "=r"(cr0));
@@ -39,7 +40,7 @@ extern "C" void vnu_disable_paging()
     asm volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
 }
 
-extern "C" void vnu_gdt_init()
+void vnu::arch::gdt_init()
 {
     set_entry(0, 0, 0, 0, 0);
     set_entry(1, 0, 0xFFFFF, 0x9A, 0xC0); /* code 0x08 */

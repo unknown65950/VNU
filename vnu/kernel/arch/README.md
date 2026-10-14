@@ -9,6 +9,7 @@ directory", not "sprinkle `#ifdef`s through the tree".
 ```
 vnu/kernel/
   include/vnu/arch/   the interfaces (what the core is allowed to call)
+    boot.h            CPU bring-up: paging off, GDT/IDT, interrupt controller
     cpu.h             interrupt masking, halt/spin hints, atomics, FPU borrow, reboot
     io.h              programmed ("port") I/O
     serial.h          the early debug log
@@ -53,18 +54,24 @@ The one thing that still names the machine in the core is:
 ## Adding a port
 
 1. Add `arch/<arch>/` with an implementation of every header in
-   `include/vnu/arch/`. The functions in `cpu.h`, `io.h`, `serial.h`,
-   `rtc.h`, `mmu.h`, `context.h` and `switch.h` are the contract;
-   `serial.h` may be a no-op and `rtc.h` may read any clock the machine
-   has. `context.h` is two parts: the accessors are fixed, and the
-   concrete `Registers`/`TrapFrame` layout comes from a port-provided
-   `include/vnu/arch/context_defs.h` (see `arch/i386/include/`), which
-   the build reaches through `arch/${VNU_KERNEL_ARCH}/include`.
+   `include/vnu/arch/`. The functions in `boot.h`, `cpu.h`, `io.h`,
+   `serial.h`, `rtc.h`, `mmu.h`, `context.h` and `switch.h` are the
+   contract; `serial.h` may be a no-op and `rtc.h` may read any clock
+   the machine has. `context.h` is two parts: the accessors are fixed,
+   and the concrete `Registers`/`TrapFrame` layout comes from a
+   port-provided `include/vnu/arch/context_defs.h` (see
+   `arch/i386/include/`), which the build reaches through
+   `arch/${VNU_KERNEL_ARCH}/include`.
 2. Provide the boot path (`boot.s`/`boot.cpp` or equivalent) and the
    trap/syscall entry in the same directory, and build them the way that
-   architecture expects. `arch/i386/syscall/syscall.s` and
-   `arch/i386/switch.s` show the i386 convention: a `TrapFrame` on the
-   stack and `vnu_syscall_dispatch`/`vnu_timer_tick` called from asm.
+   architecture expects: implement `boot.h` (make paging off, load the
+   descriptor table, install the vector table, bring up the interrupt
+   controller). `arch/i386/syscall/syscall.s` and `arch/i386/switch.s`
+   show the i386 convention: a `TrapFrame` on the stack and
+   `vnu_syscall_dispatch`/`vnu_timer_tick` called from asm. The vector
+   table itself and the `vnu_syscall_entry` gate are a port detail - the
+   core only knows `idt_init()` and, through `context.h`, the frames the
+   entry path builds.
 3. Implement the page tables. `vnu::paging`'s API
    (`include/vnu/paging.h`) stays the same; `arch/i386/paging.cpp` is
    the reference for the 32-bit two-level layout.

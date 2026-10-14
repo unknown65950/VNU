@@ -2,8 +2,8 @@
 #include <stdint.h>
 
 // Real per-process address spaces. Until now this kernel ran with
-// paging permanently disabled (a literal vnu_disable_paging() call in
-// kernel_main) and a single flat physical=virtual address space, which
+// paging permanently disabled (a literal vnu::arch::disable_paging()
+// call in kernel_main) and a single flat physical=virtual address space, which
 // is why only one non-shell app could ever be resident at
 // 0x400000 at a time (see kernel/include/vnu/wintask.h's older
 // comment). This module gives every process its own page directory:

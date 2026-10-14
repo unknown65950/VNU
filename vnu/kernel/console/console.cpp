@@ -3,6 +3,7 @@
 #include <vnu/vfs.h>
 #include <vnu/process.h>
 #include <vnu/tty.h>
+#include <vnu/console.h>
 #include <vnu/kbd.h>
 
 namespace {
@@ -59,7 +60,9 @@ void cmd_run(const char* path)
 
 } // namespace
 
-extern "C" void vnu_console_start()
+namespace vnu::console {
+
+void run()
 {
     char line[128];
     vnu::tty::clear();
@@ -132,3 +135,5 @@ extern "C" void vnu_console_start()
             print("command not found\n");
     }
 }
+
+} // namespace vnu::console
