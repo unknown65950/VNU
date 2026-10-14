@@ -16,7 +16,7 @@ namespace vnu::vgfx {
 // How the palette is split by role: the first slots are the system's own
 // colours, the rest belong to whatever picture is on screen (see
 // picture_palette_set). Mirrors SYSTEM_SLOTS/PALETTE_SLOTS/PICTURE_SLOTS in
-// drivers/vga_gfx.cpp, which is where the DAC is programmed.
+// arch/i386/drivers/vga_gfx.cpp, which is where the DAC is programmed.
 constexpr int SYSTEM_SLOTS = 16;
 constexpr int PALETTE_SLOTS = 256;
 constexpr int PICTURE_SLOTS = PALETTE_SLOTS - SYSTEM_SLOTS;

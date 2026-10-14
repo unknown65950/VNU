@@ -2,7 +2,7 @@
 """Regenerate wallpaper.png (512x384) for the VNU desktop.
 
 The desktop runs in 8-bpp VGA with the 16-entry Catppuccin Mocha DAC
-palette (kernel/drivers/vga_gfx.cpp CATT_PAL), and the kernel loads the
+palette (kernel/arch/i386/drivers/vga_gfx.cpp CATT_PAL), and the kernel loads the
 wallpaper from /wallpaper with px.h and quantizes every pixel back to
 those same 16 colors. So the artwork is designed *in* the palette: the
 flat color regions survive the round-trip lossless, and only the sky's

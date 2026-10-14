@@ -4,7 +4,7 @@
 namespace vnu::kbd {
 
 /* Function-key pseudo-codes, in the same >= 0x80 space as the arrows
- * and Home/End/Delete (which vnu/kernel/drivers/kbd.cpp keeps to
+ * and Home/End/Delete (which arch/i386/drivers/kbd.cpp keeps to
  * itself). Same values as VNU_KEY_F* in vlibc/keys.h, so a key a
  * desktop shortcut consumed here cannot disagree with what a program
  * reads from getch(). */

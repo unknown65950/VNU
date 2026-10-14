@@ -3,7 +3,7 @@
 #include <vnu/process.h>
 #include <stdint.h>
 
-#include "netcore.h"
+#include <vnu/netcore.h>
 
 
 /* TCP/IPv4 stack for the hobby kernel: one client connection per slot,

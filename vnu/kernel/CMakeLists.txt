@@ -134,6 +134,18 @@ add_executable(kernel.elf
     arch/${VNU_KERNEL_ARCH}/syscall/syscall.s
     arch/${VNU_KERNEL_ARCH}/syscall/syscall.cpp
     arch/${VNU_KERNEL_ARCH}/syscall/idt.cpp
+    # The PC hardware drivers: the same port owns the CPU and the machine
+    # it sits in (8259/PIT are in the arch core above, these are the rest
+    # of the PC chipset). A different port supplies its own.
+    arch/${VNU_KERNEL_ARCH}/drivers/kbd.cpp
+    arch/${VNU_KERNEL_ARCH}/drivers/vga_gfx.cpp
+    arch/${VNU_KERNEL_ARCH}/drivers/ps2mouse.cpp
+    arch/${VNU_KERNEL_ARCH}/drivers/ata.cpp
+    arch/${VNU_KERNEL_ARCH}/drivers/pci.cpp
+    arch/${VNU_KERNEL_ARCH}/drivers/e1000.cpp
+    arch/${VNU_KERNEL_ARCH}/drivers/ac97.cpp
+    arch/${VNU_KERNEL_ARCH}/drivers/virtio_gpu.cpp
+    arch/${VNU_KERNEL_ARCH}/drivers/fb.cpp
     fs/vfs.cpp
     fs/pipe.cpp
     fs/fat16.cpp
@@ -142,16 +154,7 @@ add_executable(kernel.elf
     console/console.cpp
     console/tty.cpp
     console/font8x16.cpp
-    drivers/kbd.cpp
-    drivers/vga_gfx.cpp
-    drivers/ps2mouse.cpp
-    drivers/ata.cpp
-    drivers/pci.cpp
-    drivers/e1000.cpp
-    drivers/ac97.cpp
-    drivers/virtio_gpu.cpp
-    drivers/fb.cpp
-    drivers/tcp.cpp
+    net/tcp.cpp
     gui/gui.cpp
     gui/apps.cpp
     gui/gfxconf.cpp

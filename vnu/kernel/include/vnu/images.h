@@ -8,7 +8,7 @@
  * Each owner of embedded blobs registers its contribution once, at
  * init: the kernel image size (from the Multiboot2 module tag), the
  * userspace ELFs (proc/process.cpp), the toolchain libraries
- * (fs/vfs.cpp), the VGA font (drivers/vga_gfx.cpp) and the media blobs
+ * (fs/vfs.cpp), the VGA font (arch/i386/drivers/vga_gfx.cpp) and the media blobs
  * (gui/apps.cpp). Nothing here is a build-time constant, so the
  * numbers describe the image that is actually running.
  */

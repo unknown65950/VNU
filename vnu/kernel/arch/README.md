@@ -22,6 +22,8 @@ vnu/kernel/
       include/vnu/arch/context_defs.h  the i386 Registers/TrapFrame layout
       boot/           boot.s, gdt.cpp - CPU bring-up
       syscall/        idt.cpp, syscall.cpp, syscall.s - traps and the syscall gate
+      drivers/        the PC chipset: 8042 kbd/mouse, ATA, PCI, VBE/VGA,
+                      AC'97, e1000, virtio-gpu, /dev/fb0
       cpu.cpp         vnu/arch/cpu.h
       io.cpp          vnu/arch/io.h
       serial.cpp      vnu/arch/serial.h
@@ -44,12 +46,14 @@ name (`eip`, `eax`, `eflags`, ...) should only hit a comment. The
 coroutine switch (`vnu_swtch` and friends, once called straight from
 `proc/process.cpp` and `gui/wintask.cpp`) now goes through `switch.h`,
 so the core parks a plain `uint32_t` stack slot and names no register.
-The one thing that still names the machine in the core is:
-
-- the device drivers under `drivers/`: they are PC hardware (the 8259
-  PIC, ATA, PS/2, the Bochs VBE interface), which is a second axis from
-  the CPU. They already take all port access through `vnu/arch/io.h`, so
-  the compiler never sees raw `in`/`out` outside `arch/`.
+The machine's devices work the same way: the core reads a disk through
+`vnu::blockdev`, sends a frame through `vnu::net`/`vnu::tcp`, and paints
+the screen through `vnu::vgfx` - each declared in `include/vnu/`. The
+implementations of those headers are the port's: the PC chipset (8042
+keyboard and mouse, ATA, PCI, Bochs VBE/VGA, AC'97, e1000, virtio-gpu,
+`/dev/fb0`) lives in `arch/i386/drivers/`. Port access still goes through
+`vnu/arch/io.h`, so the compiler never sees raw `in`/`out` outside
+`arch/`.
 
 ## Adding a port
 
@@ -75,17 +79,24 @@ The one thing that still names the machine in the core is:
 3. Implement the page tables. `vnu::paging`'s API
    (`include/vnu/paging.h`) stays the same; `arch/i386/paging.cpp` is
    the reference for the 32-bit two-level layout.
-4. Teach the build: `CMakeLists.txt` selects sources from
+4. Provide the machine's devices behind the core's device headers
+   (`blockdev.h`, `net.h`, `tcp.h`, `fb.h`, `kbd.h`, `ps2mouse.h`,
+   `vga_gfx.h`, `virtio_gpu.h`, `ata.h`, `pci.h`, `netcore.h`,
+   `audio.h`). `arch/i386/drivers/` is the PC set; a machine that shares
+   the chipset can reuse those files, one that does not provides its own
+   (or none, for a device the machine simply has not got).
+5. Teach the build: `CMakeLists.txt` selects sources from
    `arch/${VNU_KERNEL_ARCH}/`, so a new port is mostly a matter of
    pointing that at the new directory and giving it its own toolchain
    flags next to `VNU_ARCH_FLAG`. Set `VNU_KERNEL_ARCH` (a CMake cache
    variable) to the directory name.
-5. Bump `VNU_ARCH` in `include/vnu/version.h` so `uname` reports the new
+6. Bump `VNU_ARCH` in `include/vnu/version.h` so `uname` reports the new
    machine.
 
 ## Status
 
-`i386` is the only port, and it is complete for the interface as it
-stands today. A second port would immediately show up the piece that is
-still i386-shaped (the PC drivers named above), which is exactly the
-point of keeping the surface this small.
+`i386` is the only port. It implements every header in `include/vnu/arch/`
+and supplies the PC chipset drivers under `arch/i386/drivers/`; the core
+reaches both only through the headers in `include/vnu/`. A second port is
+a new `arch/<name>/` directory - its CPU interface plus whatever devices
+the machine has - and changes nothing in the core.

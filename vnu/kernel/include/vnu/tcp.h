@@ -2,7 +2,8 @@
 #include <stdint.h>
 
 /* vnu::tcp — a small TCP/IPv4 stack for the kernel.
- * Lives beside the e1000 driver (vnu/kernel/drivers/) and feeds off its
+ * Lives apart from the NIC driver (arch/i386/drivers/e1000.cpp) and feeds
+ * off its
  * netcore bridge. Client and server: socket/connect/send/recv/close for
  * outbound connections, bind/listen/accept to serve inbound ones. All
  * operations block (busy-wait on the RX path) exactly like ping/DNS,

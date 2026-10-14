@@ -7,7 +7,7 @@
 #include <vnu/vfs.h>
 #include <vnu/arch/io.h>
 #include <stdint.h>
-#include "netcore.h"
+#include <vnu/netcore.h>
 
 extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
 extern "C" void* memset(void* dst, int val, unsigned long count);
