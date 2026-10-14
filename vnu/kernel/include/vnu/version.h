@@ -13,7 +13,6 @@
  */
 #define VNU_VERSION "0.7"
 #define VNU_KERNEL_VERSION "0.7.0"
-#define VNU_ARCH "i386"
 
 #define VNU_STRINGIFY_(x) #x
 #define VNU_STRINGIFY(x) VNU_STRINGIFY_(x)
