@@ -10,31 +10,31 @@
  * classic-process scheduler and the windowed-task manager stop sharing
  * (and clobbering) scratch state through the assembly. */
 
-extern "C" void vnu_swtch(uint32_t* old_esp_out, uint32_t new_esp);
-extern "C" void vnu_swtch_pd(uint32_t* old_esp_out, uint32_t new_esp, uint32_t new_pgdir);
-extern "C" void vnu_proc_preempt(uint32_t sched_esp, uint32_t new_pgdir);
-extern "C" void vnu_proc_resume_preempted(uint32_t* old_esp_out, uint32_t new_esp,
-                                          uint32_t new_pgdir);
+extern "C" void vnu_swtch(uintptr_t* old_esp_out, uintptr_t new_esp);
+extern "C" void vnu_swtch_pd(uintptr_t* old_esp_out, uintptr_t new_esp, uintptr_t new_pgdir);
+extern "C" void vnu_proc_preempt(uintptr_t sched_esp, uintptr_t new_pgdir);
+extern "C" void vnu_proc_resume_preempted(uintptr_t* old_esp_out, uintptr_t new_esp,
+                                          uintptr_t new_pgdir);
 extern "C" void vnu_timer_init();
 
 namespace vnu::arch {
 
-void switch_stack(uint32_t* old_esp_out, uint32_t new_esp)
+void switch_stack(uintptr_t* old_esp_out, uintptr_t new_esp)
 {
     vnu_swtch(old_esp_out, new_esp);
 }
 
-void switch_stack_pd(uint32_t* old_esp_out, uint32_t new_esp, uint32_t new_pgdir)
+void switch_stack_pd(uintptr_t* old_esp_out, uintptr_t new_esp, uintptr_t new_pgdir)
 {
     vnu_swtch_pd(old_esp_out, new_esp, new_pgdir);
 }
 
-void preempt(uint32_t sched_esp, uint32_t new_pgdir)
+void preempt(uintptr_t sched_esp, uintptr_t new_pgdir)
 {
     vnu_proc_preempt(sched_esp, new_pgdir);
 }
 
-void resume_preempted(uint32_t* old_esp_out, uint32_t new_esp, uint32_t new_pgdir)
+void resume_preempted(uintptr_t* old_esp_out, uintptr_t new_esp, uintptr_t new_pgdir)
 {
     vnu_proc_resume_preempted(old_esp_out, new_esp, new_pgdir);
 }
