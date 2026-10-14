@@ -215,4 +215,5 @@ target_include_directories(kernel.elf PRIVATE
 string(TIMESTAMP VNU_BUILD_STAMP "%Y-%m-%d %H:%M:%S")
 target_compile_definitions(kernel.elf PRIVATE
     VNU_BUILD_STAMP="${VNU_BUILD_STAMP}"
+    VNU_ARCH="${VNU_KERNEL_ARCH}"
 )

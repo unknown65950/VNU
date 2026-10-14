@@ -28,3 +28,7 @@
 #ifndef VNU_BUILD_STAMP
 #define VNU_BUILD_STAMP "unknown"
 #endif
+
+#ifndef VNU_ARCH
+#define VNU_ARCH "i386"
+#endif
