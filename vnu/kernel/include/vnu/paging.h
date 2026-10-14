@@ -23,7 +23,7 @@ constexpr uint32_t PAGE_SIZE = 4096;
 // when building a new address space (e.g. "8 pages at 0x400000" for
 // an app image, or "16 pages at 0x600000" for its stack).
 struct MapRange {
-    uint32_t vaddr_start;
+    uintptr_t vaddr_start;
     uint32_t num_pages;
 };
 
@@ -35,17 +35,17 @@ void init();
 // Physical address of the shared "no process" page directory — the
 // one active before any process has run, and safe to switch back to
 // whenever nothing process-specific needs to be resident.
-uint32_t kernel_pgdir_phys();
+uintptr_t kernel_pgdir_phys();
 
 // Allocates a new page directory that shares the kernel's identity
 // mappings but has fresh, private physical frames backing each given
 // range. Returns the new directory's physical address (suitable for
 // loading into CR3), or 0 on allocation failure.
-uint32_t create_address_space(const MapRange* ranges, int count);
+uintptr_t create_address_space(const MapRange* ranges, int count);
 /* Adds more mapped pages to an existing private address space (see
  * paging.cpp). Returns false on out-of-memory; already-present pages
  * are left untouched. */
-bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages);
+bool extend_address_space(uintptr_t pgdir_phys, uintptr_t vaddr_start, uint32_t num_pages);
 
 /* Maps frames the caller already owns rather than fresh ones from the
  * pool: `phys_start` and the `num_pages` above it go to `vaddr_start` on
@@ -55,7 +55,7 @@ bool extend_address_space(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t nu
  * allocation only looks contiguous on a fresh pool and stops doing so
  * once anything has been freed. Returns false on out-of-memory;
  * already-present pages are left untouched. */
-bool map_frames(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages, uint32_t phys_start);
+bool map_frames(uintptr_t pgdir_phys, uintptr_t vaddr_start, uint32_t num_pages, uintptr_t phys_start);
 
 /* The same mapping for frames the space does NOT own: the pages are
  * mapped, but nothing is listed in the space's frame table, so neither
@@ -72,19 +72,19 @@ bool map_frames(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages, u
  *
  * Same contract otherwise: physical contiguity, false on out-of-memory,
  * already-present pages are simply rewritten. */
-bool map_borrowed_frames(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages, uint32_t phys_start);
+bool map_borrowed_frames(uintptr_t pgdir_phys, uintptr_t vaddr_start, uint32_t num_pages, uintptr_t phys_start);
 
 /* Takes `num_pages` back out of `pgdir_phys` at `vaddr_start` and frees
  * the private frames behind them, which is what makes a canvas able to
  * change size. Fails without freeing anything from the point it hits a
  * page that is not present or not private. */
-bool unmap_frames(uint32_t pgdir_phys, uint32_t vaddr_start, uint32_t num_pages);
+bool unmap_frames(uintptr_t pgdir_phys, uintptr_t vaddr_start, uint32_t num_pages);
 
 // Frees every private frame `create_address_space` allocated for
 // `pgdir_phys` (the ranges it was built with), plus the directory and
 // any private page tables themselves. Never frees shared/identity
 // frames. Safe to call with kernel_pgdir_phys() (a no-op).
-void destroy_address_space(uint32_t pgdir_phys);
+void destroy_address_space(uintptr_t pgdir_phys);
 
 /* Copies `num_pages` pages of `vaddr_start` from one address space to
  * another, page by page, through the kernel's identity-mapped view of
@@ -96,23 +96,23 @@ void destroy_address_space(uint32_t pgdir_phys);
  *
  * This is what makes fork() a copy rather than a shared mapping: the
  * child gets its own frames, filled in from the parent's. */
-bool copy_pages(uint32_t dst_pgdir, uint32_t src_pgdir, uint32_t vaddr_start, uint32_t num_pages);
+bool copy_pages(uintptr_t dst_pgdir, uintptr_t src_pgdir, uintptr_t vaddr_start, uint32_t num_pages);
 
-void switch_to(uint32_t pgdir_phys);
-uint32_t current_pgdir();
+void switch_to(uintptr_t pgdir_phys);
+uintptr_t current_pgdir();
 
 // Physical frame (also a valid identity-mapped virtual address) backing
 // `vaddr` in the address space `pgdir_phys`, or 0 if that page isn't
 // mapped there. Lets the wintask manager load ELF images and build
 // argv stacks straight into a *new* task's private frames without
 // having to switch CR3 first.
-uint32_t phys_frame_at(uint32_t pgdir_phys, uint32_t vaddr);
+uintptr_t phys_frame_at(uintptr_t pgdir_phys, uintptr_t vaddr);
 
 // Maps a physical window (e.g. a PCI MMIO BAR that lives above the
 // 32 MiB identity map) into a kernel-only virtual sub-range and returns
 // that virtual address, or 0 if the window won't fit. The mapping is
 // shared with every address space via the "copy g_kernel_pgdir" step,
 // and the returned pointers stay valid for the life of the kernel.
-uint32_t map_device_region(uint32_t phys, uint32_t size);
+uintptr_t map_device_region(uintptr_t phys, uintptr_t size);
 
 } // namespace vnu::paging
