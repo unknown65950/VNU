@@ -125,6 +125,7 @@ add_executable(kernel.elf
     arch/${VNU_KERNEL_ARCH}/rtc.cpp
     arch/${VNU_KERNEL_ARCH}/mmu.cpp
     arch/${VNU_KERNEL_ARCH}/context.cpp
+    arch/${VNU_KERNEL_ARCH}/switch.cpp
     arch/${VNU_KERNEL_ARCH}/paging.cpp
     arch/${VNU_KERNEL_ARCH}/switch.s
     arch/${VNU_KERNEL_ARCH}/ctxswitch.s

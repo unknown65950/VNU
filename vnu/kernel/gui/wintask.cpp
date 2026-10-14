@@ -6,11 +6,10 @@
 #include <vnu/paging.h>
 #include <vnu/pmm.h>
 #include <vnu/arch/mmu.h>
+#include <vnu/arch/switch.h>
 #include <vnu/vfs.h>
 
 extern "C" void* memcpy(void* dst, const void* src, unsigned long count);
-extern "C" void vnu_swtch_pd(uint32_t* old_esp_out, uint32_t new_esp);
-extern "C" uint32_t vnu_wintask_new_pd, vnu_wintask_old_pd;
 
 namespace {
 
@@ -249,7 +248,7 @@ uint32_t elf_load_into(uint32_t pgdir, const uint8_t* image, uint32_t size)
 void setup_switch_frame(uint32_t pgdir, Task& t)
 {
     /* Craft the initial swtch stack just below the argv frame: the words
-     * vnu_swtch_pd's epilogue pops as if a prior call had pushed the
+     * switch_stack_pd's epilogue pops as if a prior call had pushed the
      * callee-saved registers and a return address — landing on the
      * trampoline the first time this task is switched into. */
     const uint32_t fbase = STACK_BASE + 0x1000;
@@ -505,10 +504,9 @@ void run_slice(TaskHandle h)
     Task& t = g_tasks[h];
     if (!(t.state == State::Runnable || t.state == State::Blocked))
         return;
-    vnu_wintask_new_pd = t.pgdir;
     g_active = true;
     g_active_index = h;
-    vnu_swtch_pd(&t.gui_saved_esp, t.saved_esp);
+    vnu::arch::switch_stack_pd(&t.gui_saved_esp, t.saved_esp, t.pgdir);
     g_active = false;
     g_active_index = -1;
 }
@@ -919,8 +917,7 @@ char task_getch_blocking()
          * so its stack (private to the console process) is visible
          * again. */
         t.state = State::Blocked;
-        vnu_wintask_new_pd = g_base_pgdir;
-        vnu_swtch_pd(&t.saved_esp, t.gui_saved_esp);
+        vnu::arch::switch_stack_pd(&t.saved_esp, t.gui_saved_esp, g_base_pgdir);
         t.state = State::Runnable;
         if (t.con.sig_pending)
             return 0; /* interrupted: do not consume a byte that isn't there */
@@ -952,11 +949,10 @@ void task_exit()
     /* One-way trip back to the GUI — this task's stack is abandoned
      * for good, matching how the classic process path abandons a
      * finished process's stack too. */
-    vnu_wintask_new_pd = g_base_pgdir;
     uint32_t dummy;
-    vnu_swtch_pd(&dummy, t.gui_saved_esp);
+    vnu::arch::switch_stack_pd(&dummy, t.gui_saved_esp, g_base_pgdir);
     for (;;) {
-    } /* unreachable: defensive only, vnu_swtch_pd never returns here */
+    } /* unreachable: defensive only, switch_stack_pd never returns here */
 }
 
 bool exec_current(const char* path, char* const* argv, char* const* envp,

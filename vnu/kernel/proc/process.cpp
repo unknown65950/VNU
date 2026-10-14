@@ -4,6 +4,7 @@
 #include <vnu/images.h>
 #include <vnu/abi.h>
 #include <vnu/arch/cpu.h>
+#include <vnu/arch/switch.h>
 #include <vnu/paging.h>
 #include <vnu/pmm.h>
 #include <vnu/vga_gfx.h>   /* console_tick(): the console on a pixelless display */
@@ -66,12 +67,6 @@
 #include "embedded_nohup.h"
 #include "embedded_sysctl.h"
 #include "embedded_quota.h"
-
-extern "C" void vnu_proc_switch(uint32_t* old_esp_out, uint32_t new_esp);
-extern "C" uint32_t vnu_proc_new_pd, vnu_proc_old_pd;
-extern "C" void vnu_proc_preempt(uint32_t sched_esp);
-extern "C" void vnu_proc_resume_preempted(uint32_t* old_esp_out, uint32_t new_esp);
-extern "C" void vnu_timer_init();
 
 /* Largest image the execve-from-VFS path will load (the app region cap).
  * The staging buffer is taken from the PMM for the file's own size and
@@ -342,8 +337,7 @@ namespace {
  * read — at which point yield_current() swaps back to the scheduler
  * (parking the process's ESP inside the very syscall handler that
  * blocked) and the scheduler gives the next runnable process a slice.
- * See arch/i386/ctxswitch.s's vnu_proc_switch (separate new/old pd
- * globals from the GUI's vnu_wintask_*). */
+ * The switch itself is vnu::arch::switch_stack_pd (arch/i386/ctxswitch.s). */
 
 /* Byte/word stores into a *different* address space, same helpers as
  * the wintask manager: resolve the physical frame backing `vaddr` in
@@ -426,7 +420,7 @@ uint32_t build_argv_frame_into(uint32_t pgdir, uint32_t stack_top, const char* p
     return sp;
 }
 
-/* First-run switch frame just below the argv frame: what vnu_proc_switch's
+/* First-run switch frame just below the argv frame: what switch_stack_pd's
  * epilogue pops on the very first time the scheduler enters this process,
  * landing the `ret` on the trampoline. Returns its address. */
 uint32_t setup_switch_frame(uint32_t pgdir, uint32_t stack_top)
@@ -477,13 +471,12 @@ void wake_waiter_of(int pid)
  * coroutine, or (park=false, exit path) abandon its stack for good. */
 void switch_to_scheduler(bool park)
 {
-    vnu_proc_new_pd = g_sched_pgdir;
     if (park) {
         vnu::proc::Process& p = table[current_idx];
-        vnu_proc_switch(&p.coro_esp, g_sched_esp);
+        vnu::arch::switch_stack_pd(&p.coro_esp, g_sched_esp, g_sched_pgdir);
     } else {
         uint32_t dummy;
-        vnu_proc_switch(&dummy, g_sched_esp);
+        vnu::arch::switch_stack_pd(&dummy, g_sched_esp, g_sched_pgdir);
         for (;;) {
         } /* unreachable */
     }
@@ -1678,8 +1671,6 @@ bool schedule()
     return false;
 }
 
-extern "C" void vnu_swtch(uint32_t* old_esp_out, uint32_t new_esp);
-
 namespace {
 
 uint32_t g_brk = BRK_MIN;
@@ -1695,8 +1686,8 @@ uint32_t g_brk = BRK_MIN;
  * mapping the instant CR3 changed, so it silently stops being valid.
  * This buffer instead sits in the kernel's own low, always-shared
  * memory, so it stays mapped identically no matter which CR3 is
- * loaded, and vnu_swtch (kernel/proc/ctxswitch.s) gets us on and off
- * it safely. (Found the hard way: switching CR3 while still running
+ * loaded, and vnu::arch::switch_stack (arch/i386/ctxswitch.s) gets us on
+ * and off it safely. (Found the hard way: switching CR3 while still running
  * on the old stack faults on the very next instruction that touches
  * the stack — here, silently, that meant a page fault immediately
  * inside vnu::paging::switch_to() itself, cascading into a triple
@@ -1759,7 +1750,7 @@ void setup_and_enter()
         vnu::paging::switch_to(pl.prev_pgdir);
         vnu::arch::irq_enable();
         uint32_t dummy;
-        vnu_swtch(&dummy, g_caller_esp);
+        vnu::arch::switch_stack(&dummy, g_caller_esp);
         for (;;) {
         } /* unreachable */
     }
@@ -1783,12 +1774,12 @@ void setup_and_enter()
      * before handing back control, for the same reason as above. */
     vnu::paging::switch_to(pl.prev_pgdir);
     uint32_t dummy;
-    vnu_swtch(&dummy, g_caller_esp);
+    vnu::arch::switch_stack(&dummy, g_caller_esp);
     for (;;) {
     } /* unreachable */
 }
 
-/* Primes g_setup_stack with a fresh vnu_swtch-compatible frame so the
+/* Primes g_setup_stack with a fresh switch_stack-compatible frame so the
  * very first switch onto it lands in setup_and_enter(). Must be
  * called again before every launch (the stack is reused each time). */
 uint32_t prime_setup_stack()
@@ -1907,7 +1898,7 @@ int run_program_from_memory(const char* argv0_path, const uint8_t* data, uint32_
      * space, loading its ELF, and jumping in all has to happen without
      * ever touching the CALLER's stack again once CR3 has changed -
      * see g_setup_stack's comment above for why. Move onto that safe
-     * scratch stack FIRST — this vnu_swtch doesn't touch CR3, so it's
+     * scratch stack FIRST — this switch doesn't touch CR3, so it's
      * safe to do from here — and only switch CR3 once already running
      * on it (inside setup_and_enter()). */
     g_pending.data = data;
@@ -1924,7 +1915,7 @@ int run_program_from_memory(const char* argv0_path, const uint8_t* data, uint32_
     g_pending.prev_pgdir = prev_pgdir;
     uint32_t setup_esp = prime_setup_stack();
 
-    vnu_swtch(&g_caller_esp, setup_esp);
+    vnu::arch::switch_stack(&g_caller_esp, setup_esp);
     /* Resumed here (back on THIS stack, under THIS stack's own CR3 —
      * restored by setup_and_enter() before it switched back to us)
      * once setup_and_enter() has either failed to load the ELF or the
@@ -2248,8 +2239,7 @@ extern "C" uint32_t vnu_timer_tick(uint32_t frame_esp)
     cur.coro_esp = frame_esp;
     cur.preempted = true;
     ++cur.nivcsw; /* the timer seized the CPU: an involuntary switch */
-    vnu_proc_new_pd = g_sched_pgdir;
-    vnu_proc_preempt(g_sched_esp);
+    vnu::arch::preempt(g_sched_esp, g_sched_pgdir);
     return 0; /* not reached */
 }
 
@@ -2273,7 +2263,6 @@ void run_slice(int i)
         vnu::arch::set_proc_entry(p.entry, p.argv_esp);
         p.started = true;
     }
-    vnu_proc_new_pd = p.pgdir_phys;
     if (p.preempted) {
         /* The timer parked this process with its whole register state:
          * popad+iret back into whatever instruction it was interrupted
@@ -2292,9 +2281,9 @@ void run_slice(int i)
              * process's stack and makes a safe anchor by itself. */
             deliver_signal_at(p, p.coro_esp, p.coro_esp, sig);
         }
-        vnu_proc_resume_preempted(&g_sched_esp, p.coro_esp);
+        vnu::arch::resume_preempted(&g_sched_esp, p.coro_esp, p.pgdir_phys);
     } else {
-        vnu_proc_switch(&g_sched_esp, p.coro_esp);
+        vnu::arch::switch_stack_pd(&g_sched_esp, p.coro_esp, p.pgdir_phys);
     }
     /* Resumed here (on the scheduler's own stack) once the process has
      * yielded, been preempted, or exited. */
@@ -2312,7 +2301,7 @@ int run_scheduler(const char* primary, const char* fallback)
      * (100 Hz) seizes the CPU from a running process and falls back to
      * this loop. Init it once, before any process gets its first slice
      * (the loop may otherwise exit into kernel_main directly). */
-    vnu_timer_init();
+    vnu::arch::timer_init();
     g_sched_pgdir = vnu::paging::current_pgdir();
     const char* next = primary;
     int init_slot = -1;

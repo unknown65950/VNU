@@ -15,6 +15,7 @@ vnu/kernel/
     rtc.h             the platform wall clock
     mmu.h             the address-space registers the core touches directly
     context.h         the user register context and the frames built for it
+    switch.h          the cooperative coroutine switch and the preemption clock
   arch/
     i386/             the only port so far
       include/vnu/arch/context_defs.h  the i386 Registers/TrapFrame layout
@@ -26,6 +27,7 @@ vnu/kernel/
       rtc.cpp         vnu/arch/rtc.h
       mmu.cpp         vnu/arch/mmu.h
       context.cpp     vnu/arch/context.h
+      switch.cpp      vnu/arch/switch.h
       paging.cpp      the page tables behind vnu::paging
       switch.s        user entry/exit
       ctxswitch.s     coroutine switch and the PIT timer ISR
@@ -37,15 +39,12 @@ The core includes the headers above and calls the declared functions. It
 does **not** contain `cli`/`sti`/`hlt`, `in`/`out`, `mov %crN`,
 `fxsave`/`fxrstor`, `cpuid`, or a hand-rolled test-and-set. A grep for
 `asm` outside `arch/` should come back empty, and a grep for a register
-name (`eip`, `eax`, `eflags`, ...) should only hit a comment. What still
-names the machine in the core is:
+name (`eip`, `eax`, `eflags`, ...) should only hit a comment. The
+coroutine switch (`vnu_swtch` and friends, once called straight from
+`proc/process.cpp` and `gui/wintask.cpp`) now goes through `switch.h`,
+so the core parks a plain `uint32_t` stack slot and names no register.
+The one thing that still names the machine in the core is:
 
-- the low-level coroutine switch: `vnu_swtch`, `vnu_proc_switch`,
-  `vnu_wintask_*`, `vnu_proc_preempt`, `vnu_proc_resume_preempted` and
-  `vnu_timer_init` (arch/i386/switch.s, ctxswitch.s). These are the
-  switch's mechanics rather than the register context, and they already
-  take plain `uint32_t*` stack slots; lifting them behind the interface
-  is the next axis.
 - the device drivers under `drivers/`: they are PC hardware (the 8259
   PIC, ATA, PS/2, the Bochs VBE interface), which is a second axis from
   the CPU. They already take all port access through `vnu/arch/io.h`, so
@@ -55,10 +54,10 @@ names the machine in the core is:
 
 1. Add `arch/<arch>/` with an implementation of every header in
    `include/vnu/arch/`. The functions in `cpu.h`, `io.h`, `serial.h`,
-   `rtc.h`, `mmu.h` and `context.h` are the contract; `serial.h` may be a
-   no-op and `rtc.h` may read any clock the machine has.
-   `context.h` is two parts: the accessors are fixed, and the concrete
-   `Registers`/`TrapFrame` layout comes from a port-provided
+   `rtc.h`, `mmu.h`, `context.h` and `switch.h` are the contract;
+   `serial.h` may be a no-op and `rtc.h` may read any clock the machine
+   has. `context.h` is two parts: the accessors are fixed, and the
+   concrete `Registers`/`TrapFrame` layout comes from a port-provided
    `include/vnu/arch/context_defs.h` (see `arch/i386/include/`), which
    the build reaches through `arch/${VNU_KERNEL_ARCH}/include`.
 2. Provide the boot path (`boot.s`/`boot.cpp` or equivalent) and the
@@ -81,5 +80,5 @@ names the machine in the core is:
 
 `i386` is the only port, and it is complete for the interface as it
 stands today. A second port would immediately show up the piece that is
-still i386-shaped (the coroutine switch primitives above, and the PC
-drivers), which is exactly the point of keeping the surface this small.
+still i386-shaped (the PC drivers named above), which is exactly the
+point of keeping the surface this small.

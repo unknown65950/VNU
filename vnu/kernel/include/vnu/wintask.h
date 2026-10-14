@@ -12,8 +12,8 @@
 // (0x700000-0x800000) are backed by freshly allocated, private physical
 // frames — so every app can still be linked at the same fixed 0x400000
 // without relocation. Control switches between the GUI and a task (and
-// between tasks) cooperatively with vnu_swtch_pd, which swaps the
-// page directory at the exact point the context switch happens.
+// between tasks) cooperatively with vnu::arch::switch_stack_pd, which
+// swaps the page directory at the exact point the context switch happens.
 //
 // Switching is cooperative, at two points only — a blocking stdin read,
 // or exit() — so there's exactly one task executing between those

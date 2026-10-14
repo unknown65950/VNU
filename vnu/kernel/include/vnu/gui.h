@@ -9,7 +9,7 @@
 // Every launched app runs as its own *paged* wintask (see
 // kernel/gui/wintask.cpp): a private page directory lets multiple apps
 // share the fixed 0x400000 link address, and control cooperatively
-// switches between the GUI and each task via vnu_swtch_pd.
+// switches between the GUI and each task via vnu::arch::switch_stack_pd.
 
 namespace vnu::gui {
 
