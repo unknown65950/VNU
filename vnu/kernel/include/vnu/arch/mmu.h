@@ -9,7 +9,7 @@
 
 namespace vnu::arch {
 
-uint32_t read_cr3();
-void write_cr3(uint32_t phys);
+uintptr_t read_cr3();
+void write_cr3(uintptr_t phys);
 
 } // namespace vnu::arch

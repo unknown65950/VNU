@@ -6,14 +6,14 @@
 
 namespace vnu::arch {
 
-uint32_t read_cr3()
+uintptr_t read_cr3()
 {
-    uint32_t v;
+    uintptr_t v;
     asm volatile("mov %%cr3, %0" : "=r"(v));
     return v;
 }
 
-void write_cr3(uint32_t phys)
+void write_cr3(uintptr_t phys)
 {
     asm volatile("mov %0, %%cr3" : : "r"(phys) : "memory");
 }
