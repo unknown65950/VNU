@@ -8,9 +8,16 @@ project(vnu-kernel LANGUAGES CXX ASM_NASM)
 # project() call above. On a 64-bit host it defaults to elf64, and
 # setting CMAKE_ASM_NASM_OBJECT_FORMAT afterwards has no effect — so we
 # override the compile rule itself to force -f elf32.
-set(CMAKE_ASM_NASM_COMPILE_OBJECT
-    "<CMAKE_ASM_NASM_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -f elf32 -o <OBJECT> <SOURCE>"
-)
+if(VNU_KERNEL_ARCH STREQUAL "x86_64")
+  set(CMAKE_ASM_NASM_COMPILE_OBJECT
+      "<CMAKE_ASM_NASM_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -f elf64 -o <OBJECT> <SOURCE>"
+  )
+else()
+  set(CMAKE_ASM_NASM_COMPILE_OBJECT
+      "<CMAKE_ASM_NASM_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -f elf32 -o <OBJECT> <SOURCE>"
+  )
+endif()
+
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,28 +39,33 @@ set(VNU_KERNEL_ARCH "i386" CACHE STRING "Kernel target architecture")
 # there we compile with clang against a bare i386 triple. The other flags
 # (freestanding, no SSE/FPU, ...) are shared by both paths.
 
-set(VNU_ARCH_FLAG -m32)
-set(VNU_KERNEL_LIBS -lgcc)
-set(VNU_USING_CLANG_CROSS OFF)
-if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|armv8)")
-    set(VNU_USING_CLANG_CROSS ON)
-    set(VNU_ARCH_FLAG "-target" "i386-none-elf")
-    # A host libgcc has nothing for a bare i386 - if the kernel ever
-    # needs compiler-rt-like helpers (udivdi3 and friends) they are added
-    # as a separate TU under runtime/ (runtime/libgcc_shim.cpp).
-    set(VNU_KERNEL_LIBS "")
-    # The Termux clang has no linker driver for a bare i386 (linking
-    # collapses to /usr/bin/false), so in cross mode we drive ld.lld
-    # directly. <LINK_FLAGS> then only carries the target_link_options
-    # below - the driver's global -O2 -g are not needed. CMake's
-    # auto-generated --dependency-file arrives as -Xlinker, which ld.lld
-    # does not understand, so that feature is disabled as well.
-    find_program(VNU_LD_LLD ld.lld REQUIRED)
-    set(CMAKE_CXX_LINK_EXECUTABLE
-        "${VNU_LD_LLD} -m elf_i386 <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
-    set(CMAKE_CXX_LINK_DEPENDS_USE_LINKER FALSE)
+if(VNU_KERNEL_ARCH STREQUAL "x86_64")
+  set(VNU_ARCH_FLAG -m64)
+  set(VNU_KERNEL_LIBS -lgcc)
+  set(VNU_USING_CLANG_CROSS OFF)
+  if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|armv8)")
+      set(VNU_USING_CLANG_CROSS ON)
+      set(VNU_ARCH_FLAG "-target" "x86_64-none-elf")
+      set(VNU_KERNEL_LIBS "")
+      find_program(VNU_LD_LLD ld.lld REQUIRED)
+      set(CMAKE_CXX_LINK_EXECUTABLE
+          "${VNU_LD_LLD} -m elf_x86_64 <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
+      set(CMAKE_CXX_LINK_DEPENDS_USE_LINKER FALSE)
+  endif()
+else()
+  set(VNU_ARCH_FLAG -m32)
+  set(VNU_KERNEL_LIBS -lgcc)
+  set(VNU_USING_CLANG_CROSS OFF)
+  if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|armv8)")
+      set(VNU_USING_CLANG_CROSS ON)
+      set(VNU_ARCH_FLAG "-target" "i386-none-elf")
+      set(VNU_KERNEL_LIBS "")
+      find_program(VNU_LD_LLD ld.lld REQUIRED)
+      set(CMAKE_CXX_LINK_EXECUTABLE
+          "${VNU_LD_LLD} -m elf_i386 <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
+      set(CMAKE_CXX_LINK_DEPENDS_USE_LINKER FALSE)
+  endif()
 endif()
-
 set(KERNEL_COMPILE_FLAGS
     ${VNU_ARCH_FLAG}
     -ffreestanding
@@ -186,20 +198,36 @@ set_target_properties(kernel.elf PROPERTIES LINKER_LANGUAGE CXX)
 # In cross mode (ld.lld called directly) these are plain linker flags;
 # with the native gcc driver they become -Wl,-T,... pass-through options,
 # and the host libgcc is pulled in there as well.
+if(VNU_KERNEL_ARCH STREQUAL "x86_64")
+  set(VNU_KERNEL_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/arch/x86_64/linker.ld")
+else()
+  set(VNU_KERNEL_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/linker.ld")
+endif()
 if(VNU_USING_CLANG_CROSS)
     target_link_options(kernel.elf PRIVATE
         -static
-        -T ${CMAKE_CURRENT_SOURCE_DIR}/linker.ld
+        -T ${VNU_KERNEL_LINKER_SCRIPT}
     )
 else()
-    target_link_options(kernel.elf PRIVATE
-        -m32
-        -ffreestanding
-        -nostdlib
-        -static
-        -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker.ld
-        ${VNU_KERNEL_LIBS}
-    )
+    if(VNU_KERNEL_ARCH STREQUAL "x86_64")
+      target_link_options(kernel.elf PRIVATE
+          -m64
+          -ffreestanding
+          -nostdlib
+          -static
+          -Wl,-T,${VNU_KERNEL_LINKER_SCRIPT}
+          ${VNU_KERNEL_LIBS}
+      )
+    else()
+      target_link_options(kernel.elf PRIVATE
+          -m32
+          -ffreestanding
+          -nostdlib
+          -static
+          -Wl,-T,${VNU_KERNEL_LINKER_SCRIPT}
+          ${VNU_KERNEL_LIBS}
+      )
+    endif()
 endif()
 
 target_include_directories(kernel.elf PRIVATE
