@@ -1,29 +1,33 @@
 #pragma once
-#include <cstdint>
+#include <stdint.h>
+
+/* The x86_64 shape of vnu::arch::Registers and vnu::arch::TrapFrame,
+ * pulled in by the generic interface in <vnu/arch/context.h>.
+ *
+ * STATUS: bring-up skeleton for the x86_64 port; the port does not yet
+ * boot (see arch/README.md). A trap frame is the entry stub's saved
+ * general registers followed by the words a long-mode int gate pushes
+ * (rip, cs, rflags); rsp/ss only appear once a ring3 user path exists.
+ * The generic kernel reaches these fields only through the accessors in
+ * <vnu/arch/context.h>, so the widths here do not leak into the core. */
 
 namespace vnu::arch {
 
 struct Registers {
-    std::uint64_t rax, rbx, rcx, rdx;
-    std::uint64_t rsi, rdi, rbp, rsp;
-    std::uint64_t r8, r9, r10, r11;
-    std::uint64_t r12, r13, r14, r15;
-    std::uint64_t rip;
-    std::uint64_t rflags;
-    std::uint64_t frame;
+    uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
+    uint64_t rdi, rsi, rbp, rsp, rbx, rdx, rcx, rax;
+    uint64_t rip, rflags;
+    /* The address of the live frame this snapshot was read from, in the
+     * process's own address space; 0 when it has none. */
+    uint64_t frame;
 };
 
 struct TrapFrame {
-    std::uint64_t r15, r14, r13, r12;
-    std::uint64_t r11, r10, r9, r8;
-    std::uint64_t rdi, rsi, rbp, rbx;
-    std::uint64_t rdx, rcx, rax;
-    std::uint64_t errcode;
-    std::uint64_t rip;
-    std::uint64_t cs;
-    std::uint64_t rflags;
-    std::uint64_t rsp;
-    std::uint64_t ss;
+    /* Saved by the entry stub, lowest address first. */
+    uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
+    uint64_t rdi, rsi, rbp, rbx, rdx, rcx, rax;
+    /* Pushed by the processor when the gate fires. */
+    uint64_t rip, cs, rflags;
 };
 
 } // namespace vnu::arch

@@ -95,6 +95,19 @@ instead, sending the keys with `guest._type("<down>q")`.
   appended in `vnu/kernel/include/vnu/abi.h` and mirrored to
   `vlibc/include/vnu/abi.h`; `vnu/abi/ABI.md` must be updated in the
   same change.
+- **The kernel must stay portable.** The core of the kernel is everything
+  under `vnu/kernel/` except `vnu/kernel/arch/`; every machine-specific
+  thing lives behind the contract in `vnu/kernel/include/vnu/arch/` and
+  is implemented under `vnu/kernel/arch/<arch>/` (read
+  `vnu/kernel/arch/README.md` first). Never close that door: no inline
+  `asm`, control register, port I/O, interrupt controller, fixed physical
+  address or process-frame layout outside `arch/`, and no value that is
+  really an address (a pointer, a page-table physical address, a saved
+  stack pointer) narrowed to `uint32_t` in the core — use `uintptr_t`.
+  Adding a port must stay a matter of adding `vnu/kernel/arch/<arch>/`;
+  check every change that touches the boundary against that rule. The
+  x86_64 port under `vnu/kernel/arch/x86_64/` is the standing test that
+  the boundary is still open, even while it is unfinished.
 - **Host vcc == guest vcc.** The `vcc` binary (`vnu/userspace/vcc/vcc.c`)
   compiled with `tools/vcc` on the build host is functionally equivalent
   to the guest `vcc` embedded into the kernel and run inside VNU: the

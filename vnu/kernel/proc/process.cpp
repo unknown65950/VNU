@@ -429,7 +429,7 @@ uint32_t setup_switch_frame(uint32_t pgdir, uint32_t stack_top)
                                         vnu::arch::proc_trampoline());
 }
 
-uint32_t g_sched_esp = 0;   /* scheduler coroutine's parked stack (in its
+uintptr_t g_sched_esp = 0;   /* scheduler coroutine's parked stack (in its
                                own kernel-low stack, shared by every CR3) */
 uint32_t g_sched_pgdir = 0; /* page directory the scheduler runs in */
 char g_spawn_path[96];
@@ -475,7 +475,7 @@ void switch_to_scheduler(bool park)
         vnu::proc::Process& p = table[current_idx];
         vnu::arch::switch_stack_pd(&p.coro_esp, g_sched_esp, g_sched_pgdir);
     } else {
-        uint32_t dummy;
+        uintptr_t dummy;
         vnu::arch::switch_stack_pd(&dummy, g_sched_esp, g_sched_pgdir);
         for (;;) {
         } /* unreachable */
@@ -950,7 +950,7 @@ static int exec_prepared(Registers* trap, const char* path,
         /* The segments are mapped now; the staging run is dead weight
          * from here on, and the pool is the one place a big binary's
          * read buffer can come from without being lost for good. */
-        vnu::pmm::free_contig(reinterpret_cast<uint32_t>(image),
+        vnu::pmm::free_contig(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(image)),
                               image_frames);
         image = nullptr;
     }
@@ -1716,7 +1716,7 @@ struct PendingLaunch {
  * be accessible.) Copy the string into kernel-owned memory, which
  * stays mapped identically under every CR3, before the switch. */
 char g_argv0_copy[64];
-uint32_t g_caller_esp;
+uintptr_t g_caller_esp;
 
 void setup_and_enter()
 {
@@ -1749,7 +1749,7 @@ void setup_and_enter()
          * mapped identically under every CR3. */
         vnu::paging::switch_to(pl.prev_pgdir);
         vnu::arch::irq_enable();
-        uint32_t dummy;
+        uintptr_t dummy;
         vnu::arch::switch_stack(&dummy, g_caller_esp);
         for (;;) {
         } /* unreachable */
@@ -1773,7 +1773,7 @@ void setup_and_enter()
      * under the process's own (now-finished) CR3 — restore the caller's
      * before handing back control, for the same reason as above. */
     vnu::paging::switch_to(pl.prev_pgdir);
-    uint32_t dummy;
+    uintptr_t dummy;
     vnu::arch::switch_stack(&dummy, g_caller_esp);
     for (;;) {
     } /* unreachable */
@@ -1784,7 +1784,7 @@ void setup_and_enter()
  * called again before every launch (the stack is reused each time). */
 uint32_t prime_setup_stack()
 {
-    uint32_t top = reinterpret_cast<uint32_t>(g_setup_stack) + sizeof(g_setup_stack);
+    uint32_t top = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_setup_stack)) + sizeof(g_setup_stack);
     return vnu::arch::build_first_frame(current_writer, nullptr, top,
                                         reinterpret_cast<const void*>(&setup_and_enter));
 }

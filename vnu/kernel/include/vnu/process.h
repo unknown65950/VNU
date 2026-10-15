@@ -49,7 +49,7 @@ struct Process {
     uint32_t sleep_until; // jiffies deadline while Blocked (0 = no timed
                           // wake); the scheduler wakes the process when
                           // now_jiffies() passes it
-    uint32_t coro_esp;  // suspended stack pointer (switch frame, or mid-
+    uintptr_t coro_esp;  // suspended stack pointer (switch frame, or mid-
                         // syscall stack once blocked and resumed)
     uint32_t entry;     // ELF entry point, for the first-run trampoline
     uint32_t argv_esp;  // freshly built argc/argv stack for that entry

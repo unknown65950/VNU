@@ -642,7 +642,7 @@ void release_backbuf()
 {
     if (!g_backbuf)
         return;
-    vnu::pmm::free_contig(reinterpret_cast<uint32_t>(g_backbuf),
+    vnu::pmm::free_contig(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_backbuf)),
                           backbuf_frames(g_width, g_height, g_bpp));
     g_backbuf = nullptr;
 }
@@ -800,7 +800,7 @@ uint32_t font_bytes()
  * there a frame, and how big is it. */
 uint32_t backbuffer_phys()
 {
-    return reinterpret_cast<uint32_t>(g_backbuf);
+    return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_backbuf));
 }
 
 uint32_t backbuffer_pages()
@@ -972,7 +972,7 @@ bool set_resolution(int w, int h)
      * asked second for the same reason: the two drivers must never
      * disagree about the screen. */
     if (virtio_gpu::active() && !virtio_gpu::set_resolution(w, h)) {
-        vnu::pmm::free_contig(reinterpret_cast<uint32_t>(next),
+        vnu::pmm::free_contig(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(next)),
                               backbuf_frames(w, h, g_bpp));
         return false;
     }
@@ -1031,7 +1031,7 @@ static bool restore_console_geometry(uint16_t cols, uint16_t rows)
     if (!next)
         return false;
     if (vnu::virtio_gpu::active() && !vnu::virtio_gpu::set_resolution(w, h)) {
-        vnu::pmm::free_contig(reinterpret_cast<uint32_t>(next),
+        vnu::pmm::free_contig(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(next)),
                               backbuf_frames(w, h, g_bpp));
         return false;
     }

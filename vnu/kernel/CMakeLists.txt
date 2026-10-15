@@ -83,6 +83,15 @@ set(KERNEL_COMPILE_FLAGS
     -Wextra
 )
 
+# x86_64 has a 128-byte red zone below rsp that any code is free to use
+# without adjusting rsp. An interrupt or a trap entering the kernel
+# would write its frame right on top of that data, so the kernel (which
+# is interrupted constantly) turns it off. Harmless and accepted on
+# i386; set only where it means something.
+if(VNU_KERNEL_ARCH STREQUAL "x86_64")
+    list(APPEND KERNEL_COMPILE_FLAGS -mno-red-zone)
+endif()
+
 set_source_files_properties(
     arch/${VNU_KERNEL_ARCH}/boot/boot.s
     arch/${VNU_KERNEL_ARCH}/syscall/syscall.s

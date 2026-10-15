@@ -119,7 +119,7 @@ uint8_t* take(uint32_t px)
 void give(uint8_t* p, uint32_t px)
 {
     if (p)
-        vnu::pmm::free_contig(reinterpret_cast<uint32_t>(p), frames_for(px));
+        vnu::pmm::free_contig(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(p)), frames_for(px));
 }
 
 /* The colours a picture may have, and the slot each one takes: the

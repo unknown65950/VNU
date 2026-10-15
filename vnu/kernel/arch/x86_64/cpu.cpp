@@ -1,68 +1,130 @@
 #include <vnu/arch/cpu.h>
-#include <vnu/arch/io.h>
-#include <cstdint>
+#include <stddef.h>
 
-std::uint32_t vnu::arch::atomic_exchange(std::uint32_t* ptr, std::uint32_t val) {
-    asm volatile("lock xchg %0, (%1)" : "+r"(val) : "r"(ptr) : "memory");
-    return val;
+// arch/x86_64/cpu.cpp - the x86_64 half of vnu/arch/cpu.h. The same
+// instructions as arch/i386/cpu.cpp, but the flags word is 64 bits
+// (pushfq/popfq) and the FPU state is saved in the 64-bit FXSAVE
+// format, so a pointer in it is a full pointer and not a truncated one.
+
+namespace vnu::arch {
+
+IrqState irq_save()
+{
+    IrqState flags;
+    asm volatile("pushfq; popq %0" : "=r"(flags) :: "memory");
+    asm volatile("cli" ::: "memory");
+    return flags;
 }
 
-vnu::arch::IrqState vnu::arch::irq_save() {
-    std::uint64_t rflags;
-    asm volatile("pushfq; popq %0" : "=r"(rflags));
-    IrqState s = static_cast<IrqState>(rflags);
-    asm volatile("cli");
-    return s;
+void irq_restore(IrqState flags)
+{
+    /* RFLAGS.IF. A 64-bit IrqState is fine: only the low bits matter. */
+    if (flags & 0x200u)
+        asm volatile("sti" ::: "memory");
+    else
+        asm volatile("cli" ::: "memory");
 }
-void vnu::arch::irq_restore(IrqState s) {
-    asm volatile("pushq %0; popfq" : : "r"(static_cast<std::uint64_t>(s)) : "memory");
+
+void irq_disable()
+{
+    asm volatile("cli" ::: "memory");
 }
-void vnu::arch::irq_disable() {
-    asm volatile("cli");
+
+void irq_enable()
+{
+    asm volatile("sti" ::: "memory");
 }
-void vnu::arch::irq_enable() {
-    asm volatile("sti");
+
+bool interrupts_enabled()
+{
+    IrqState flags;
+    asm volatile("pushfq; popq %0" : "=r"(flags));
+    return (flags & 0x200u) != 0;
 }
-void vnu::arch::halt() {
+
+void halt()
+{
     asm volatile("hlt");
 }
-void vnu::arch::wait_for_interrupt() {
-    asm volatile("hlt");
+
+void wait_for_interrupt()
+{
+    asm volatile("sti; hlt; cli" ::: "memory");
 }
-void vnu::arch::relax() {
-    asm volatile("pause");
+
+void relax()
+{
+    asm volatile("pause" ::: "memory");
 }
-void vnu::arch::barrier() {
-    asm volatile("mfence");
+
+void barrier()
+{
+    asm volatile("" ::: "memory");
 }
-[[noreturn]] void vnu::arch::halt_forever() {
-    for (;;) { asm volatile("hlt"); }
+
+[[noreturn]] void halt_forever()
+{
+    for (;;)
+        asm volatile("hlt");
 }
-void vnu::arch::fpu_save(void* state) {
-    asm volatile("fxsave64 (%0)" : : "r"(state) : "memory");
+
+namespace {
+/* One saved FPU state; 512 bytes covers the 64-bit FXSAVE image. A
+ * static global rather than the caller's stack: fxsave64 faults on a
+ * misaligned operand and the syscall handler's stack alignment cannot
+ * be trusted. The kernel has a single CPU and does not nest borrows. */
+alignas(16) uint8_t g_fpu_state[512];
 }
-void vnu::arch::fpu_restore(void* state) {
-    asm volatile("fxrstor64 (%0)" : : "r"(state) : "memory");
+
+void fpu_save()
+{
+    asm volatile("fxsave64 %0" : : "m"(g_fpu_state) : "memory");
 }
-void vnu::arch::cpuid(vnu::arch::CpuId* out) {
-    if (!out) return;
-    std::uint32_t eax, ebx, ecx, edx;
+
+void fpu_restore()
+{
+    asm volatile("fxrstor64 %0" : : "m"(g_fpu_state) : "memory");
+}
+
+uint32_t atomic_exchange(volatile uint32_t* cell, uint32_t value)
+{
+    uint32_t old = value;
+    asm volatile("lock xchgl %0, %1" : "+r"(old), "+m"(*cell) :: "memory");
+    return old;
+}
+
+CpuId cpu_id()
+{
+    CpuId id{};
+    uint32_t eax, ebx, ecx, edx;
+
     asm volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0));
-    out->vendor[0] = ebx & 0xFF; out->vendor[1] = (ebx >> 8) & 0xFF; out->vendor[2] = (ebx >> 16) & 0xFF; out->vendor[3] = (ebx >> 24) & 0xFF;
-    out->vendor[4] = edx & 0xFF; out->vendor[5] = (edx >> 8) & 0xFF; out->vendor[6] = (edx >> 16) & 0xFF; out->vendor[7] = (edx >> 24) & 0xFF;
-    out->vendor[8] = ecx & 0xFF; out->vendor[9] = (ecx >> 8) & 0xFF; out->vendor[10] = (ecx >> 16) & 0xFF; out->vendor[11] = (ecx >> 24) & 0xFF;
-    out->vendor[12] = 0;
+    auto put4 = [&](int off, uint32_t v) {
+        id.vendor[off + 0] = static_cast<char>(v & 0xFF);
+        id.vendor[off + 1] = static_cast<char>((v >> 8) & 0xFF);
+        id.vendor[off + 2] = static_cast<char>((v >> 16) & 0xFF);
+        id.vendor[off + 3] = static_cast<char>((v >> 24) & 0xFF);
+    };
+    put4(0, ebx);
+    put4(4, edx);
+    put4(8, ecx);
+    id.vendor[12] = 0;
+
     asm volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(1));
-    out->family = (eax >> 8) & 0xF;
-    out->model = (eax >> 4) & 0xF;
-    out->stepping = eax & 0xF;
-    out->fpu = (edx >> 0) & 1;
+    id.family = (eax >> 8) & 0xF;
+    id.model = (eax >> 4) & 0xF;
+    id.stepping = eax & 0xF;
+    id.fpu = (edx & 1) != 0;
+    return id;
 }
-void vnu::arch::reboot() {
-    for (;;) {
-        std::uint8_t v = vnu::arch::io_in8(0x64);
-        if ((v & 0x02) == 0) break;
-    }
-    vnu::arch::io_out8(0x64, 0xFE);
+
+[[noreturn]] void reboot()
+{
+    for (unsigned i = 0; i < 100000; ++i)
+        asm volatile("" ::: "memory");
+    asm volatile("outb %0, %1" : : "a"(static_cast<uint8_t>(0xFE)),
+                 "Nd"(static_cast<uint16_t>(0x64)));
     halt_forever();
 }
+
+} // namespace vnu::arch

@@ -377,7 +377,7 @@ constexpr uint32_t PAGE_BYTES = 4096;
 void node_release(Node& n)
 {
     if (n.buf) {
-        vnu::pmm::free_contig(reinterpret_cast<uint32_t>(n.buf), n.cap >> 12);
+        vnu::pmm::free_contig(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(n.buf)), n.cap >> 12);
         n.buf = nullptr;
     }
     n.cap = 0;
@@ -402,7 +402,7 @@ bool node_reserve(Node& n, uint32_t need)
     for (uint32_t i = 0; i < n.size; ++i)
         nb[i] = n.buf[i];
     if (n.buf)
-        vnu::pmm::free_contig(reinterpret_cast<uint32_t>(n.buf), old_pages);
+        vnu::pmm::free_contig(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(n.buf)), old_pages);
     n.buf = nb;
     n.cap = pages << 12;
     return true;

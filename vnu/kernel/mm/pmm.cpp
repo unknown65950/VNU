@@ -34,7 +34,7 @@ void init()
      * byte of RAM. A .bss that grew by 4.7 MiB (the desktop's buffers
      * left it for the pool) hands those frames straight back, with no
      * constant here to keep in step. */
-    const uint32_t bss_end = reinterpret_cast<uint32_t>(__bss_end);
+    const uint32_t bss_end = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(__bss_end));
     uint32_t base = (bss_end + FRAME_SIZE - 1u) & ~(FRAME_SIZE - 1u);
     if (base < POOL_MIN_BASE)
         base = POOL_MIN_BASE;

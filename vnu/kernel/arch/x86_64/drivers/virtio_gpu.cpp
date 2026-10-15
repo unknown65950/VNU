@@ -510,8 +510,8 @@ bool setup_queue()
  * response type the command must answer with. */
 bool submit_and_wait(uint32_t cmd_len, uint32_t expect)
 {
-    uint32_t cmd_phys = reinterpret_cast<uint32_t>(g_cmd_buf);
-    uint32_t resp_phys = reinterpret_cast<uint32_t>(g_resp_buf);
+    uint32_t cmd_phys = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_cmd_buf));
+    uint32_t resp_phys = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_resp_buf));
 
     /* Where the used ring stands *before* this command is even queued.
      * Reading it after the kick instead loses the race the wrong way
@@ -669,7 +669,7 @@ void gpu_unref(uint32_t id)
     if (head + 1 > g_q.size)
         head = 0;
     volatile VqDesc* d = &g_q.desc[head];
-    d->addr_lo = reinterpret_cast<uint32_t>(g_cmd_buf);
+    d->addr_lo = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_cmd_buf));
     d->addr_hi = 0;
     d->len = sizeof(GpuUnref);
     d->flags = 0; /* the whole chain: there is no response descriptor */

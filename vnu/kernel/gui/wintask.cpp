@@ -36,8 +36,8 @@ enum class State : uint8_t { Unused, Runnable, Blocked, Done };
 
 struct Task {
     State state = State::Unused;
-    uint32_t saved_esp = 0;   /* this task's parked stack pointer */
-    uint32_t gui_saved_esp = 0; /* where the GUI stack parked while we ran */
+    uintptr_t saved_esp = 0;   /* this task's parked stack pointer */
+    uintptr_t gui_saved_esp = 0; /* where the GUI stack parked while we ran */
     uint32_t pgdir = 0;       /* this task's private page directory */
     Console con{};
     /* The program this task was spawned with (the desktop icon target),
@@ -188,7 +188,7 @@ uint32_t build_argv_frame(uint32_t stack_top, int argc, char* const* argv, const
         sp -= (len + 3) & ~3u;
         for (int c = 0; c < len; ++c)
             sp[c] = static_cast<uint8_t>(s[c]);
-        argv_addr[i] = reinterpret_cast<uint32_t>(sp);
+        argv_addr[i] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(sp));
     }
 
     for (int i = 0; i < envc; ++i) {
@@ -197,7 +197,7 @@ uint32_t build_argv_frame(uint32_t stack_top, int argc, char* const* argv, const
         sp -= (len + 3) & ~3u;
         for (int c = 0; c < len; ++c)
             sp[c] = static_cast<uint8_t>(s[c]);
-        env_addr[i] = reinterpret_cast<uint32_t>(sp);
+        env_addr[i] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(sp));
     }
 
     sp -= 4;
@@ -214,7 +214,7 @@ uint32_t build_argv_frame(uint32_t stack_top, int argc, char* const* argv, const
     }
     sp -= 4;
     *reinterpret_cast<uint32_t*>(sp) = static_cast<uint32_t>(argc);
-    return reinterpret_cast<uint32_t>(sp);
+    return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(sp));
 }
 
 /* ELF loader variant for a not-yet-running task: writes segments into
@@ -813,7 +813,7 @@ int canvas_resize(Console& c, uint32_t pgdir, const struct vnu_gfx_canvas* req,
             const int old_w = c.pix_w;
             const int old_h = c.pix_h;
             const uint32_t old_pages = static_cast<uint32_t>(c.pix_pages);
-            const uint32_t old_phys = reinterpret_cast<uint32_t>(old);
+            const uint32_t old_phys = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(old));
             const int bytes = depth / 8;
             const uint32_t fresh = alloc_canvas_frames(need);
             if (!fresh)
@@ -949,7 +949,7 @@ void task_exit()
     /* One-way trip back to the GUI — this task's stack is abandoned
      * for good, matching how the classic process path abandons a
      * finished process's stack too. */
-    uint32_t dummy;
+    uintptr_t dummy;
     vnu::arch::switch_stack_pd(&dummy, t.gui_saved_esp, g_base_pgdir);
     for (;;) {
     } /* unreachable: defensive only, switch_stack_pd never returns here */
