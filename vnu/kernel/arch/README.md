@@ -99,7 +99,12 @@ keyboard and mouse, ATA, PCI, Bochs VBE/VGA, AC'97, e1000, virtio-gpu,
    `arch/${VNU_KERNEL_ARCH}/`, so a new port is mostly a matter of
    pointing that at the new directory and giving it its own toolchain
    flags next to `VNU_ARCH_FLAG`. Set `VNU_KERNEL_ARCH` (a CMake cache
-   variable) to the directory name.
+   variable) to the directory name. The top-level `Makefile` derives its
+   port list from these directories, so there is nothing else to
+   register: `make iso ARCH=<arch>` builds `vnu/vnu-<arch>.iso` and
+   `make run ARCH=<arch>` (or `make run RUN_ARGS=<arch>`) boots it on
+   `qemu-system-<arch>`. i386 keeps the historic `vnu/vnu.iso`; every
+   other port gets its own image and `vnu/kernel/build-<arch>` tree.
 6. Bump `VNU_ARCH` in `include/vnu/version.h` so `uname` reports the new
    machine. `VNU_ARCH` defaults to the host's `VNU_KERNEL_ARCH` and can
    be overridden per build.

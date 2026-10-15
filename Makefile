@@ -18,13 +18,43 @@ SHELL := /bin/bash
 
 VNU        := vnu
 KERNEL_DIR := $(VNU)/kernel
-BUILD_DIR  := $(KERNEL_DIR)/build
-ISO        := $(VNU)/vnu.iso
 VHD        := $(VNU)/vnu.vhd
 VHD_SIZE   ?= 64
 JOBS       ?= $(shell nproc 2>/dev/null || echo 1)
 RUN_ARGS   ?=
 TEST_ARGS  ?=
+
+# Architectures are the directories under vnu/kernel/arch/, so this list
+# grows by itself when a new port lands. Pick one with `ARCH=<name>`
+# (make iso ARCH=x86_64) or as a bare word in RUN_ARGS (make run
+# RUN_ARGS=x86_64); i386 is the default.
+ARCHES      := $(sort $(notdir $(patsubst %/,%,$(wildcard $(KERNEL_DIR)/arch/*/))))
+ARCH_FROM_RUN := $(firstword $(filter $(ARCHES),$(RUN_ARGS)))
+ARCH        ?= $(if $(ARCH_FROM_RUN),$(ARCH_FROM_RUN),i386)
+ifeq ($(filter $(ARCH),$(ARCHES)),)
+$(error unknown ARCH '$(ARCH)' -- available: $(ARCHES))
+endif
+
+# i386 keeps the historic names (the README, the test suite and
+# `vnu install` all say vnu/kernel/build and vnu/vnu.iso); every other
+# port gets its own build tree and image so two architectures can sit
+# side by side without clobbering each other.
+ifeq ($(ARCH),i386)
+BUILD_DIR := $(KERNEL_DIR)/build
+ISO       := $(VNU)/vnu.iso
+else
+BUILD_DIR := $(KERNEL_DIR)/build-$(ARCH)
+ISO       := $(VNU)/vnu-$(ARCH).iso
+endif
+
+# The guest test suite boots the default image with qemu-system-i386, so
+# it stays on the i386 ISO whatever ARCH says.
+TEST_ISO := $(VNU)/vnu.iso
+
+# RUN_VARS is RUN_ARGS with the architecture words removed: ARCH already
+# carries that choice, and the rest (vhd, virtio-gpu, VHD=..., SIZE=...)
+# goes through to run.sh untouched.
+RUN_VARS := $(filter-out $(ARCHES),$(RUN_ARGS))
 
 # embedded_*.h are generated headers holding the userspace blobs the
 # kernel links against; the kernel cannot be built without them.
@@ -37,6 +67,7 @@ EMBEDDED := $(wildcard $(KERNEL_DIR)/proc/embedded_*.h)
 ISO_SOURCES := $(shell find $(KERNEL_DIR) $(VNU)/userspace $(VNU)/initrd \
                       vlibc tools thams \
                       -type f -not -path '$(KERNEL_DIR)/build/*' \
+                      -not -path '$(KERNEL_DIR)/build-*/*' \
                       -not -name 'embedded_*.h' -not -name '.off' 2>/dev/null)
 
 .PHONY: help all iso kernel userspace vhd \
@@ -53,9 +84,11 @@ help: ## list every target (this is the default goal)
 	@awk 'BEGIN{FS=":.*?## "} \
 	    /^## @/ {sub(/^## @/, "", $$0); printf "\n%s\n", $$0; next} \
 	    /^[a-z][a-z-]*:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@printf '\nVariables: VHD_SIZE=%s (MiB)  JOBS=%s  RUN_ARGS=  TEST_ARGS=\n' '$(VHD_SIZE)' '$(JOBS)'
+	@printf '\nVariables: ARCH=%s (%s)  VHD_SIZE=%s (MiB)  JOBS=%s  RUN_ARGS=  TEST_ARGS=\n' '$(ARCH)' '$(ARCHES)' '$(VHD_SIZE)' '$(JOBS)'
 	@printf 'Examples:\n'
 	@printf '  make iso                      build userspace + kernel + ISO\n'
+	@printf '  make iso ARCH=x86_64          build another port -> vnu/vnu-x86_64.iso\n'
+	@printf '  make run RUN_ARGS=x86_64      boot that port (ARCH= works too)\n'
 	@printf '  make iso run-headless         build, then boot (serial console)\n'
 	@printf '  make run RUN_ARGS=virtio-gpu  QEMU window on a virtio-gpu display\n'
 	@n=$$(./tools/qemu_test.py --list 2>/dev/null | wc -l); \
@@ -69,19 +102,19 @@ help: ## list every target (this is the default goal)
 
 all: iso ## same as iso (reads better in a script)
 
-iso: $(ISO) ## build userspace, the kernel and vnu/vnu.iso (if a source changed)
+iso: $(ISO) ## build userspace, the kernel and the ISO (if a source changed)
 
 # The ISO is a file target, so everything that boots or tests it gets the
 # image the sources actually describe. Without it a target depending on
 # the mere existence of an old vnu/vnu.iso would test yesterday's kernel.
 $(ISO): $(ISO_SOURCES)
-	@./vnu/build_iso.sh
+	@./vnu/build_iso.sh ARCH=$(ARCH)
 
 userspace: ## build the userspace binaries and embedded_*.h
 	@./tools/build_userspace.sh
 
 kernel: $(if $(EMBEDDED),,userspace) ## build only the kernel (cmake, no ISO)
-	@cmake -S $(KERNEL_DIR) -B $(BUILD_DIR)
+	@cmake -S $(KERNEL_DIR) -B $(BUILD_DIR) -DVNU_KERNEL_ARCH=$(ARCH)
 	@cmake --build $(BUILD_DIR) -j$(JOBS)
 
 ## @third-party modules (thams/)
@@ -128,28 +161,28 @@ thamon: ## build the modules into the image again
 ## @running in QEMU
 
 run: $(ISO) ## boot the ISO in a QEMU window (rebuilt first if a source changed)
-	@./vnu/run.sh $(RUN_ARGS)
+	@./vnu/run.sh $(ARCH) $(RUN_VARS)
 
 run-headless: $(ISO) ## boot without graphics, serial console in this terminal
-	@./vnu/run.sh --headless $(RUN_ARGS)
+	@./vnu/run.sh $(ARCH) --headless $(RUN_VARS)
 
 run-gpu: $(ISO) ## boot in a window with the desktop on virtio-gpu
-	@./vnu/run.sh virtio-gpu $(RUN_ARGS)
+	@./vnu/run.sh $(ARCH) virtio-gpu $(RUN_VARS)
 
 run-headless-gpu: $(ISO) ## boot headless, but still on a virtio-gpu display
-	@./vnu/run.sh virtio-gpu --headless $(RUN_ARGS)
+	@./vnu/run.sh $(ARCH) virtio-gpu --headless $(RUN_VARS)
 
 run-vhd: vhd $(ISO) ## boot in a window with the test disk vnu/vnu.vhd attached
-	@./vnu/run.sh vhd $(RUN_ARGS)
+	@./vnu/run.sh $(ARCH) vhd $(RUN_VARS)
 
 run-headless-vhd: vhd $(ISO) ## the same, with the serial console in this terminal
-	@./vnu/run.sh vhd --headless $(RUN_ARGS)
+	@./vnu/run.sh $(ARCH) vhd --headless $(RUN_VARS)
 
 run-installed: ## boot the installed disk alone, no ISO (see `vnu install`)
-	@./vnu/run.sh installed $(RUN_ARGS)
+	@./vnu/run.sh $(ARCH) installed $(RUN_VARS)
 
 run-headless-installed: ## the same, with the serial console in this terminal
-	@./vnu/run.sh installed --headless $(RUN_ARGS)
+	@./vnu/run.sh $(ARCH) installed --headless $(RUN_VARS)
 
 vhd: ## create the test disk vnu/vnu.vhd (VHD_SIZE=size in MiB)
 	@if [ -f $(VHD) ]; then \
@@ -161,13 +194,13 @@ vhd: ## create the test disk vnu/vnu.vhd (VHD_SIZE=size in MiB)
 
 ## @tests
 
-test: $(ISO) ## automated guest tests in QEMU (ISO boot)
+test: $(TEST_ISO) ## automated guest tests in QEMU (ISO boot)
 	@python3 tools/qemu_test.py $(TEST_ARGS)
 
-test-gpu: $(ISO) ## the same suite on a virtio-gpu display
+test-gpu: $(TEST_ISO) ## the same suite on a virtio-gpu display
 	@python3 tools/qemu_test.py --gpu $(TEST_ARGS)
 
-test-install: $(ISO) ## install to a disk, boot that disk
+test-install: $(TEST_ISO) ## install to a disk, boot that disk
 	@python3 tools/qemu_test.py --install-only $(TEST_ARGS)
 
 test-fat16: ## host-side test for the FAT16 library (no QEMU)
@@ -176,7 +209,7 @@ test-fat16: ## host-side test for the FAT16 library (no QEMU)
 	    $(KERNEL_DIR)/fs/fat16.cpp tools/fat16_test.cpp -o $(BUILD_DIR)/fat16_test
 	@$(BUILD_DIR)/fat16_test
 
-test-all: $(ISO) ## everything: ISO suite + virtio-gpu + install
+test-all: $(TEST_ISO) ## everything: ISO suite + virtio-gpu + install
 	@python3 tools/qemu_test.py $(TEST_ARGS)
 	@python3 tools/qemu_test.py --gpu $(TEST_ARGS)
 	@python3 tools/qemu_test.py --install-only $(TEST_ARGS)
@@ -207,6 +240,14 @@ doctor: ## check that the host has everything the build and the tests need
 	else \
 	    printf '  note    no grub-mkrescue — the ISO is built the portable way (xorriso + grub-seed)\n'; \
 	fi; \
+	for a in $(filter-out i386,$(ARCHES)); do \
+	    q="qemu-system-$$a"; \
+	    if command -v $$q >/dev/null 2>&1; then \
+	        printf '  ok      %s (the %s port)\n' "$$q" "$$a"; \
+	    else \
+	        printf '  note    no %s — the %s port will not run here\n' "$$q" "$$a"; \
+	    fi; \
+	done; \
 	if [ $$missing -ne 0 ]; then printf '\nsome tools are missing, see README -> Build and run\n'; exit 1; fi; \
 	$(MAKE) --no-print-directory mirrors; \
 	printf '\neverything is in place\n'
@@ -247,15 +288,15 @@ mirrors: ## check that the headers kept in two places are still identical
 ## @cleaning
 
 clean: ## drop the build directories and stray .o files (keeps the ISO and the disk)
-	@rm -rf $(BUILD_DIR) $(VNU)/iso
-	@find . -name '*.o' -not -path './$(BUILD_DIR)/*' -not -path './sysroot/*' -print -delete | sed 's/^/  removed /'
+	@rm -rf $(KERNEL_DIR)/build $(KERNEL_DIR)/build-* $(VNU)/iso
+	@find . -name '*.o' -not -path './$(KERNEL_DIR)/build/*' -not -path './$(KERNEL_DIR)/build-*/*' -not -path './sysroot/*' -print -delete | sed 's/^/  removed /'
 	@echo "  removed build/ and iso/"
 
 clean-vhd: ## delete the test disk vnu/vnu.vhd
 	@rm -f $(VHD) && echo "  removed $(VHD)"
 
 distclean: clean ## drop everything that can be regenerated: ISO, sysroot, embedded_*.h, disk
-	@rm -f $(ISO) $(KERNEL_DIR)/proc/embedded_*.h
+	@rm -f $(VNU)/vnu.iso $(VNU)/vnu-*.iso $(KERNEL_DIR)/proc/embedded_*.h
 	@rm -rf sysroot $(VNU)/.tmp_grub
 	@echo "  removed the ISO, sysroot/, embedded_*.h, vnu.vhd"
 	@echo "  grub-seed is kept: on a host without grub-mkrescue it is taken from an already built ISO"

@@ -2,8 +2,9 @@
 # ./vnu/build_iso.sh must be ignored, not committed. If a build step starts
 # producing a new artifact, add it here (see AGENTS.md).
 
-# Kernel CMake build tree
+# Kernel CMake build tree — i386 keeps build/, every other port build-<arch>/
 vnu/kernel/build/
+vnu/kernel/build-*/
 
 # Staged ISO payload and final image (the whole staging dir is generated)
 vnu/iso/

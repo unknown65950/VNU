@@ -26,7 +26,15 @@ if [ -z "${BASH_VERSION:-}" ]; then exec env bash "$0" "$@"; fi
 #   ./vnu/run.sh virtio-gpu           — desktop through virtio-gpu
 #   ./vnu/run.sh virtio-gpu --headless — the same, serial in this terminal
 #
+# An architecture name selects the port to boot. The names are the
+# directories under kernel/arch/, so a new port needs no change here; the
+# choice also sets the QEMU machine (qemu-system-<arch>) and the image
+# (vnu/vnu.iso for i386, vnu/vnu-<arch>.iso otherwise):
+#   ./vnu/run.sh x86_64               — boot the 64-bit port
+#   ./vnu/run.sh x86_64 --headless    — the same, serial in this terminal
+#
 # Optionally:
+#   <arch>          — architecture to boot (i386 by default; also ARCH=<arch>)
 #   VHD=<path>      — your own disk image path (e.g. VHD=/sdcard/sda.vhd)
 #   SIZE=<MiB>      — size of the disk image created (64 by default)
 #   --help          — this help
@@ -43,6 +51,7 @@ USE_INSTALLED=0
 VIRTIO_GPU=0
 VHD_PATH="vnu.vhd"
 SIZE_MIB=64
+ARCH="${ARCH:-i386}"
 
 for arg in "$@"; do
     case "$arg" in
@@ -50,17 +59,43 @@ for arg in "$@"; do
         vhd)          USE_VHD=1 ;;
         installed)    USE_INSTALLED=1; USE_VHD=1 ;;
         virtio-gpu)   VIRTIO_GPU=1 ;;
-        --help|-h)    sed -n '5,30p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --help|-h)    sed -n '5,/^[^#]/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
         VHD=*)        VHD_PATH="${arg#VHD=}" ; USE_VHD=1 ;;
         SIZE=*)       SIZE_MIB="${arg#SIZE=}" ;;
-        *) echo "run.sh: unknown argument '$arg' (see --help)" >&2; exit 2 ;;
+        ARCH=*)       ARCH="${arg#ARCH=}" ;;
+        *)
+            # A bare word naming a directory under kernel/arch/ is a port.
+            if [ -d "kernel/arch/$arg" ]; then
+                ARCH="$arg"
+            else
+                echo "run.sh: unknown argument '$arg' (see --help)" >&2; exit 2
+            fi ;;
     esac
 done
 
+# The port decides both the image and the QEMU machine: i386 keeps the
+# historic vnu.iso and qemu-system-i386, every other port ships
+# vnu-<arch>.iso and runs on qemu-system-<arch> (the QEMU convention —
+# x86_64 -> qemu-system-x86_64).
+if [ ! -d "kernel/arch/$ARCH" ]; then
+    echo "run.sh: unknown architecture '$ARCH' (see --help)" >&2
+    exit 2
+fi
+if [ "$ARCH" = i386 ]; then
+    ISO_PATH="vnu.iso"
+else
+    ISO_PATH="vnu-$ARCH.iso"
+fi
+QEMU="qemu-system-$ARCH"
+if ! command -v "$QEMU" >/dev/null 2>&1; then
+    echo "run.sh: $QEMU not found (needed to boot the $ARCH port)" >&2
+    exit 1
+fi
+
 # Booting the installed disk needs no ISO, so skip the build in that mode.
-if [[ "$USE_INSTALLED" == 0 && ! -f vnu.iso ]]; then
-    echo "no vnu.iso yet, starting build_iso.sh..."
-    ./build_iso.sh
+if [[ "$USE_INSTALLED" == 0 && ! -f "$ISO_PATH" ]]; then
+    echo "no $ISO_PATH yet, starting build_iso.sh..."
+    ARCH="$ARCH" ./build_iso.sh
 fi
 
 QEMU_DISK_ARGS=()
@@ -129,13 +164,13 @@ QEMU_AUDIO_ARGS=(-device AC97)
 # write to the VHD; the disk itself (c) stays attached and ready to be
 # installed onto. In `installed` mode there is no ISO at all: the disk
 # is the only medium and QEMU boots it as the hard disk (c).
-QEMU_BOOT_ARGS=(-cdrom vnu.iso -boot d)
+QEMU_BOOT_ARGS=(-cdrom "$ISO_PATH" -boot d)
 if [[ "$USE_INSTALLED" == 1 ]]; then
     QEMU_BOOT_ARGS=(-boot c)
 fi
 
 if [[ "$HEADLESS" == 1 ]]; then
-    qemu-system-i386 -m 32 -display none -serial stdio -no-reboot "${QEMU_BOOT_ARGS[@]}" "${QEMU_AUDIO_ARGS[@]}" "${QEMU_GPU_ARGS[@]}" "${QEMU_NET_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
+    "$QEMU" -m 32 -display none -serial stdio -no-reboot "${QEMU_BOOT_ARGS[@]}" "${QEMU_AUDIO_ARGS[@]}" "${QEMU_GPU_ARGS[@]}" "${QEMU_NET_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
 else
-    qemu-system-i386 -serial stdio -no-reboot "${QEMU_BOOT_ARGS[@]}" "${QEMU_AUDIO_ARGS[@]}" "${QEMU_GPU_ARGS[@]}" "${QEMU_NET_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
+    "$QEMU" -serial stdio -no-reboot "${QEMU_BOOT_ARGS[@]}" "${QEMU_AUDIO_ARGS[@]}" "${QEMU_GPU_ARGS[@]}" "${QEMU_NET_ARGS[@]}" "${QEMU_DISK_ARGS[@]}"
 fi

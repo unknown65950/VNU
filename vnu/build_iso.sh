@@ -5,10 +5,36 @@ if [ -z "${BASH_VERSION:-}" ]; then exec env bash "$0" "$@"; fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="$ROOT_DIR/kernel/build"
 SOURCE_DIR="$ROOT_DIR/kernel"
 SEED_DIR="$ROOT_DIR/grub-seed"
 REPO_DIR="$(cd "$ROOT_DIR/.." && pwd)"
+
+# The architecture is the directory under kernel/arch/ to build: given as
+# ARCH=<name> on the command line (or in the environment), i386 by default.
+ARCH="${ARCH:-i386}"
+for _arg in "$@"; do
+    case "$_arg" in ARCH=*) ARCH="${_arg#ARCH=}" ;; esac
+done
+if [[ ! -d "$SOURCE_DIR/arch/$ARCH" ]]; then
+    _ports=""
+    for _d in "$SOURCE_DIR"/arch/*/; do
+        [[ -d "$_d" ]] && _ports+="$(basename "$_d") "
+    done
+    echo "build_iso.sh: unknown architecture '$ARCH'" >&2
+    echo "  available: ${_ports% }" >&2
+    exit 2
+fi
+
+# i386 keeps the historic build tree and image name (the README, the test
+# suite and `vnu install` all say kernel/build and vnu.iso); every other
+# port gets its own pair so two architectures can coexist on one host.
+if [[ "$ARCH" == i386 ]]; then
+    BUILD_DIR="$ROOT_DIR/kernel/build"
+    OUT_ISO="$ROOT_DIR/vnu.iso"
+else
+    BUILD_DIR="$ROOT_DIR/kernel/build-$ARCH"
+    OUT_ISO="$ROOT_DIR/vnu-$ARCH.iso"
+fi
 
 # The kernel embeds every userspace binary via generated
 # vnu/kernel/proc/embedded_*.h (gitignored build artifacts produced by
@@ -32,7 +58,7 @@ if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
     fi
 fi
 
-cmake -S "$SOURCE_DIR" -B "$BUILD_DIR"
+cmake -S "$SOURCE_DIR" -B "$BUILD_DIR" -DVNU_KERNEL_ARCH="$ARCH"
 cmake --build "$BUILD_DIR" -j"$(nproc 2>/dev/null || echo 1)"
 
 # Stage the ISO payload: kernel, grub.cfg and (for the portable path) the
@@ -107,12 +133,12 @@ build_iso_portable() {
         -e efi.img \
         -no-emul-boot \
         -boot-load-size 5760 \
-        -o "$ROOT_DIR/vnu.iso" "$ROOT_DIR/iso"
+        -o "$OUT_ISO" "$ROOT_DIR/iso"
 }
 
 if command -v grub-mkrescue >/dev/null 2>&1; then
-    grub-mkrescue -o "$ROOT_DIR/vnu.iso" "$ROOT_DIR/iso"
+    grub-mkrescue -o "$OUT_ISO" "$ROOT_DIR/iso"
 else
     build_iso_portable
 fi
-echo "done: $ROOT_DIR/vnu.iso"
+echo "done: $OUT_ISO"

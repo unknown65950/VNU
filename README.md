@@ -122,6 +122,15 @@ make test          # automated guest tests in QEMU
 make clean         # drop build dirs and stray objects
 ```
 
+`ARCH` selects the port to build and boot: the directory names under
+`vnu/kernel/arch/` (`i386` by default, `x86_64`, and whatever lands
+next), so the list grows with the tree. It can be given either way —
+`make iso ARCH=x86_64` / `make run ARCH=x86_64`, or as a run argument,
+`make run RUN_ARGS=x86_64`. i386 keeps the historic `vnu/vnu.iso` and
+`vnu/kernel/build`; every other port gets `vnu/vnu-<arch>.iso` and
+`vnu/kernel/build-<arch>`, so two ports can be built and kept side by
+side. Run `make help` to see the current list.
+
 The Makefile is a thin front-end: the build itself still lives in
 `tools/build_userspace.sh` and `vnu/build_iso.sh`, so the plain script
 sequence below keeps working (and is what the Makefile calls).
@@ -141,6 +150,9 @@ cd vnu && ./build_iso.sh      # cmake kernel build + grub-mkrescue -> vnu.iso
 ./run.sh                      # QEMU with a window
 ./run.sh --headless           # QEMU without graphics (output via serial)
 ```
+
+Both scripts take `ARCH=<name>` (`i386` by default): `./build_iso.sh
+ARCH=x86_64` writes `vnu-x86_64.iso`, and `./run.sh x86_64` boots it.
 
 Note: `make run virtio-gpu` would ask make for *two* goals (QEMU would
 start twice), so variants have their own targets: `make run-gpu`,
