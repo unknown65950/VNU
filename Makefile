@@ -298,16 +298,17 @@ mirrors: ## check that the headers kept in two places are still identical
 
 ## @cleaning
 
-clean: ## drop the build directories and stray .o files (keeps the ISO and the disk)
-	@rm -rf $(KERNEL_DIR)/build $(KERNEL_DIR)/build-* $(VNU)/iso
+clean: ## drop the selected port's build tree and stray .o files (keeps the ISOs and the disk)
+	@rm -rf $(BUILD_DIR) $(VNU)/iso
 	@find . -name '*.o' -not -path './$(KERNEL_DIR)/build/*' -not -path './$(KERNEL_DIR)/build-*/*' -not -path './sysroot/*' -print -delete | sed 's/^/  removed /'
-	@echo "  removed build/ and iso/"
+	@echo "  removed $(BUILD_DIR)/ and iso/"
 
 clean-vhd: ## delete the test disk vnu/vnu.vhd
 	@rm -f $(VHD) && echo "  removed $(VHD)"
 
-distclean: clean ## drop everything that can be regenerated: ISO, sysroot, embedded_*.h, disk
+distclean: clean ## drop everything that can be regenerated: all ports, sysroot, embedded_*.h, disk
+	@rm -rf $(KERNEL_DIR)/build $(KERNEL_DIR)/build-*
 	@rm -f $(VNU)/vnu.iso $(VNU)/vnu-*.iso $(KERNEL_DIR)/proc/embedded_*.h
 	@rm -rf sysroot $(VNU)/.tmp_grub
-	@echo "  removed the ISO, sysroot/, embedded_*.h, vnu.vhd"
+	@echo "  removed the ISOs, every build-*, sysroot/, embedded_*.h, vnu.vhd"
 	@echo "  grub-seed is kept: on a host without grub-mkrescue it is taken from an already built ISO"
