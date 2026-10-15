@@ -60,15 +60,26 @@ RUN_VARS := $(filter-out $(ARCHES),$(RUN_ARGS))
 # kernel links against; the kernel cannot be built without them.
 EMBEDDED := $(wildcard $(KERNEL_DIR)/proc/embedded_*.h)
 
-# Everything vnu/vnu.iso is built from. The build artifacts are left out
-# on purpose: they are written into these very trees (embedded_*.h,
-# vnu/kernel/build), so counting them would make the ISO look older than
-# its own sources for ever and rebuild it every time.
+# Everything vnu/vnu.iso is built from. Two kinds of file are left out
+# on purpose. The build artifacts land in these very trees (embedded_*.h,
+# the kernel and vlibc build dirs, __pycache__), so counting them would
+# make the ISO look older than its own sources for ever and rebuild it on
+# every run. The rest is pure documentation (READMEs and other *.md, CI
+# *.yml) and backup/editor debris, none of which any build step reads, so
+# editing a doc does not relink the image. Everything a build consumes
+# stays in -- the embedded pictures/sounds, tham.conf, the man pages
+# (*.1 and the extensionless ones). CMakeLists.txt is a source, not
+# documentation, which is why *.txt is not excluded here.
 ISO_SOURCES := $(shell find $(KERNEL_DIR) $(VNU)/userspace $(VNU)/initrd \
                       vlibc tools thams \
                       -type f -not -path '$(KERNEL_DIR)/build/*' \
                       -not -path '$(KERNEL_DIR)/build-*/*' \
-                      -not -name 'embedded_*.h' -not -name '.off' 2>/dev/null)
+                      -not -path 'vlibc/build/*' \
+                      -not -path '*/__pycache__/*' \
+                      -not -name 'embedded_*.h' -not -name '.off' \
+                      -not -name '*.md' -not -name '*.yml' -not -name '*.yaml' \
+                      -not -name '*.pyc' -not -name '*.bak' -not -name '*.swp' \
+                      2>/dev/null)
 
 .PHONY: help all iso kernel userspace vhd \
         thambuild thamupdate thamon thamoff thamstatus \
