@@ -187,14 +187,15 @@ static void draw(void)
                        CELL - 6, VGFX_LRED);
 
     for (int i = 0; i < len; ++i) {
-        /* The head fills its cell, the body is inset a pixel, so the
-         * snake reads as segments rather than as one long bar. */
+        /* The head fills its cell in the bright green, the body is a
+         * darker green inset a pixel, so the snake reads as segments
+         * rather than as one long bar and the head is never in doubt. */
         if (i == 0)
             vgfx_fill_rect(seg_x[i] * CELL + 1, seg_y[i] * CELL + 1,
                            CELL - 2, CELL - 2, VGFX_LGREEN);
         else
             vgfx_fill_rect(seg_x[i] * CELL + 2, seg_y[i] * CELL + 2,
-                           CELL - 4, CELL - 4, VGFX_DGRAY);
+                           CELL - 4, CELL - 4, VGFX_GREEN);
     }
 
     /* The status line: score and best, the two numbers a player watches. */
