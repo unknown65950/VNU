@@ -220,7 +220,10 @@ not ask for.
   the column count (either may be null). Returns 0. The VGA text plane
   is a fixed 80x25 today, so a full-screen program (the `man` pager) asks
   for the numbers through this call instead of hardcoding them: when the
-  mode changes, only the kernel changes.
+  mode changes, only the kernel changes. A windowed task is answered with
+  its own text window instead - 80x24, not the plane behind it - so a
+  pager launched inside a GUI terminal lays its screen out to the window
+  it was given rather than to the console it is not drawing on.
 - `wallpaper(ebx)` — `ebx` is a pointer to the path of an image to put
   on the desktop. The kernel reads it, decodes it with px.h (BMP or PNG,
   at most 512x384 pixels and 64 KiB — JPEG is out of reach, its IDCT is

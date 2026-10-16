@@ -572,10 +572,21 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
     case VNU_SYS_tty_size:
         /* Text-plane geometry of the console (ebx = uint32* rows,
          * ecx = uint32* cols). Either pointer may be null. Lets a
-         * full-screen program lay itself out without hardcoding 80x25. */
+         * full-screen program lay itself out without hardcoding 80x25.
+         *
+         * A windowed task asks about its own window and not the VGA
+         * plane: the answer is what tells the man pager the status bar
+         * is the 24th row of an 80x24 window, where the plane's 80x25
+         * would put it out of sight. */
         {
             uint16_t rows = 0, cols = 0;
-            vnu::tty::get_size(&rows, &cols);
+            vnu::wintask::Console* con = vnu::wintask::console_of_current();
+            if (con) {
+                rows = static_cast<uint16_t>(con->term.rows);
+                cols = static_cast<uint16_t>(con->term.cols);
+            }
+            if (!rows || !cols)
+                vnu::tty::get_size(&rows, &cols);
             auto* rp = reinterpret_cast<std::uint32_t*>(tf->ebx);
             auto* cp = reinterpret_cast<std::uint32_t*>(tf->ecx);
             if (rp)

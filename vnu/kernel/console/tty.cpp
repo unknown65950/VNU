@@ -1,178 +1,41 @@
 #include <vnu/tty.h>
+#include <vnu/ansiterm.h>
 #include <vnu/arch/io.h>
 
 namespace {
 
 constexpr uint16_t W = 80, H = 25;
 volatile uint16_t* const vga = reinterpret_cast<volatile uint16_t*>(0xB8000);
-uint16_t row = 0, col = 0;
-uint8_t attr = 0x07; /* VNU default: white on black */
-bool cursor_dirty = false;
 
-/* Which text rows have a cell written in them that whoever draws the
- * console as pixels has not put on the screen yet. A display with a
- * text mode of its own never asks (the characters are in the plane and
- * the hardware shows them); a display without one does, on every
- * scheduler pass - see vgfx::console_tick(). Not the same flag as
- * cursor_dirty, which is about the CRTC and means nothing at all on
- * such a display.
+/* The console is the VGA text plane plus the parser every console shares
+ * (see <vnu/ansiterm.h>): the plane is the cell grid, so a character the
+ * terminal puts down is a character on the screen. The installer draws
+ * its own blue setup screens, so the escape subset has to be here.
  *
- * One bit per row: which of the 25 text rows has a cell written in it
- * that whoever draws the console as pixels has not put on the screen
- * yet (see console_dirty_rows()/console_presented()). A row mask and
- * not a single "something changed" bit, because drawing the console is
- * per-row work: a keystroke that moves the cursor changes one row, and
- * a redraw that had to redo all 400 lines of it to show that would cost
- * more than the whole shell session it interrupted. */
-uint32_t rows_dirty = 0;
+ * What is really this console's own is scrolling: a line off the top
+ * shifts the plane and blanks the last row (a window's console parks the
+ * row in its scrollback instead). */
+void vga_scroll(vnu::ansi::Term* t);
 
-constexpr uint32_t ALL_ROWS = (uint32_t{1} << H) - 1;
+/* Statically initialised, not set up in init(): the kernel prints a line
+ * or two (a host name from an installed disk) before tty::init() runs,
+ * and that output has to reach the plane too. */
+vnu::ansi::Term g_term = {
+    vga, H, W, 0, 0, 0x07, /* cells, rows, cols, row, col, attr */
+    7, 0, false, false,    /* fg, bg, bright, blink */
+    false, false,          /* esc, csi */
+    {0, 0, 0, 0, 0, 0, 0, 0}, 0, 0, /* params, nparams, cur */
+    true, vga_scroll,      /* bs_erase (this console erases), on_scroll */
+    nullptr, 0, true       /* user, dirty, cursor_moved */
+};
 
-inline void row_dirty(uint32_t r)
-{
-    if (r < H)
-        rows_dirty |= uint32_t{1} << r;
-}
-
-/* --- ANSI CSI state ---
- * The installer draws its own blue setup screens, so the console must
- * understand a small ANSI subset: SGR colors/bold/blink, cursor
- * positioning (H), clear screen (2J) and erase-line (2K/0K). Anything
- * else is ignored so random binary in device output can't wedge the
- * terminal. */
-bool esc_pending = false;
-bool in_csi = false;
-uint8_t csi_params[8];
-int csi_count = 0;
-int csi_cur = 0;
-
-uint8_t sgr_fg = 7; /* VNU default: white on black */
-uint8_t sgr_bg = 0;
-bool sgr_bright = false;
-bool sgr_blink = false;
-
-/* ANSI color numbers (30-37) don't line up with the PC text palette
- * (0 black,1 blue,2 green,3 cyan,4 red,5 magenta,6 brown,7 white), so
- * translate: YELLOW->brown, BLUE->blue, RED->red, CYAN->cyan. */
-uint8_t ansi_to_pc(uint8_t an)
-{
-    static const uint8_t t[8] = {0, 4, 2, 6, 1, 5, 3, 7};
-    return t[an & 7];
-}
-
-void csi_apply_sgr(const uint8_t* p, int n)
-{
-    for (int i = 0; i < n; ++i) {
-        switch (p[i]) {
-        case 0:
-            sgr_fg = 7;
-            sgr_bg = 0;
-            sgr_bright = false;
-            sgr_blink = false;
-            break;
-        case 1:
-            sgr_bright = true;
-            break;
-        case 5:
-            sgr_blink = true;
-            break;
-        case 7:
-            /* reverse video swaps foreground/background */
-            {
-                uint8_t t = sgr_fg;
-                sgr_fg = sgr_bg;
-                sgr_bg = t;
-            }
-            break;
-        case 30 ... 37:
-            sgr_bright = false;
-            sgr_fg = ansi_to_pc(static_cast<uint8_t>(p[i] - 30));
-            break;
-        case 39:
-            sgr_fg = 7;
-            sgr_bright = false;
-            break;
-        case 40 ... 47:
-            sgr_bg = ansi_to_pc(static_cast<uint8_t>(p[i] - 40));
-            break;
-        case 49:
-            sgr_bg = 0;
-            break;
-        case 90 ... 97:
-            sgr_bright = true;
-            sgr_fg = ansi_to_pc(static_cast<uint8_t>(p[i] - 90));
-            break;
-        default:
-            break;
-        }
-    }
-    attr = static_cast<uint8_t>((sgr_fg + (sgr_bright ? 8 : 0)) |
-                                (sgr_bg << 4) | (sgr_blink ? 0x80 : 0));
-}
-
-void erase_to_line_end()
-{
-    uint16_t start = col;
-    for (; col < W; ++col)
-        vga[row * W + col] = static_cast<uint16_t>(' ') |
-                             (static_cast<uint16_t>(attr) << 8);
-    col = start;
-    cursor_dirty = true;
-    row_dirty(row);
-}
-
-void csi_finish(uint8_t final)
-{
-    if (csi_count < 8)
-        csi_params[csi_count++] = static_cast<uint8_t>(csi_cur);
-    csi_cur = 0;
-    in_csi = false;
-    switch (final) {
-    case 'm':
-        csi_apply_sgr(csi_params, csi_count);
-        break;
-    case 'H':
-        /* CUP: default "1;1" homes; explicit row;col positions (1-based). */
-        row = static_cast<uint16_t>(csi_params[0] ? csi_params[0] - 1 : 0);
-        col = csi_count >= 2 ? static_cast<uint16_t>(csi_params[1] ? csi_params[1] - 1 : 0)
-                             : 0;
-        row = row < H ? row : static_cast<uint16_t>(H - 1);
-        col = col < W ? col : static_cast<uint16_t>(W - 1);
-        break;
-    case 'J':
-        if (csi_count == 0 || csi_params[0] == 2 || csi_params[0] == 3) {
-const uint32_t cell = 0x20u | (static_cast<uint32_t>(attr) << 8);
-            const uint32_t blank = cell | (cell << 16);
-            auto* p = reinterpret_cast<volatile uint32_t*>(vga);
-            for (size_t i = 0; i < (static_cast<size_t>(W * H) / 2); ++i)
-                p[i] = blank;
-            row = col = 0;
-        } else if (csi_params[0] == 1) {
-            for (uint16_t r = 0; r <= row; ++r)
-                for (uint16_t c = 0; c < W; ++c)
-                    vga[r * W + c] = static_cast<uint16_t>(' ') |
-                                     (static_cast<uint16_t>(attr) << 8);
-        } else {
-            erase_to_line_end();
-            for (uint16_t r = row + 1; r < H; ++r)
-                for (uint16_t c = 0; c < W; ++c)
-                    vga[r * W + c] = static_cast<uint16_t>(' ') |
-                                     (static_cast<uint16_t>(attr) << 8);
-        }
-        cursor_dirty = true;
-        rows_dirty = ALL_ROWS;
-        break;
-    case 'K':
-        erase_to_line_end();
-        break;
-    default:
-        break; /* unsupported CSI: consumed and dropped */
-    }
-}
+/* The hardware cursor is not the terminal's: it is a CRTC register that
+ * only moves when the flush decides the screen is at rest. */
+bool cursor_dirty = false;
 
 void hw_cursor_now()
 {
-    uint16_t pos = static_cast<uint16_t>(row * W + col);
+    uint16_t pos = static_cast<uint16_t>(g_term.row * W + g_term.col);
     vnu::arch::io_out8(0x3D4, 0x0F);
     vnu::arch::io_out8(0x3D5, static_cast<uint8_t>(pos & 0xFF));
     vnu::arch::io_out8(0x3D4, 0x0E);
@@ -180,8 +43,10 @@ void hw_cursor_now()
     cursor_dirty = false;
 }
 
-/* Fast scroll: copy row blocks as 32-bit words instead of cell-by-cell nested loops. */
-void scroll_up()
+/* Fast scroll: copy row blocks as 32-bit words instead of a cell-by-cell
+ * nested loop. The cursor is the terminal's to move (see term_scroll_up),
+ * so this only shifts the plane and blanks the last row. */
+void vga_scroll(vnu::ansi::Term* t)
 {
     auto* dst = reinterpret_cast<volatile uint32_t*>(vga);
     auto* src = reinterpret_cast<volatile uint32_t*>(vga + W);
@@ -190,13 +55,12 @@ void scroll_up()
     for (size_t i = 0; i < dwords; ++i)
         dst[i] = src[i];
     auto* last = reinterpret_cast<volatile uint32_t*>(vga + (H - 1) * W);
-    const uint32_t cell = 0x20u | (static_cast<uint32_t>(attr) << 8);
+    const uint32_t cell = 0x20u | (static_cast<uint32_t>(t->attr) << 8);
     const uint32_t blank = cell | (cell << 16);
     for (size_t i = 0; i < W / 2; ++i)
         last[i] = blank;
-    if (row > 0)
-        --row;
-    rows_dirty = ALL_ROWS;
+    /* Every row moved, so every row is new as pixels. */
+    t->dirty = vnu::ansi::term_all_rows(*t);
 }
 
 } // namespace
@@ -205,22 +69,15 @@ namespace vnu::tty {
 
 void init()
 {
-    attr = 0x07;
-    row = col = 0;
+    vnu::ansi::term_init(g_term, vga, H, W, /*bs_erase=*/true, vga_scroll);
+    g_term.dirty = vnu::ansi::term_all_rows(g_term);
     cursor_dirty = true;
-    rows_dirty = ALL_ROWS;
     flush_cursor();
 }
 
 void clear()
 {
-    const uint32_t cell = 0x20u | (static_cast<uint32_t>(attr) << 8);
-    const uint32_t blank = cell | (cell << 16);
-    auto* p = reinterpret_cast<volatile uint32_t*>(vga);
-    for (size_t i = 0; i < (static_cast<size_t>(W * H) / 2); ++i)
-        p[i] = blank;
-    row = col = 0;
-    rows_dirty = ALL_ROWS;
+    vnu::ansi::term_clear(g_term);
     hw_cursor_now();
 }
 
@@ -232,93 +89,20 @@ void flush_cursor()
 
 void putc(char c)
 {
-    if (esc_pending) {
-        esc_pending = false;
-        if (c == '[') {
-            in_csi = true;
-            csi_count = 0;
-            csi_cur = 0;
-        }
+    vnu::ansi::term_putc(g_term, c);
+    if (g_term.cursor_moved) {
         cursor_dirty = true;
-        return;
+        g_term.cursor_moved = false;
     }
-    if (in_csi) {
-        if (c >= '0' && c <= '9') {
-            csi_cur = csi_cur * 10 + (c - '0');
-            if (csi_cur > 255)
-                csi_cur = 255;
-        } else if (c == ';') {
-            if (csi_count < 8)
-                csi_params[csi_count++] = static_cast<uint8_t>(csi_cur);
-            csi_cur = 0;
-        } else if (c == 0x1B) {
-            /* nested ESC: restart */
-            esc_pending = true;
-            in_csi = false;
-        } else if (c >= 0x40 && c <= 0x7E) {
-            csi_finish(static_cast<uint8_t>(c));
-        } else {
-            /* unknown control sequence: consume it and drop */
-            in_csi = false;
-        }
-        cursor_dirty = true;
-        return;
-    }
-    if (c == 0x1B) {
-        esc_pending = true;
-        cursor_dirty = true;
-        return;
-    }
-    if (c == '\n') {
-        col = 0;
-        if (++row >= H) {
-            scroll_up();
-            row = H - 1;
-        }
-        cursor_dirty = true;
-        return;
-    }
-    if (c == '\r') {
-        col = 0;
-        cursor_dirty = true;
-        return;
-    }
-    if (c == '\b') {
-        if (col > 0) {
-            --col;
-            vga[row * W + col] = static_cast<uint16_t>(' ') | (static_cast<uint16_t>(attr) << 8);
-            row_dirty(row);
-        } else if (row > 0) {
-            --row;
-            col = W - 1;
-            vga[row * W + col] = static_cast<uint16_t>(' ') | (static_cast<uint16_t>(attr) << 8);
-        }
-        cursor_dirty = true;
-        return;
-    }
-    if (c == '\t') {
-        uint16_t n = static_cast<uint16_t>(4 - (col % 4));
-        while (n--)
-            putc(' ');
-        return;
-    }
-    vga[row * W + col] = static_cast<uint16_t>(static_cast<uint8_t>(c)) |
-                          (static_cast<uint16_t>(attr) << 8);
-    row_dirty(row);
-    if (++col >= W) {
-        col = 0;
-        if (++row >= H) {
-            scroll_up();
-            row = H - 1;
-        }
-    }
-    cursor_dirty = true;
 }
 
 void write(const char* s, size_t n)
 {
-    for (size_t i = 0; i < n; ++i)
-        putc(s[i]);
+    vnu::ansi::term_write(g_term, s, n);
+    if (g_term.cursor_moved) {
+        cursor_dirty = true;
+        g_term.cursor_moved = false;
+    }
     flush_cursor(); /* one CRTC update per write(2) batch */
 }
 
@@ -333,18 +117,18 @@ void write_cstr(const char* s)
 
 void set_cursor(uint16_t r, uint16_t c)
 {
-    row = r < H ? r : static_cast<uint16_t>(H - 1);
-    col = c < W ? c : static_cast<uint16_t>(W - 1);
+    vnu::ansi::term_set_cursor(g_term, r, c);
     cursor_dirty = true;
+    g_term.cursor_moved = false;
     flush_cursor();
 }
 
 void get_cursor(uint16_t* r, uint16_t* c)
 {
     if (r)
-        *r = row;
+        *r = static_cast<uint16_t>(g_term.row);
     if (c)
-        *c = col;
+        *c = static_cast<uint16_t>(g_term.col);
 }
 
 void get_size(uint16_t* r, uint16_t* c)
@@ -374,13 +158,14 @@ uint16_t cell(uint16_t row, uint16_t col)
      * the live cells cannot be read: 0xB8000 is not the text plane
      * then, it is inside the card's aperture, which a mode with a
      * linear framebuffer has pointed at that framebuffer instead. */
-    return g_screen_saved ? g_saved_screen[row * W + col] : vga[row * W + col];
+    return g_screen_saved ? g_saved_screen[row * W + col]
+                          : g_term.cells[row * W + col];
 }
 
 void save_screen()
 {
     for (size_t i = 0; i < W * H; ++i)
-        g_saved_screen[i] = vga[i];
+        g_saved_screen[i] = g_term.cells[i];
     g_screen_saved = true;
 }
 
@@ -389,27 +174,27 @@ void restore_screen()
     if (!g_screen_saved)
         return;
     for (size_t i = 0; i < W * H; ++i)
-        vga[i] = g_saved_screen[i];
+        g_term.cells[i] = g_saved_screen[i];
     g_screen_saved = false;   /* the live cells are the console's again */
     cursor_dirty = true;
-    rows_dirty = ALL_ROWS;
+    g_term.dirty = vnu::ansi::term_all_rows(g_term);
     flush_cursor();
 }
 
 /* The two ends of vgfx::console_tick()'s question. The rows are set
- * wherever a cell is written (see the mask's own comment), and cleared
+ * wherever a cell is written (the terminal's dirty mask), and cleared
  * row by row by whoever has just drawn them as pixels - the only caller
  * of that is present_text(), which clears what it drew and no more, so
  * a row written while a redraw was in flight is redrawn next time
  * instead of being lost with the row that was clean. */
 uint32_t console_dirty_rows()
 {
-    return rows_dirty;
+    return g_term.dirty;
 }
 
 void console_presented(uint32_t rows)
 {
-    rows_dirty &= ~rows;
+    g_term.dirty &= ~rows;
 }
 
 } // namespace vnu::tty

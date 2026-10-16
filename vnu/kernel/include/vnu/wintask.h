@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <vnu/abi.h>
+#include <vnu/ansiterm.h>
 
 // Lets MULTIPLE launched apps run *inside VibeGraphics windows*,
 // concurrently with the GUI's own event loop and with each other.
@@ -95,17 +96,21 @@ constexpr char MOUSE_ESC = 0x1B;
 constexpr int MOUSE_MSG_LEN = 8;
 
 struct Console {
-    /* Text-mode screen: `cell` holds the visible CON_ROWS screen. When a
-     * row scrolls off the top it is parked in the `hist` ring (a simple
-     * scrollback), and `scroll_off` is how many rows above the bottom the
-     * GUI is currently showing (0 = live bottom). */
-    char cell[CON_ROWS][CON_COLS];
-    char hist[SCROLL_ROWS][CON_COLS];
+    /* Text-mode screen: `cell` holds the visible CON_ROWS screen, one
+     * VGA-format word per cell (the character in the low byte and the
+     * colour above it), because that is what a full-screen program draws
+     * with (see <vnu/ansiterm.h>). When a row scrolls off the top it is
+     * parked in the `hist` ring (a simple scrollback), and `scroll_off`
+     * is how many rows above the bottom the GUI is currently showing
+     * (0 = live bottom). */
+    uint16_t cell[CON_ROWS][CON_COLS];
+    uint16_t hist[SCROLL_ROWS][CON_COLS];
     int hist_tail;  /* next free slot in `hist` */
     int hist_n;     /* how many history rows are valid */
     int scroll_off; /* 0 = bottom (live); > 0 = scrolled up */
-    int cur_col;
-    int cur_row;
+    /* The cursor, the escape parser and the colours this console draws
+     * with. Its `cells` point at `cell`, set up in spawn_common(). */
+    ansi::Term term;
     char input[INPUT_QUEUE_CAP];
     int in_head;
     int in_tail;

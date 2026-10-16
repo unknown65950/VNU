@@ -244,7 +244,7 @@ struct Shown {
     uint64_t canvas;
     int canvas_w, canvas_h;
     char title[vnu::wintask::TITLE_CAP];
-    char cells[CON_ROWS][CON_COLS];
+    uint16_t cells[CON_ROWS][CON_COLS];
 };
 
 /* A digest of a gfx window's canvas: FNV-1a over the pixels the app
@@ -340,8 +340,8 @@ bool same_window(const Shown& s, const Window& w, const vnu::wintask::Console& c
     if (con.gfx)
         return !canvas_changed(s, con, digest);
     if (s.hist_tail != con.hist_tail || s.hist_n != con.hist_n ||
-        s.scroll_off != con.scroll_off || s.cur_row != con.cur_row ||
-        s.cur_col != con.cur_col)
+        s.scroll_off != con.scroll_off || s.cur_row != con.term.row ||
+        s.cur_col != con.term.col)
         return false;
     return memcmp(s.cells, con.cell, sizeof(s.cells)) == 0;
 }
@@ -682,9 +682,9 @@ int fit_rows(const Window& win)
 }
 
 /* Map a "total output row" (0 = oldest history row, hist_n + CON_ROWS -
- * 1 = live bottom) to a source row buffer. Returns nullptr for history
+ * 1 = live bottom) to a source row of cells. Returns nullptr for history
  * rows that fall outside the ring (shouldn't happen given the clamps). */
-const char* output_row(const vnu::wintask::Console& con, int li, int* screen_row)
+const uint16_t* output_row(const vnu::wintask::Console& con, int li, int* screen_row)
 {
     if (li < con.hist_n) {
         int idx = con.hist_tail - con.hist_n + li;
@@ -696,6 +696,23 @@ const char* output_row(const vnu::wintask::Console& con, int li, int* screen_row
     *screen_row = li - con.hist_n;
     return con.cell[*screen_row];
 }
+
+/* ANSI colours are the terminal's, and the terminal was defined on a
+ * display whose palette is the VGA one: 0 is black, 1-6 are the accents,
+ * and 7 is "light grey" - the colour a program gets when it says nothing
+ * at all. The desktop's palette is the theme's instead, so index 7 is one
+ * of its dark surfaces and its light colours are 8 upwards; a cell
+ * carrying 7 would come out as a dark, hard-to-read foreground. These two
+ * tables map the entries that have to move and leave the rest alone:
+ * foreground 7 and background 7 become the theme's text (15), which is
+ * also what a program means when it asks for "white" - the man pager's
+ * status bar is black on "white". The cells keep the raw attribute; only
+ * this renderer maps. */
+const uint8_t FG_MAP[16] = {
+    0, 1, 2, 3, 4, 5, 6, 15,
+    8, 9, 10, 11, 12, 13, 14, 15,
+};
+const uint8_t BG_MAP[8] = {0, 1, 2, 3, 4, 5, 6, 15};
 
 void draw_console_window(const Window& win, const vnu::wintask::Console& con, bool active)
 {
@@ -721,26 +738,39 @@ void draw_console_window(const Window& win, const vnu::wintask::Console& con, bo
 
     int cx = win.x + 2;
     int cy = win.y + TITLE_H + 2;
-    /* Terminal-style client area: white text on black. */
+    /* Terminal-style client area: the default is light grey on black, but
+     * each cell can carry its own colours - what a full-screen program
+     * sets with SGR. Backgrounds go down first, in runs, so a full-width
+     * blue panel is one fill and not one per cell. */
     fill_rect(cx, cy, cols * CELL_W, rows * CELL_H, COLOR_BLACK);
-    (void)rows;
     for (int v = 0; v < rows; ++v) {
         int li = first_li + v;
         int scr = 0;
-        const char* row = output_row(con, li, &scr);
+        const uint16_t* row = output_row(con, li, &scr);
+        for (int c = 0; c < cols;) {
+            uint8_t raw = static_cast<uint8_t>((row[c] >> 12) & 0x07);
+            int start = c;
+            while (c < cols &&
+                   static_cast<uint8_t>((row[c] >> 12) & 0x07) == raw)
+                ++c;
+            if (raw != 0)
+                fill_rect(cx + start * CELL_W, cy + v * CELL_H,
+                          (c - start) * CELL_W, CELL_H, BG_MAP[raw]);
+        }
         for (int c = 0; c < cols; ++c) {
-            char ch = row[c];
+            char ch = static_cast<char>(row[c] & 0xFF);
             if (ch != ' ' && ch != 0)
-                draw_char(cx + c * CELL_W, cy + v * CELL_H, ch, COLOR_WHITE);
+                draw_char(cx + c * CELL_W, cy + v * CELL_H, ch,
+                          FG_MAP[static_cast<uint8_t>(row[c] & 0x0F)]);
         }
     }
 
     /* Cursor (live bottom only). */
     if (con.scroll_off == 0 || con.scroll_off > con.hist_n) {
-        int live_row = con.hist_n + con.cur_row;
-        if (live_row >= first_li && live_row < first_li + rows && con.cur_col < cols) {
+        int live_row = con.hist_n + con.term.row;
+        if (live_row >= first_li && live_row < first_li + rows && con.term.col < cols) {
             int v = live_row - first_li;
-            int ccx = cx + con.cur_col * CELL_W;
+            int ccx = cx + con.term.col * CELL_W;
             int ccy = cy + v * CELL_H + CELL_H - 3;
             hline(ccx, ccy, CELL_W - 1, COLOR_LGRAY);
         }
@@ -2447,8 +2477,8 @@ void run(const char* open_app)
             shown[h].hist_tail = con->hist_tail;
             shown[h].hist_n = con->hist_n;
             shown[h].scroll_off = con->scroll_off;
-            shown[h].cur_row = con->cur_row;
-            shown[h].cur_col = con->cur_col;
+            shown[h].cur_row = con->term.row;
+            shown[h].cur_col = con->term.col;
             memcpy(shown[h].cells, con->cell, sizeof(shown[h].cells));
         }
 

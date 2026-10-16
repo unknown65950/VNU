@@ -257,44 +257,37 @@ void setup_switch_frame(uint32_t pgdir, Task& t)
                                                vnu::arch::wintask_trampoline());
 }
 
+/* A line left the top of the window's screen: park it in the scrollback
+ * ring, shift the screen up and blank the last row. The terminal moves
+ * the cursor itself (see term_scroll_up); this is the one part of
+ * scrolling that is the window's and not the terminal's. */
+void console_scroll(vnu::ansi::Term* t)
+{
+    auto* c = static_cast<Console*>(t->user);
+    int dst = c->hist_tail;
+    for (int cc = 0; cc < CON_COLS; ++cc)
+        c->hist[dst][cc] = c->cell[0][cc];
+    c->hist_tail = (c->hist_tail + 1) % SCROLL_ROWS;
+    if (c->hist_n < SCROLL_ROWS)
+        ++c->hist_n;
+    if (c->scroll_off > 0)
+        ++c->scroll_off;
+    for (int r = 1; r < CON_ROWS; ++r)
+        for (int cc = 0; cc < CON_COLS; ++cc)
+            c->cell[r - 1][cc] = c->cell[r][cc];
+    const uint16_t blank = static_cast<uint16_t>(' ') |
+                           (static_cast<uint16_t>(t->attr) << 8);
+    for (int cc = 0; cc < CON_COLS; ++cc)
+        c->cell[CON_ROWS - 1][cc] = blank;
+}
+
+/* A window's console, drawn with the same parser as the VGA one (see
+ * <vnu/ansiterm.h>), but with an important difference: a backspace does
+ * not erase. The shell repaints a line with "\b \b" and relies on the
+ * cell it walks over being left alone until it writes the blank itself. */
 void console_putc(Console& c, char ch)
 {
-    if (ch == '\n') {
-        c.cur_col = 0;
-        ++c.cur_row;
-    } else if (ch == '\r') {
-        c.cur_col = 0;
-    } else if (ch == '\b') {
-        if (c.cur_col > 0)
-            --c.cur_col;
-    } else {
-        if (c.cur_col >= CON_COLS) {
-            c.cur_col = 0;
-            ++c.cur_row;
-        }
-        c.cell[c.cur_row][c.cur_col] = ch;
-        ++c.cur_col;
-    }
-    int overflow = c.cur_row - (CON_ROWS - 1);
-    if (overflow > 0) {
-        /* Park the overflowed row(s) in the scrollback ring. */
-        for (int k = 0; k < overflow; ++k) {
-            int dst = c.hist_tail;
-            for (int cc = 0; cc < CON_COLS; ++cc)
-                c.hist[dst][cc] = c.cell[0][cc];
-            c.hist_tail = (c.hist_tail + 1) % SCROLL_ROWS;
-            if (c.hist_n < SCROLL_ROWS)
-                ++c.hist_n;
-            if (c.scroll_off > 0)
-                ++c.scroll_off;
-        }
-        for (int r = 1; r < CON_ROWS; ++r)
-            for (int cc = 0; cc < CON_COLS; ++cc)
-                c.cell[r - 1][cc] = c.cell[r][cc];
-        for (int cc = 0; cc < CON_COLS; ++cc)
-            c.cell[CON_ROWS - 1][cc] = ' ';
-        c.cur_row = CON_ROWS - 1;
-    }
+    vnu::ansi::term_putc(c.term, ch);
 }
 
 } // namespace
@@ -362,9 +355,12 @@ TaskHandle spawn_common(const char* argv0_path, const char* arg1, const uint8_t*
 
     Task& t = g_tasks[h];
     t = Task{};
+    vnu::ansi::term_init(t.con.term, &t.con.cell[0][0], CON_ROWS, CON_COLS,
+                         /*bs_erase=*/false, console_scroll);
+    t.con.term.user = &t.con;
     for (auto& row : t.con.cell)
         for (auto& ch : row)
-            ch = ' ';
+            ch = static_cast<uint16_t>(' ') | (0x07u << 8);
     str_copy(t.con.title, title, TITLE_CAP);
     t.pgdir = pgdir;
     t.root_base = root_base;

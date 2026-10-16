@@ -114,7 +114,8 @@ static inline int tnu_clear(char* buf, unsigned long cap)
 /* Console geometry in character cells, through the `tty_size` syscall.
  * Either out-pointer may be null. Returns 0 on success; when the call
  * fails the TNU_ROWS/TNU_COLS defaults are stored instead, so a caller can
- * always lay out a screen. */
+ * always lay out a screen. A program inside a GUI text window hears that
+ * window's own size (80x24), not the VGA plane behind it. */
 int tnu_size(unsigned* rows, unsigned* cols);
 
 #ifdef __cplusplus

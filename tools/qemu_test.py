@@ -1257,6 +1257,142 @@ def run_browser(guest, result, verbose, timeout=60.0):
         os.rmdir(shotdir)
 
 
+def dominant_color(frame, box):
+    """The colour most pixels of `box` hold."""
+    width, height, px = frame
+    x0, y0, x1, y1 = box
+    counts = {}
+    for y in range(max(0, y0), min(height, y1 + 1)):
+        base = y * width * 3
+        for x in range(max(0, x0), min(width, x1 + 1)):
+            c = px[base + x * 3:base + x * 3 + 3]
+            counts[c] = counts.get(c, 0) + 1
+    return max(counts, key=counts.get)
+
+
+def row_dominant_color(frame, y, x0, x1):
+    """The colour most pixels of one row hold."""
+    width = frame[0]
+    px = frame[2]
+    base = y * width * 3
+    counts = {}
+    for x in range(max(0, x0), min(width, x1 + 1)):
+        c = px[base + x * 3:base + x * 3 + 3]
+        counts[c] = counts.get(c, 0) + 1
+    return max(counts, key=counts.get)
+
+
+def run_gui_tui(guest, result, verbose, timeout=60.0):
+    """A full-screen program draws its screen inside a GUI text window.
+
+    The GUI terminal is a console of its own, and it used to understand
+    nothing but newline, carriage return and backspace: a pager's cursor
+    moves, colours and erase-line came out as the escape bytes themselves,
+    so `man` in a window was a page reading `[24;1H` with no page on it.
+    The window is a console of the same kind as the VGA one now, and this
+    is the shape every working pager has: the man status bar, a band
+    across the bottom row of the window painted in a colour of its own.
+    That band cannot exist unless the window parsed the escapes and drew
+    a cell background, so it is exactly the thing that was missing.
+
+    A function rather than a SUITE case, for the reason `man` is one: the
+    pager owns the screen until q, and a windowed program writes nothing
+    to the serial log, so the answer is in pixels - QEMU's screendump.
+    """
+    print("==> gui terminal (screendump)")
+    shotdir = tempfile.mkdtemp(prefix="vnu-gui-tui-")
+    problems = []
+    try:
+        def shot(name):
+            return settled_shot(guest, os.path.join(shotdir, name))
+
+        box = None
+        # A bare desktop to measure the window against.
+        guest._type("gui\n")
+        time.sleep(3.0)
+        bare = shot("bare.ppm")
+        if not frame_is_desktop(bare):
+            problems.append("the desktop did not come up, so there is "
+                            "nothing to open a terminal on")
+        if not esc_to_shell(guest, timeout):
+            problems.append("the desktop did not give the console back")
+            bare = None
+
+        if bare is not None:
+            # The terminal with nothing but its shell prompt: the
+            # reference for the colour the window's cells start out as.
+            guest._type("gui term\n")
+            time.sleep(6.0)
+            shell = shot("shell.ppm")
+            box = changed_bbox(shell, bare, shell[0], PANEL_H)
+            if box is None or box[3] - box[1] < 40:
+                problems.append("the terminal window did not open")
+                box = None
+
+        if box is not None:
+            bg = dominant_color(shell, box)   # the window's own background
+            x0, y0, x1, y1 = box
+
+            # And with a manual page on it. `man` owns the window until q.
+            guest._type("man vcc\n")
+            time.sleep(6.0)
+            page = shot("page.ppm")
+
+            # The status bar is the last client row: a band painted in a
+            # colour of its own, in a window whose every other row is the
+            # flat background. A page of literal escapes has no such band,
+            # and the window's own frame is excluded by stopping short of
+            # the bottom edge.
+            run = best = 0
+            for y in range(y0 + 40, y1 - 12):
+                if row_dominant_color(page, y, x0, x1) != bg:
+                    run += 1
+                    best = max(best, run)
+                else:
+                    run = 0
+            if best < 8:
+                problems.append(
+                    "no status bar in the terminal window: the bottom of "
+                    "the page is not a band of its own colour, so the "
+                    "window is not reading the escape sequences")
+
+            # Leave. q quits the pager, and the window's own shell quits
+            # with it: a *text* window does not close on Esc - the desktop
+            # feeds Esc to the focused program, the way a terminal would;
+            # only a gfx window reads it as a close. With the shell gone
+            # the desktop has no window left, so the next Esc leaves it.
+            # Quitting the login shell is a logout, so what comes back is
+            # the login prompt and not a shell - sign back in, or every
+            # check that runs after this one has nowhere to type.
+            guest._type("q")
+            time.sleep(2.0)
+            guest._type("exit\n")
+            time.sleep(2.0)
+            leave_frm = len(guest.tail(0))
+            for _ in range(4):
+                guest._type("<esc>")
+                time.sleep(1.0)
+                if "VNU login:" in guest.tail(leave_frm):
+                    break
+            else:
+                problems.append("the desktop did not leave once the "
+                                "terminal's shell had gone")
+            if not problems:
+                guest.login(timeout=timeout)
+
+        for p in problems:
+            print("FAIL %-18s %s" % ("gui-tui", p))
+        if problems:
+            keep_frames(shotdir, "gui-tui")
+            result.failed.append(("gui-tui", "", ["; ".join(problems)]))
+        else:
+            result.passed += 1
+            print("ok   %-18s" % "gui-tui")
+    finally:
+        shutil.rmtree(shotdir, ignore_errors=True)
+    return not problems
+
+
 def run_man_pager(guest, result, verbose, timeout=60.0):
     """Drive the man pager: the status bar, arrow keys, the help screen.
 
@@ -4201,7 +4337,7 @@ def main():
                    "prefs-wallpaper", "imagine-screen", "gfx-surface",
                    "gfx-resolution", "gfx-damage", "gfx-canvas-resize",
                    "gfx-drag-frame", "occlusion", "system-menu",
-                   "vibecommander")
+                   "vibecommander", "gui-tui")
     cases = SUITE
     if args.only:
         cases = [c for c in SUITE
@@ -4241,6 +4377,9 @@ def main():
                 if not args.only or any(sel in "browser"
                                         for sel in args.only):
                     run_browser(guest, result, args.verbose, args.timeout)
+                if not args.only or any(sel in "gui-tui"
+                                        for sel in args.only):
+                    run_gui_tui(guest, result, args.verbose, args.timeout)
                 if not args.only or any(sel in "gfx-surface"
                                         for sel in args.only):
                     run_gfx_surface(guest, result, args.verbose,
