@@ -229,7 +229,6 @@ Rect icon_area(int count)
  * had the focus, and what each window looked like. Without it a pass
  * has no way to tell a redraw from a no-op, and the honest answer
  * (repaint everything) is the one that made 32bpp expensive. */
-constexpr int CURSOR_BOX = 16;
 
 struct Shown {
     Window rect;
@@ -966,6 +965,19 @@ vnu::vgfx::CursorShape mouse_shape_for(DragOp op)
     default:
         return vnu::vgfx::CursorShape::Arrow;
     }
+}
+
+/* The screen box a pointer of `shape` with its hotspot at (mx, my)
+ * actually paints. The arrow starts at the hotspot and is 8x12; the
+ * move/resize icons are 16x16 centred on it, plus the one-pixel outline
+ * draw_cursor_at draws around them. The compositor restores and damages
+ * this box - a fixed 16x16 at the hotspot leaves the centred icons'
+ * top and left strips behind, which is the trail a resize drag draws. */
+Rect cursor_box(int mx, int my, vnu::vgfx::CursorShape shape)
+{
+    if (shape == vnu::vgfx::CursorShape::Arrow)
+        return Rect{mx, my, 8, 12};
+    return Rect{mx - 9, my - 9, 18, 18};
 }
 
 bool hit_test_scrollbar(const Window& win, int mx, int my)
@@ -2106,14 +2118,39 @@ void run(const char* open_app)
              * the whole frame with it. */
             restore[restore_n++] = {0, 0, vnu::vgfx::width(), vnu::vgfx::height()};
         }
-        const bool pointer_moved = shown_mx != mx || shown_my != my;
-        if (pointer_moved) {
-            /* The pointer is the top layer, so where it was is a region
-             * that has to be put back like any other. */
-            restore[restore_n++] = {shown_mx, shown_my, CURSOR_BOX, CURSOR_BOX};
-            shown_mx = mx;
-            shown_my = my;
+        vnu::vgfx::CursorShape cursor = vnu::vgfx::CursorShape::Arrow;
+        if (drag_op != DragOp::None && drag_h != NO_TASK) {
+            cursor = mouse_shape_for(drag_op);
+        } else if (!left_was_down) {
+            /* Hover: point at the topmost window under the pointer and
+             * show the resize arrows while it is on a resizable edge. */
+            for (int i = order_len - 1; i >= 0; --i) {
+                TaskHandle h = order[i];
+                if (!window_exists(h) || minimized[h])
+                    continue;
+                const Window& win = geom[h];
+                if (mx >= win.x && mx < win.x + win.w &&
+                    my >= win.y && my < win.y + win.h) {
+                    DragOp op = hit_test_resize(win, mx, my);
+                    if (op != DragOp::None)
+                        cursor = mouse_shape_for(op);
+                    break;
+                }
+            }
         }
+        /* The pointer is the top layer, so where it was is a region
+         * that has to be put back like any other. Compared as boxes,
+         * not hotspots: a shape change paints a different box onto the
+         * same spot, and the centred icons cover a box the hotspot's
+         * 16x16 does not. */
+        const Rect want_cursor = cursor_box(mx, my, cursor);
+        const Rect had_cursor = cursor_box(shown_mx, shown_my, shown_cursor);
+        const bool cursor_moved = want_cursor.x != had_cursor.x ||
+                                  want_cursor.y != had_cursor.y ||
+                                  want_cursor.w != had_cursor.w ||
+                                  want_cursor.h != had_cursor.h;
+        if (cursor_moved)
+            restore[restore_n++] = had_cursor;
         if (shown_focused != focused) {
             /* Focus is drawn into the title bars, in both the window
              * that had it and the one that took it. */
@@ -2427,26 +2464,6 @@ void run(const char* open_app)
                                   18);
         }
 
-        vnu::vgfx::CursorShape cursor = vnu::vgfx::CursorShape::Arrow;
-        if (drag_op != DragOp::None && drag_h != NO_TASK) {
-            cursor = mouse_shape_for(drag_op);
-        } else if (!left_was_down) {
-            /* Hover: point at the topmost window under the pointer and
-             * show the resize arrows while it is on a resizable edge. */
-            for (int i = order_len - 1; i >= 0; --i) {
-                TaskHandle h = order[i];
-                if (!window_exists(h) || minimized[h])
-                    continue;
-                const Window& win = geom[h];
-                if (mx >= win.x && mx < win.x + win.w &&
-                    my >= win.y && my < win.y + win.h) {
-                    DragOp op = hit_test_resize(win, mx, my);
-                    if (op != DragOp::None)
-                        cursor = mouse_shape_for(op);
-                    break;
-                }
-            }
-        }
         if (cursor == vnu::vgfx::CursorShape::Arrow)
             vnu::vgfx::draw_cursor(mx, my, vnu::vgfx::COLOR_BLACK);
         else
@@ -2459,8 +2476,11 @@ void run(const char* open_app)
          * an occlusion check reads as the session's own cost. So the box
          * is damaged when the pointer moved onto it, when its shape
          * changed under it, or when the frame is new. */
-        if (first_frame || pointer_moved || shown_cursor != cursor)
-            vnu::vgfx::damage_add(mx, my, CURSOR_BOX, CURSOR_BOX);
+        if (first_frame || cursor_moved)
+            vnu::vgfx::damage_add(want_cursor.x, want_cursor.y,
+                                  want_cursor.w, want_cursor.h);
+        shown_mx = mx;
+        shown_my = my;
         shown_cursor = cursor;
 
         /* What the frame now holds, which is what the next pass
