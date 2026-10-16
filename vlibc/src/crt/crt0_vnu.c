@@ -3,6 +3,15 @@
 
 extern int main(int argc, char** argv, char** envp);
 
+/* The environment the kernel put on the stack is handed to main twice
+ * over: once as main's own third parameter, and once here, where it
+ * becomes the `environ' a program reaches through <unistd.h>. Without
+ * this the block was computed, passed on, and then unreachable — there
+ * was nothing in the tree that could ask what the process had been
+ * given. Set before main, because a program may read `environ' (or call
+ * getenv) from a constructor running before main. */
+char** environ;
+
 void _start_c(long* stack)
 {
     int argc = 0;
@@ -18,6 +27,7 @@ void _start_c(long* stack)
             envp = argv + argc + 1;
         }
     }
+    environ = envp;
 
     int result = main(argc, argv, envp);
     exit(result);

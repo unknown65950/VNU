@@ -16,6 +16,12 @@
 // The user-facing main
 extern int main(int argc, char** argv, char** envp);
 
+// The environment, for getenv() and for a program that reads `environ`
+// directly. crt0_vnu.c does the same for VNU: POSIX says the symbol
+// exists from the moment the process starts, and main's own third
+// parameter is the same block, so publishing it is the whole of the job.
+char** environ;
+
 // At process start on x86_64 Linux the stack looks like this:
 //   rsp -> [argc]
 //          [argv[0]]
@@ -30,6 +36,7 @@ void _start_c(long* stack) {
     int argc = (int)stack[0];
     char** argv = (char**)&stack[1];
     char** envp = argv + argc + 1;
+    environ = envp;
 
     int result = main(argc, argv, envp);
 

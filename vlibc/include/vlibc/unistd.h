@@ -60,6 +60,17 @@ unsigned int sleep(unsigned int seconds);
 /* Start `path` as a new process in parallel with the caller (cooperative
  * scheduler) and return its pid, or a negative error. Does not replace
  * the caller. */
+/* The environment this process was started with: a NULL-terminated array
+ * of "NAME=VALUE" strings. POSIX declares it here, and glibc has it here
+ * too, so a program that only wants to read the block reaches it by
+ * including this header rather than having to know that vlibc put it in
+ * the one place POSIX says.
+ *
+ * crt0 sets it before main() runs, from the same envp it passes to main,
+ * so it is already valid inside main. getenv() (in <stdlib.h>, where
+ * POSIX has it) is the way to read a name out of it. */
+extern char** environ;
+
 int spawn(const char* path);
 
 #ifdef __cplusplus
