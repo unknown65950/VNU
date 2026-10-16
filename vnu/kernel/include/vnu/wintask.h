@@ -229,6 +229,19 @@ void heartbeat_gfx_tasks();
  * an app only has to handle the tick it asked for. */
 void anim_tick_gfx_tasks();
 
+/* True while at least one window has an animation period set.
+ *
+ * The desktop's event loop runs inside the cli'd syscall path, so the
+ * timer interrupt - the one thing that advances the jiffy counter the
+ * tick is measured against - is never taken on its own there: a picture
+ * app is woken by its input or by the desktop, and the desktop itself
+ * spins without ever yielding a tick. So the loop parks for the next
+ * interrupt exactly while some window wants a tick (see the caller), the
+ * same window the scheduler opens around its own pass, and that is what
+ * moves g_jiffies. With no game running this is false and the desktop
+ * keeps its old behaviour. */
+bool anim_active();
+
 /* Sets the calling task's animation period in milliseconds (0 clears it)
  * and returns the granted period, or -VNU_ENOSYS when the caller is not a
  * windowed task. The period is clamped to [VNU_GFX_ANIM_MIN_MS,

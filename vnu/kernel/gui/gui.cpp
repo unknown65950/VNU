@@ -1530,6 +1530,18 @@ void run(const char* open_app)
     }
 
     for (;;) {
+        /* A window that asked for an animation tick (gfx_anim) needs the
+         * jiffy counter to actually move, and this loop runs inside the
+         * cli'd syscall path: nothing preempts it, so IRQ0 - the only
+         * thing that advances g_jiffies - is never taken on its own and
+         * the period in anim_tick_gfx_tasks would never come due. Park
+         * for the next interrupt exactly while some window wants a tick,
+         * the same hlt window the scheduler opens around its own pass.
+         * Free and unchanged for a desktop with no game on it, which
+         * still spins and polls its input the way it always has. */
+        if (vnu::wintask::anim_active())
+            vnu::arch::wait_for_interrupt();
+
         /* A resolution change (VNU_SYS_gfx_setmode, or the key below)
          * left the window rectangles and the cursor placed for the old
          * screen. Policy: a mode change never closes a window and never

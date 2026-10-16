@@ -584,6 +584,20 @@ void anim_tick_gfx_tasks()
     }
 }
 
+bool anim_active()
+{
+    if (!g_tasks)
+        return false;
+    for (int i = 0; i < MAX_TASKS; ++i) {
+        Task& t = g_tasks[i];
+        if (!(t.state == State::Runnable || t.state == State::Blocked))
+            continue;
+        if (t.con.gfx && t.con.anim_ms)
+            return true;
+    }
+    return false;
+}
+
 int task_set_anim(uint32_t period_ms)
 {
     if (!g_active)
