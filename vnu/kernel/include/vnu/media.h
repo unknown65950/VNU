@@ -30,10 +30,12 @@
 // gui/apps.cpp.
 #define VNU_MAN_DIR "/etc/vnu/manpages"
 
-// The wallpaper the desktop draws right now. Any BMP, PNG or JPEG px.h
-// understands, up to 1280x1024 pixels; see gui/wallpaper.cpp.
+// The wallpaper the desktop draws right now. Either an image px.h can
+// read (BMP/PNG/JPEG, up to the top of the mode ladder) or the
+// seven-byte flat-colour marker; see gui/wallpaper.cpp.
 #define VNU_WALLPAPER "/etc/vnu/wallpaper"
 
-// The image shipped with the kernel, never overwritten: the wallpaper
-// picker offers it as "default".
+// The wallpaper shipped with the kernel, never overwritten: the picker
+// offers it as "default". It is the same flat colour as VNU_WALLPAPER
+// starts out with.
 #define VNU_WALLPAPER_SHIPPED "/etc/vnu/wallpaper.default"

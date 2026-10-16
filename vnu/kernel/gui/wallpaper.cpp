@@ -49,6 +49,14 @@
  * The wallpaper is a setting rather than a picture to browse, so it
  * sits in /etc/vnu beside the demo pack instead of inside it, and
  * picview's directory listing stays unchanged.
+ *
+ * Not every wallpaper is a picture: the shipped default is a flat grey,
+ * written as a seven-byte marker (see vnu/wallpaper.h) that names one
+ * palette slot. A user who never picks a photo therefore decodes
+ * nothing and holds no frame - the desktop is painted straight from the
+ * slot - which is why a fresh boot reaches the desktop in one step. The
+ * same apply()/load() pair handles both, so `wallpaper` and the picker
+ * need no idea which form they are installing.
  */
 #define VNU_IN_KERNEL 1
 #include <vnu/wallpaper.h>
@@ -77,6 +85,11 @@ uint32_t g_px_cap = 0;
 
 /* Whole-desktop frame vga_gfx blits when a wallpaper is loaded. */
 bool g_ready = false;
+
+/* True when the wallpaper in use is a flat colour rather than a picture:
+ * no frame is held, and the colour lives in one palette slot (see
+ * set_solid below). Cleared whenever a picture is installed. */
+bool g_solid = false;
 
 /* Largest source we'll decode: the top of the mode ladder, so any size
  * the desktop itself can be set to is a wallpaper a user may choose.
@@ -148,10 +161,12 @@ void give_file()
 }
 
 /* Hand every pixel back to the pool. A failed or replaced decode starts
- * from here, so no run outlives the picture that wanted it. */
-void release_pixels()
+ * from here, so no run outlives the picture that wanted it. The file
+ * bytes stay only while a caller still has a use for them (apply()
+ * rewrites them; load() re-reads); release_pixels() gives those back
+ * too. */
+void release_frame()
 {
-    give_file();
     give(g_wall, g_wall_px);
     g_wall = nullptr;
     g_wall_px = 0;
@@ -160,6 +175,30 @@ void release_pixels()
     g_small_w = 0;
     g_small_h = 0;
     g_ready = false;
+}
+
+void release_pixels()
+{
+    give_file();
+    release_frame();
+    g_solid = false;
+}
+
+/* Install a flat colour as the wallpaper: the colour goes into the first
+ * slot of the display's picture half, and the desktop is filled with it
+ * by draw_wallpaper(). There is no frame to hold, which is the point -
+ * the shipped grey costs a decode and no memory at all. */
+void set_solid(uint8_t r, uint8_t g, uint8_t b)
+{
+    /* The DAC's colour values are 6-bit; the marker holds 8-bit ones so
+     * a program can write #383838 and see #383838 (see wallpaper.h). */
+    const uint8_t rgb[1][3] = {
+        {static_cast<uint8_t>(r >> 2), static_cast<uint8_t>(g >> 2),
+         static_cast<uint8_t>(b >> 2)},
+    };
+    release_frame(); /* a flat colour holds no frame from before */
+    vnu::vgfx::picture_palette_set(rgb, 1);
+    g_solid = true;
 }
 
 
@@ -188,6 +227,28 @@ uint32_t slurp(const char* path)
     }
     vnu::vfs::close(fd);
     return n;
+}
+
+/* Write the bytes just read (g_file[0..n)) back to the wallpaper file,
+ * so a choice made through apply() survives a reboot. 0, or -VNU_EIO
+ * when the write could not complete; g_file is left for the caller to
+ * give back either way. */
+int write_wallpaper_file(uint32_t n)
+{
+    int fd = vnu::vfs::open(VNU_WALLPAPER,
+                            vnu::posix::O_WRONLY | vnu::posix::O_CREAT |
+                            vnu::posix::O_TRUNC);
+    if (fd < 0)
+        return -VNU_EIO;
+    uint32_t wrote = 0;
+    while (wrote < n) {
+        int r = vnu::vfs::write(fd, g_file + wrote, n - wrote);
+        if (r <= 0)
+            break;
+        wrote += static_cast<uint32_t>(r);
+    }
+    vnu::vfs::close(fd);
+    return wrote == n ? 0 : -VNU_EIO;
 }
 
 /* Bare name of a path, for /proc/gfx. */
@@ -694,6 +755,16 @@ bool load()
      * plus one desktop. */
     release_pixels();
     uint32_t n = slurp(VNU_WALLPAPER);
+    if (is_solid(g_file, n)) {
+        /* A flat colour: nothing to decode and no frame to hold, so this
+         * is the whole job - install the colour and report the name. It
+         * is what a fresh boot takes, and the reason the shipped default
+         * costs no decode and no memory. */
+        set_solid(g_file[4], g_file[5], g_file[6]);
+        give_file();
+        note_name(VNU_WALLPAPER);
+        return true;
+    }
     if (n < 4)
         return false;
     g_small = take(MAX_PIX);
@@ -726,6 +797,20 @@ int apply(const char* path)
     uint32_t n = slurp(path);
     if (n == 0)
         return -VNU_ENOENT;
+    if (is_solid(g_file, n)) {
+        /* A flat colour cannot fail to decode, so it is installed first
+         * and then written back as the setting, the same two steps a
+         * picture takes on success. set_solid() also drops any frame the
+         * previous wallpaper held, so switching from a photo to a grey
+         * gives the photo's memory straight back. */
+        set_solid(g_file[4], g_file[5], g_file[6]);
+        int rc = write_wallpaper_file(n);
+        give_file();
+        if (rc != 0)
+            return rc;
+        note_name(path);
+        return 0;
+    }
     /* The candidate is decoded before the frame in use is touched, so
      * a picture that turns out to be a format px.h does not know, too
      * big for the pool or undecodable leaves the desktop exactly as it
@@ -778,23 +863,12 @@ int apply(const char* path)
      * frame is already on screen by now: overwriting a VFS node of this
      * size cannot really fail, and a failure here (-VNU_EIO) is the only
      * case where the screen and the file can disagree. */
-    int fd = vnu::vfs::open(VNU_WALLPAPER,
-                            vnu::posix::O_WRONLY | vnu::posix::O_CREAT |
-                            vnu::posix::O_TRUNC);
-    if (fd < 0)
-        return -VNU_EIO;
-    uint32_t wrote = 0;
-    while (wrote < n) {
-        int r = vnu::vfs::write(fd, g_file + wrote, n - wrote);
-        if (r <= 0)
-            break;
-        wrote += static_cast<uint32_t>(r);
-    }
-    vnu::vfs::close(fd);
+    int wr = write_wallpaper_file(n);
     give_file();   /* the write is the last reader of these bytes */
-    if (wrote != n)
-        return -VNU_EIO;
+    if (wr != 0)
+        return wr;
 
+    g_solid = false; /* a picture replaces a flat colour */
     g_ready = true;
     stretch();
     note_name(path);
@@ -818,6 +892,18 @@ bool ready()
     const uint32_t px = static_cast<uint32_t>(vnu::vgfx::width()) *
                         static_cast<uint32_t>(vnu::vgfx::height());
     return px == g_wall_px;
+}
+
+bool solid()
+{
+    return g_solid;
+}
+
+uint8_t solid_color()
+{
+    /* The first slot of the picture half: set_solid() put the colour
+     * there, and nothing else on the desktop draws from that half. */
+    return static_cast<uint8_t>(vnu::vgfx::SYSTEM_SLOTS);
 }
 
 const char* current_name()

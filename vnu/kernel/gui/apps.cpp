@@ -6,6 +6,7 @@
 #include <vnu/process.h>
 #include <vnu/images.h>
 #include <vnu/vga_gfx.h>
+#include <vnu/wallpaper.h>
 
 #include "../proc/embedded_hello.h"
 #include "../proc/embedded_vedit.h"
@@ -29,7 +30,7 @@
 #include "../proc/embedded_pic_gray_alpha.h"
 #include "../proc/embedded_pic_shapes_pal.h"
 #include "../proc/embedded_pic_shapes_rgba.h"
-#include "../proc/embedded_wallpaper_jpg.h"
+#include "../proc/embedded_pic_abstract.h"
 #include "../proc/embedded_manpages.h"
 
 namespace {
@@ -187,7 +188,7 @@ void install_demo_apps()
 
 /* Mount the demo photograph pack under /etc/vnu/pics so picview has
  * something to show: one VFS node per picture, filled with the embedded
- * bytes, and seed the desktop wallpaper from the embedded image. */
+ * bytes. Both wallpaper files are seeded here too, as flat colours. */
 void install_demo_pics()
 {
     struct Pic {
@@ -202,6 +203,7 @@ void install_demo_pics()
         {"gray_alpha.png", embedded_pic_gray_alpha_elf, embedded_pic_gray_alpha_elf_size},
         {"shapes_pal.png", embedded_pic_shapes_pal_elf, embedded_pic_shapes_pal_elf_size},
         {"shapes_rgba.png", embedded_pic_shapes_rgba_elf, embedded_pic_shapes_rgba_elf_size},
+        {"abstract-art.jpg", embedded_pic_abstract_elf, embedded_pic_abstract_elf_size},
     };
 
     vnu::vfs::mkdir(VNU_MEDIA_DIR);
@@ -220,17 +222,25 @@ void install_demo_pics()
     /* The desktop wallpaper is a setting, not a picture to browse, so it
      * lives beside the pack instead of inside it. Two copies: the shipped
      * original nobody ever writes to, and the one in use, which the
-     * wallpaper picker replaces. gui/wallpaper.cpp decodes the latter
-     * with px.h (BMP/PNG/JPEG), quantises it into the display's picture
-     * half of the palette and stretches it over the desktop. */
+     * wallpaper picker replaces.
+     *
+     * Both start out as the same flat grey - a seven-byte marker file
+     * (see vnu/wallpaper.h), not an image. gui/wallpaper.cpp paints that
+     * colour straight into the desktop with nothing decoded and no frame
+     * held, so a fresh boot reaches the desktop in one step. The art the
+     * old default used is the "abstract-art.jpg" in the pack above, so
+     * it is still offered in the picker. */
+    const uint8_t solid[SOLID_SIZE] = {
+        SOLID_MAGIC[0], SOLID_MAGIC[1], SOLID_MAGIC[2], SOLID_MAGIC[3],
+        SOLID_DEFAULT_RGB, SOLID_DEFAULT_RGB, SOLID_DEFAULT_RGB,
+    };
     const char* const seeds[2] = { VNU_WALLPAPER_SHIPPED, VNU_WALLPAPER };
     for (int i = 0; i < 2; ++i) {
         int wfd = vnu::vfs::open(seeds[i], O_WRONLY | O_CREAT | O_TRUNC);
         if (wfd < 0)
             continue;
-        vnu::vfs::write(wfd, embedded_wallpaper_jpg_elf, embedded_wallpaper_jpg_elf_size);
+        vnu::vfs::write(wfd, solid, sizeof(solid));
         vnu::vfs::close(wfd);
-        vnu::images::add(vnu::images::Resources, embedded_wallpaper_jpg_elf_size);
     }
 }
 

@@ -18,9 +18,10 @@ KEYS
     j/k switch pane, Esc closes. Click a pane to select it.
 
     In the Wallpaper pane the Up/Down arrows move the cursor over the
-    pictures (clicking one also) and Enter applies the selected one:
-    the kernel decodes it and the desktop redraws at once. A picture
-    it refuses leaves the desktop as it was and says why on the status
+    candidates (clicking one also) and Enter applies the selected one:
+    the kernel decodes a picture, or installs the flat colour the
+    shipped entry is, and the desktop redraws at once. Something it
+    refuses leaves the desktop as it was and says why on the status
     line. See man wallpaper for what may be used, and note that the
     choice is forgotten at reboot.
 

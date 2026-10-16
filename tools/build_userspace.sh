@@ -118,16 +118,12 @@ embed "$ROOT/vnu/userspace/gui/pics/logo.jpg" pic_logo
 embed "$ROOT/vnu/userspace/gui/pics/gray_alpha.png" pic_gray_alpha
 embed "$ROOT/vnu/userspace/gui/pics/shapes_pal.png" pic_shapes_pal
 embed "$ROOT/vnu/userspace/gui/pics/shapes_rgba.png" pic_shapes_rgba
-# The shipped desktop image, embedded as wallpaper_jpg so the plain
-# name stays free for the `wallpaper` command's own binary above.
-#
-# It is a JPEG because the palette a picture gets is the display's, and
-# the display has 240 slots for a picture: a photograph is what a desktop
-# should be showing, and a 122 KB JPEG of one beats a 4 KB PNG designed
-# in the sixteen colours the system's own half of the palette holds.
-# The kernel decodes it with px.h's float IDCT, borrowing the FPU for the
-# duration of the decode (gui/wallpaper.cpp).
-embed "$ROOT/vnu/userspace/gui/pics/abstract-art.jpg" wallpaper_jpg
+# The art the shipped wallpaper used to be, kept as an ordinary picture in
+# the demo pack so the picker still offers it. The desktop wallpaper
+# itself is no longer an embedded image: it is a seven-byte flat-colour
+# marker written by gui/apps.cpp and painted without a decode, so nothing
+# here needs to embed it.
+embed "$ROOT/vnu/userspace/gui/pics/abstract-art.jpg" pic_abstract
 embed "$ROOT/sysroot/bin/hello" hello
 embed "$ROOT/sysroot/bin/vprobe" vprobe
 embed "$ROOT/sysroot/bin/tlsdemo" tlsdemo

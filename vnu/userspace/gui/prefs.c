@@ -111,8 +111,9 @@ static int wp_sel = 0;
 static const char* wp_status = "Enter applies the picture";
 static int wp_status_col = VGFX_LBLUE;
 
-/* /etc/vnu/pics, then the shipped desktop. A JPEG is listed too — the
- * kernel will refuse it, and the status line then says so. */
+/* /etc/vnu/pics, then the shipped desktop (a flat colour rather than a
+ * picture, which is why it is named here instead of appearing in the
+ * pack). */
 static void scan_walls(void)
 {
     wp_n = 0;
@@ -181,8 +182,7 @@ static void wp_apply(void)
         wp_status = "applied — the desktop redrew";
         wp_status_col = VGFX_LGREEN;
     } else if (rc == -VNU_EINVAL) {
-        wp_status = "not a usable wallpaper (bmp or png, at most 512x384 "
-                    "and 64 KiB)";
+        wp_status = "not a usable wallpaper (bmp, png or jpeg)";
         wp_status_col = VGFX_LRED;
     } else if (rc == -VNU_ENOENT) {
         wp_status = "the file is gone";

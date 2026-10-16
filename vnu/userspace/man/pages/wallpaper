@@ -6,38 +6,44 @@ SYNOPSIS
  
 DESCRIPTION
     The desktop background is a plain file, /etc/vnu/wallpaper, that
-    the kernel decodes and stretches behind the windows at startup.
-    This command reports which picture is in use, or replaces it.
+    the kernel reads and draws behind the windows at startup. This
+    command reports which one is in use, or replaces it.
 
     With no argument, print the bare name of the background the
     desktop is drawing, or `none` while it is still the procedural
     sky. With a file argument, hand the path to the kernel
-    (VNU_SYS_wallpaper): the kernel reads the file, decodes it with
-    the same px.h decoder picview uses, quantises it to a palette of
-    up to 240 of its own colours in the display palette, makes it
-    the background and rewrites /etc/vnu/wallpaper with it, so the
-    choice survives a restart of the GUI. A candidate that fails to
-    decode is refused and changes nothing -- neither the file nor the
-    screen.
+    (VNU_SYS_wallpaper): the kernel reads the file, accepts it, makes
+    it the background and rewrites /etc/vnu/wallpaper with it, so the
+    choice survives a restart of the GUI. A candidate the kernel
+    cannot use is refused and changes nothing -- neither the file nor
+    the screen.
+
+    A background is either a picture or a flat colour. A picture is
+    decoded with the same px.h decoder picview uses and quantised to a
+    palette of up to 240 of its own colours in the display palette; a
+    flat colour is the seven-byte marker the shipped default is, and
+    the desktop paints it directly, with nothing decoded and no frame
+    held. This command passes either form through unchanged, so a
+    seven-byte colour file is set exactly the way a picture is.
 
     BMP, PNG and JPEG pictures of at most 1280x1024 pixels are
     accepted. JPEG is decoded by the same float IDCT picview uses,
     which the kernel borrows the FPU for and hands straight back;
     every other decoder is integer code and does without one.
 
-    The picture lives in the RAM filesystem and is therefore
+    The background lives in the RAM filesystem and is therefore
     forgotten at reboot, where the kernel seeds the shipped desktop
     back into place. That seed is /etc/vnu/wallpaper.default, which
     this command never overwrites -- it is always there to fall back
-    on.
+    on. It is a flat grey, and the desktop VNU ships starts that way,
+    so a fresh boot draws no picture at all.
 
-    The same pictures can be picked from the desktop: open the
+    The same candidates can be picked from the desktop: open the
     preferences window (prefs) and use its Wallpaper pane.
 
 OPTIONS
     -l, --list     list the pictures that can be used, one per line,
-                   marking the JPEGs the kernel cannot decode, then
-                   the shipped desktop
+                   then the shipped desktop
         --help     display this help and exit
         --version  output version information and exit
 
@@ -60,4 +66,5 @@ FILES
     /proc/gfx                    reports the background in use
 
 SYSCALLS
-    wallpaper   decode and adopt a background picture
+    wallpaper   adopt a background: decode a picture, or install a
+                flat colour

@@ -555,7 +555,8 @@ SUITE = [
       r"^wallpaper\.default$"], []),
     ("media-pics", "ls /etc/vnu/pics",
      [r"^flower\.bmp$", r"^sunset\.png$", r"^logo\.jpg$",
-      r"^gray_alpha\.png$", r"^shapes_pal\.png$", r"^shapes_rgba\.png$"], []),
+      r"^gray_alpha\.png$", r"^shapes_pal\.png$", r"^shapes_rgba\.png$",
+      r"^abstract-art\.jpg$"], []),
     ("media-sounds", "ls /etc/vnu/sounds",
      [r"^chime\.wav$", r"^melody\.wav$", r"^beep\.wav$"], []),
     # Manual pages are files, one per command, under /etc/vnu/manpages;
@@ -570,12 +571,13 @@ SUITE = [
     ("man-list-file", "man -l > /tmp/man-list.out", [], [r"press h"]),
     ("man-list-text", "cat /tmp/man-list.out",
      [r"^    ls  -  list directory contents$"], []),
-    # Both wallpaper files hold the shipped image: abstract-art.jpg, a
-    # progressive 1280x804 JPEG, as built.
+    # Both wallpaper files hold the shipped desktop: a flat grey, seven
+    # bytes, not an image (the art it replaced is abstract-art.jpg in the
+    # pack above). The kernel paints it without decoding anything.
     ("media-wall", "wc /etc/vnu/wallpaper",
-     [r"^\d+ \d+ 122431 /etc/vnu/wallpaper$"], []),
+     [r"^\d+ \d+ 7 /etc/vnu/wallpaper$"], []),
     ("media-wall-shipped", "wc /etc/vnu/wallpaper.default",
-     [r"^\d+ \d+ 122431 /etc/vnu/wallpaper\.default$"], []),
+     [r"^\d+ \d+ 7 /etc/vnu/wallpaper\.default$"], []),
     # The wallpaper is a file the kernel decodes on request, so the
     # desktop background can be set and read back from the shell too.
     ("wallpaper-show", "wallpaper", [r"^none$"], []),

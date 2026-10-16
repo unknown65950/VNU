@@ -1,16 +1,21 @@
 /* wallpaper — show or set the desktop background (separate binary).
  *
  * The desktop wallpaper is a plain file, /etc/vnu/wallpaper, that the
- * kernel decodes and scales behind the windows. This command hands
- * the kernel a candidate (VNU_SYS_wallpaper) and reports what it
- * decided: the kernel decodes first and only swaps the picture in when
- * it is good, so a file it refuses leaves the desktop untouched.
+ * kernel reads behind the windows. This command hands the kernel a
+ * candidate (VNU_SYS_wallpaper) and reports what it decided: the kernel
+ * accepts it first and only swaps it in when it is good, so a file it
+ * refuses leaves the desktop untouched.
  *
- * The kernel is the only authority on what a wallpaper may be — any
- * BMP, PNG or JPEG px.h understands, at most 1280x1024 pixels. So this
- * file deliberately does not carry px.h just to sniff headers: the
- * verdict is the call's, and a file the kernel refuses leaves the
- * desktop exactly as it was.
+ * The kernel is the only authority on what a wallpaper may be — a BMP,
+ * PNG or JPEG px.h understands up to the top of the mode ladder, or a
+ * flat colour. So this file deliberately does not carry px.h just to
+ * sniff headers: the verdict is the call's, and a file the kernel
+ * refuses leaves the desktop exactly as it was.
+ *
+ * A flat colour is not an image: it is the seven-byte marker the kernel
+ * ships as the default (see include/vnu/wallpaper.h), and it is what
+ * makes a fresh desktop paint instantly. This command only has to pass
+ * the file through — the marker and the picture go the same way.
  */
 #include "cu.h"
 #include <vnu/abi.h>
@@ -24,7 +29,7 @@
 #define NAME_CAP   64
 
 /* What the desktop is drawing, as /proc/gfx reports it. "none" until a
- * picture has been decoded (the procedural sky is not a file). */
+ * wallpaper has been loaded (the procedural sky is not a file). */
 static void show_current(void)
 {
     /* All of /proc/gfx, and not a fixed buffer: it reports the mode,
@@ -118,11 +123,12 @@ static void wallpaper_help(void)
     w("  -l, --list     list the pictures that can be used\n");
     w("      --help     display this help and exit\n");
     w("      --version  output version information and exit\n\n");
-    w("With no argument, print the background in use. With a FILE, decode it\n");
-    w("and put it on the desktop: the image replaces " SHIPPED "'s\n");
-    w("neighbour, /etc/vnu/wallpaper, and the next redraw draws it.\n\n");
+    w("With no argument, print the background in use. With a FILE, accept it\n");
+    w("first and, only if it works, put it on the desktop: it replaces\n");
+    w("/etc/vnu/wallpaper and the next redraw draws it. A flat colour is set\n");
+    w("by a FILE just as a picture is.\n\n");
     w("BMP, PNG and JPEG pictures of at most 1280x1024 pixels are accepted.\n");
-    w("demo pack in " PICS_DIR " holds the candidates; the shipped\n");
+    w("The demo pack in " PICS_DIR " holds the candidates; the shipped\n");
     w("desktop is " SHIPPED ", which stays untouched so it can\n");
     w("always come back. The choice lives in the RAM filesystem and is\n");
     w("therefore forgotten at reboot.\n");

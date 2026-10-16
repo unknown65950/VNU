@@ -1125,9 +1125,10 @@ int pr(int r)
  * frame so windows and icons paint on top of it. Cheap enough to be a
  * per-frame clear (slightly more work than the plain gradient).
  *
- * If a /wallpaper picture was decoded and quantized at startup (see
- * gui/wallpaper.cpp), its ready-made palette frame wins and this
- * procedural scene only shows when there is no wallpaper file. */
+ * If a /wallpaper was loaded at startup (see gui/wallpaper.cpp), it wins:
+ * a flat colour fills the clip with one palette slot, a decoded picture
+ * is blitted from its ready-made frame. The procedural scene only shows
+ * when neither is loaded. */
 void draw_wallpaper()
 {
     /* The clip as loop bounds, so the four row loops below stay inside a
@@ -1137,6 +1138,23 @@ void draw_wallpaper()
     const int cx1 = g_clip_x1 > g_clip_x0 ? g_clip_x1 : g_width;
     const int cy0 = g_clip_y1 > g_clip_y0 ? g_clip_y0 : 0;
     const int cy1 = g_clip_y1 > g_clip_y0 ? g_clip_y1 : g_height;
+
+    if (vnu::wallpaper::solid()) {
+        /* A flat-colour wallpaper: the colour sits in one palette slot
+         * (gui/wallpaper.cpp put it there), so every pixel in the clip is
+         * the same index and the whole thing is one fill - no decode, no
+         * frame, nothing to scale. It is what the shipped desktop draws,
+         * so it is the first thing a fresh boot blits. */
+        const uint8_t color = vnu::wallpaper::solid_color();
+        const unsigned long n = static_cast<unsigned long>(cx1 - cx0);
+        const long xb = static_cast<long>(cx0) * pixel_bytes();
+        for (int y = cy0; y < cy1; ++y) {
+            uint8_t* row = row_ptr(y) + xb;
+            for (unsigned long i = 0; i < n; ++i)
+                store(row + static_cast<long>(i) * pixel_bytes(), color);
+        }
+        return;
+    }
 
     if (vnu::wallpaper::ready()) {
         /* A decoded wallpaper is held as one byte per pixel (it is
