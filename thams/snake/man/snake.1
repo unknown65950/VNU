@@ -1,0 +1,31 @@
+NAME
+    snake - the classic snake game
+
+SYNOPSIS
+    snake
+
+DESCRIPTION
+    A snake crawls around a walled board and grows every time it eats.
+    The arrow keys steer it, and it dies when it runs into a wall or
+    into its own body. Each meal is ten points and the snake moves a
+    little faster with every one, down to a floor the eye can still
+    follow.
+
+    The board is a grid of 30 by 20 cells and the window opens at
+    exactly that size; a status line under it shows the score and the
+    best score of the session.
+
+    A snake cannot reverse into its own neck: a turn that would send it
+    straight back the way it came is ignored. Only the last turn counts
+    between two steps, so a quick double turn arrives as one.
+
+    The game is a desktop app, so it lives under /apps/snake and has a
+    tile on the desktop; the shell can start it like any command. Like
+    every window it is closed with Esc, and its score is not kept once
+    the window is gone.
+
+KEYS
+    Up, Down, Left, Right   steer the snake
+    p                       pause, and again to resume
+    Space                   start a new game, once the snake is dead
+    Esc                     close the window

@@ -749,6 +749,19 @@ SUITE = [
     # only ever made from an icon.
     ("tham-no-icon", "ls /apps/tree",
      [r"^man/?$", r"^bin$"], [r"^icon$"], THAM_ON),
+    # snake is the first GUI module: unlike tree it also gets a tile, so
+    # /apps/snake has an icon as well as the binary and the page. It is
+    # not run here - a windowed program blocks on input - but the page it
+    # ships is readable through `man`.
+    ("tham-snake-dir", "ls /apps/snake",
+     [r"^bin$", r"^icon$", r"^man/?$"], [], THAM_ON),
+    ("tham-snake-which", "which snake",
+     [r"^/bin/snake$"], [], THAM_ON),
+    ("man-snake", "man snake > /tmp/man-snake.out",
+     [], [r"press h for help"], THAM_ON),
+    ("man-snake-text", "cat /tmp/man-snake.out",
+     [r"^NAME$", r"snake - the classic snake game", r"^KEYS$",
+      r"steer the snake"], [], THAM_ON),
     # -- fork(2) --------------------------------------------------------
     # `forkdemo` prints one line per claim the kernel makes about a
     # forked child: two processes that run at the same time, separate
