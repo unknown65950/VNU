@@ -1,5 +1,5 @@
 #include <vlibc/unistd.h>
 
-int fork(void) {
-    return (int)syscall(SYS_fork);
+pid_t fork(void) {
+    return (pid_t)syscall(SYS_fork);
 }

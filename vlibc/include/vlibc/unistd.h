@@ -25,7 +25,7 @@ int close(int fd);
 pid_t fork(void);
 int execve(const char* path, char* const argv[], char* const envp[]);
 void exit(int status);
-unsigned long getpid(void);
+pid_t getpid(void);
 unsigned long getuid(void);
 unsigned long getgid(void);
 /* Change effective/real user or group id. Root may set any value; a
@@ -49,7 +49,7 @@ int pipe(int fds[2]);
 int dup(int oldfd);
 int dup2(int oldfd, int newfd);
 int kill(int pid, int sig);
-unsigned long getppid(void);
+pid_t getppid(void);
 /* 1 if fd refers to a terminal (stdio, /dev/tty, /dev/console), else 0. */
 int isatty(int fd);
 /* Sleep for usec/seconds. Blocks on the PIT clock (see SYS_sleep);
