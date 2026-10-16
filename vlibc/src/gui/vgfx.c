@@ -562,6 +562,14 @@ int vgfx_set_resolution(int w, int h)
     return (int)syscall(VNU_SYS_gfx_setmode, (long)w, (long)h);
 }
 
+/* Ask the GUI for an animation tick every `period_ms` milliseconds; the
+ * granted period comes back, or -1 when there is no window to tick. */
+int vgfx_anim(int period_ms)
+{
+    long r = syscall(VNU_SYS_gfx_anim, (long)(period_ms > 0 ? period_ms : 0));
+    return r < 0 ? -1 : (int)r;
+}
+
 int vgfx_poll(vgfx_event_t* ev)
 {
     enum { S_IDLE, S_ESC, S_BRACKET, S_M, S_BTN, S_XLO, S_XHI,
@@ -623,7 +631,13 @@ int vgfx_poll(vgfx_event_t* ev)
                 state = S_M;
             else if (b == 'D')
                 state = S_DLEN_LO; /* drop message: len_lo ... */
-            else
+            else if (b == 'A') {
+                /* The animation tick a program asked for with
+                 * vgfx_anim(): only a program that requested one ever
+                 * sees this message. */
+                ev->type = VGFX_EV_ANIM;
+                return 1;
+            } else
                 state = S_IDLE; /* not our protocol; resync */
             break;
         case S_M:

@@ -217,6 +217,13 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
             reinterpret_cast<const vnu_gfx_canvas*>(tf->ebx),
             reinterpret_cast<vnu_gfx_canvas*>(tf->ecx)));
     }
+    case VNU_SYS_gfx_anim:
+        /* ebx is the requested tick period in milliseconds (0 to
+         * disable); the answer is the granted period, or -ENOSYS when
+         * the caller has no window. The tick itself arrives on stdin as
+         * an ESC '[' 'A' message (see wintask::anim_tick_gfx_tasks). */
+        return static_cast<std::uint32_t>(
+            vnu::wintask::task_set_anim(tf->ebx));
     case VNU_SYS_stat:
         return static_cast<std::uint32_t>(vnu::vfs::stat(
             reinterpret_cast<const char*>(tf->ebx),

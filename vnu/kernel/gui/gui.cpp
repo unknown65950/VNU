@@ -1589,6 +1589,14 @@ void run(const char* open_app)
             vnu::wintask::heartbeat_gfx_tasks();
         }
 
+        /* One animation tick for the tasks that asked for one through
+         * gfx_anim(2). Every pass, and free for every window that did
+         * not ask: it reads the jiffy counter and compares it against a
+         * period that stays 0 unless the app requested one. This is the
+         * steady beat a game needs, which the one-per-second heartbeat
+         * above is too coarse to give. */
+        vnu::wintask::anim_tick_gfx_tasks();
+
         /* Hand any pending SIGWINCH to the task it belongs to.
          *
          * Every pass, not once a second: the flag is raised by the

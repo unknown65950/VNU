@@ -130,6 +130,12 @@ struct Console {
     int pix_h;
     int pix_pages;
     bool winch;
+    /* Animation tick requested through gfx_anim(2): the period between
+     * ticks in milliseconds, 0 for none, and the jiffy the next one is
+     * due. The GUI's pass feeds the tick message when it comes (see
+     * anim_tick_gfx_tasks). */
+    uint32_t anim_ms;
+    uint32_t anim_at;
     /* Signals pending for this windowed task: bitmask by signal number.
      * SIGWINCH is raised when the canvas changes size. The delivery
      * path is different from classic processes, but the handler and mask
@@ -213,6 +219,21 @@ enum : char { TICK_BYTE = 0x06 };
 
 // Feeds TICK_BYTE to every live gfx-mode task's input queue.
 void heartbeat_gfx_tasks();
+
+/* Animation tick requested by a task itself (VNU_SYS_gfx_anim): the GUI
+ * feeds the message `ESC '[' 'A'` into every live gfx-mode task whose
+ * requested period has come due, which is how a game gets a steady beat
+ * without waking every other window. The message is enqueued atomically,
+ * like a mouse event, and vgfx_poll() reports it as VGFX_EV_ANIM. The
+ * one-per-second heartbeat above is unchanged and still arrives too, so
+ * an app only has to handle the tick it asked for. */
+void anim_tick_gfx_tasks();
+
+/* Sets the calling task's animation period in milliseconds (0 clears it)
+ * and returns the granted period, or -VNU_ENOSYS when the caller is not a
+ * windowed task. The period is clamped to [VNU_GFX_ANIM_MIN_MS,
+ * VNU_GFX_ANIM_MAX_MS] and rounded to the scheduler's 10 ms tick. */
+int task_set_anim(uint32_t period_ms);
 
 // Delivers a mouse event (button and pixel coordinates) to a task's
 // stdin queue as a VNU mouse protocol message (MOUSE_MSG_LEN bytes).

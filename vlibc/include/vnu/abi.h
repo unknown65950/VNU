@@ -83,6 +83,19 @@
 #define VNU_SYS_times        73
 #define VNU_SYS_getrusage    74
 #define VNU_SYS_quota        75
+#define VNU_SYS_gfx_anim     76
+
+/* VNU_SYS_gfx_anim(period_ms): ask the GUI to wake this window with an
+ * animation tick every `period_ms` milliseconds (0 turns it off). A
+ * windowed task is otherwise only woken by input or the one-per-second
+ * heartbeat, which is too coarse for a game. The tick arrives on stdin
+ * as the message `ESC '[' 'A'`, which vgfx_poll() reports as
+ * VGFX_EV_ANIM. The period is clamped to [VNU_GFX_ANIM_MIN_MS,
+ * VNU_GFX_ANIM_MAX_MS] and the granted value is returned; a task with
+ * no window gets -VNU_ENOSYS. The 100 Hz scheduler clock is the finest
+ * granularity, so a period is rounded to 10 ms. */
+#define VNU_GFX_ANIM_MIN_MS 10
+#define VNU_GFX_ANIM_MAX_MS 1000
 
 /* Out-parameter of VNU_SYS_netinfo: the interface's MAC, its IPv4
  * address, netmask and default gateway (all IPs big-endian uint32s, the

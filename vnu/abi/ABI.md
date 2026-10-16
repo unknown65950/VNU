@@ -88,6 +88,7 @@ must never be renumbered.
 | 73 | times |
 | 74 | getrusage |
 | 75 | quota |
+| 76 | gfx_anim |
 
 ### times(73) and getrusage(74): CPU-time accounting
 
@@ -136,6 +137,27 @@ than taken in part. A write that overwrites bytes already inside the
 file's length is never charged, and shortening a file (`O_TRUNC`,
 `lseek`-back-`write`) gives the bytes back, since usage is recomputed
 from the node table rather than accumulated.
+
+### gfx_anim(76): a window's animation tick
+
+`gfx_anim(ebx = period_ms)` asks the GUI to wake the calling window with
+an animation tick every `period_ms` milliseconds, or to stop with 0. A
+windowed task is otherwise only woken by input or the one-per-second
+heartbeat (`TICK_BYTE`), which is too coarse for a game; this is a finer
+beat, and a task that never asks is never woken by it and never pays for
+it. A caller with no window — a console program — gets
+`-VNU_ENOSYS`.
+
+The period is clamped to `[VNU_GFX_ANIM_MIN_MS, VNU_GFX_ANIM_MAX_MS]`
+(10..1000 ms) and rounded up to the 100 Hz scheduler clock, and the
+granted period is the return value (0 when the tick was turned off).
+
+The tick is delivered on the window's stdin as the mouse-style message
+`ESC '[' 'A'`, enqueued atomically so it can never split a multi-byte
+event; `vgfx_poll()` reports it as `VGFX_EV_ANIM`. It is additive to the
+heartbeat: a window that asks for a tick still receives `TICK_BYTE` once
+a second, so an app that only wants its own beat ignores the byte it did
+not ask for.
 
 ### Notes on argument shapes
 - `fork()` — returns the child's pid in the parent, 0 in the child. The

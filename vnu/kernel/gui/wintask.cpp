@@ -540,6 +540,71 @@ void heartbeat_gfx_tasks()
     }
 }
 
+/* A jiffy count for an animation period, rounded up: the 100 Hz
+ * scheduler clock is the finest granularity this can resolve, so a
+ * shorter period still wakes at least once a tick. */
+static uint32_t anim_jiffies(uint32_t ms)
+{
+    return (ms + 9u) / 10u;
+}
+
+void anim_tick_gfx_tasks()
+{
+    if (!g_tasks)
+        return;
+    const uint32_t now = vnu::proc::now_jiffies();
+    for (int i = 0; i < MAX_TASKS; ++i) {
+        Task& t = g_tasks[i];
+        if (!(t.state == State::Runnable || t.state == State::Blocked))
+            continue;
+        Console& c = t.con;
+        if (!c.gfx || c.anim_ms == 0)
+            continue;
+        if (static_cast<int32_t>(now - c.anim_at) < 0)
+            continue; /* not due yet */
+        /* Re-arm from when the tick was due rather than from now, so a
+         * late GUI pass does not make the beat drift; if the pass was
+         * later than a whole period, skip the missed ticks instead of
+         * firing them back to back. */
+        c.anim_at += anim_jiffies(c.anim_ms);
+        if (static_cast<int32_t>(now - c.anim_at) >= 0)
+            c.anim_at = now + anim_jiffies(c.anim_ms);
+        /* ESC '[' 'A' - the animation tick, enqueued atomically like a
+         * mouse message so vgfx_poll()'s parser never sees it split.
+         * Dropped whole when the queue has no room, as a mouse event is. */
+        int free_space = (c.in_head + INPUT_QUEUE_CAP - c.in_tail - 1) % INPUT_QUEUE_CAP;
+        if (free_space < 3)
+            continue;
+        c.input[c.in_tail] = MOUSE_ESC;
+        c.in_tail = (c.in_tail + 1) % INPUT_QUEUE_CAP;
+        c.input[c.in_tail] = '[';
+        c.in_tail = (c.in_tail + 1) % INPUT_QUEUE_CAP;
+        c.input[c.in_tail] = 'A';
+        c.in_tail = (c.in_tail + 1) % INPUT_QUEUE_CAP;
+    }
+}
+
+int task_set_anim(uint32_t period_ms)
+{
+    if (!g_active)
+        return -VNU_ENOSYS;
+    Console& c = cur_task().con;
+    if (!c.gfx)
+        return -VNU_ENOSYS; /* a console task has no window to tick */
+    if (period_ms == 0) {
+        c.anim_ms = 0;
+        c.anim_at = 0;
+        return 0;
+    }
+    if (period_ms < VNU_GFX_ANIM_MIN_MS)
+        period_ms = VNU_GFX_ANIM_MIN_MS;
+    if (period_ms > VNU_GFX_ANIM_MAX_MS)
+        period_ms = VNU_GFX_ANIM_MAX_MS;
+    c.anim_ms = period_ms;
+    c.anim_at = vnu::proc::now_jiffies() + anim_jiffies(period_ms);
+    return static_cast<int>(period_ms);
+}
+
 /* Hands a pending SIGWINCH to the tasks whose canvas changed size.
  *
  * The flag is raised where the resize happened (canvas_resize) and

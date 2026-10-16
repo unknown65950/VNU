@@ -29,6 +29,8 @@
  *   ESC '[' 'D' <len_lo> <len_hi> <path...> — drag-and-drop: the GUI
  *   dropped the file at <path> (full VFS path, little-endian 16-bit
  *   length) onto this window.
+ *   ESC '[' 'A' — an animation tick.  Only a program that asked for one
+ *   with vgfx_anim() receives it, and it is reported as VGFX_EV_ANIM.
  *
  * Keyboard characters arrive as a single byte (no ESC prefix), except
  * Esc (0x1B) which is wrapped as button 3 so the parser never stalls
@@ -83,6 +85,7 @@
 #define VGFX_EV_DRAG_CANCEL 5
 #define VGFX_EV_RESIZE  6
 #define VGFX_EV_MOVE    7
+#define VGFX_EV_ANIM    8
 
 typedef struct {
     int type;     /* VGFX_EV_* */
@@ -192,6 +195,18 @@ int vgfx_refresh(void);
  * has to handle one more event type and needs no handler of its own;
  * one that installs a SIGWINCH handler gets that as well. */
 int  vgfx_poll(vgfx_event_t* ev);
+
+/* Asks the GUI to wake this program with an animation tick every
+ * `period_ms` milliseconds: a windowed task is otherwise only woken by
+ * input or the one-per-second heartbeat, which is too coarse for a game.
+ * The tick comes back from vgfx_poll() as VGFX_EV_ANIM; 0 turns it off.
+ *
+ * The period is clamped to [VNU_GFX_ANIM_MIN_MS, VNU_GFX_ANIM_MAX_MS]
+ * and rounded to the 100 Hz scheduler clock, and the granted period is
+ * returned. Returns -1 when the caller has no window (a console
+ * program), which is the only failure: a program that gets one keeps
+ * just the one-per-second heartbeat tick. */
+int  vgfx_anim(int period_ms);
 
 /* Announces to the GUI that the item under the current press is a
  * draggable file at the given full VFS path. The window manager uses
