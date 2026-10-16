@@ -761,7 +761,7 @@ void draw_console_window(const Window& win, const vnu::wintask::Console& con, bo
             char ch = static_cast<char>(row[c] & 0xFF);
             if (ch != ' ' && ch != 0)
                 draw_char(cx + c * CELL_W, cy + v * CELL_H, ch,
-                          FG_MAP[static_cast<uint8_t>(row[c] & 0x0F)]);
+                          FG_MAP[static_cast<uint8_t>((row[c] >> 8) & 0x0F)]);
         }
     }
 

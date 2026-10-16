@@ -1356,6 +1356,26 @@ def run_gui_tui(guest, result, verbose, timeout=60.0):
                     "the page is not a band of its own colour, so the "
                     "window is not reading the escape sequences")
 
+            # And the glyphs share one foreground. The pager draws its
+            # body with the default attribute, so all of its letters are
+            # one colour on the flat background; a renderer that indexed
+            # the palette by the character instead of the attribute once
+            # painted every letter its own colour. Count the body's
+            # non-background pixels - the top colour must own almost all
+            # of them.
+            pw, _, ppx = page
+            ink = {}
+            for y in range(y0 + 40, y1 - 40):
+                base = y * pw * 3
+                for x in range(x0, x1 + 1):
+                    c = ppx[base + x * 3:base + x * 3 + 3]
+                    if c != bg:
+                        ink[c] = ink.get(c, 0) + 1
+            if ink and max(ink.values()) < 0.9 * sum(ink.values()):
+                problems.append(
+                    "the page's letters are many colours, not one: the "
+                    "window is not painting the cells' foreground")
+
             # Leave. q quits the pager, and the window's own shell quits
             # with it: a *text* window does not close on Esc - the desktop
             # feeds Esc to the focused program, the way a terminal would;
