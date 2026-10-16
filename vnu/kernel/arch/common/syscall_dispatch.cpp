@@ -4,6 +4,7 @@
 #include <vnu/vfs.h>
 #include <vnu/host.h>
 #include <vnu/process.h>
+#include <vnu/usermem.h>
 #include <vnu/kbd.h>
 #include <vnu/tty.h>
 #include <vnu/pipe.h>
@@ -20,8 +21,18 @@
 #include <vnu/arch/cpu.h>
 #include <vnu/arch/serial.h>
 
-/* The i386 register context (see vnu/arch/context.h). The dispatcher
- * reads the trap frame's fields directly: it is the port, so it may. */
+/* arch/common/syscall_dispatch.cpp - the syscall dispatcher, shared by
+ * every port. There is nothing machine-specific in here: what it reads
+ * is the userspace ABI, and the userspace is 32-bit on every port (on
+ * x86_64 it runs in long mode's compatibility mode), so the number
+ * arrives in eax and the arguments in ebx/ecx/edx/esi/edi whichever
+ * CPU the kernel is on. A port supplies the two things this file
+ * cannot know: the entry stub that builds a TrapFrame and takes the
+ * result back (arch/<arch>/syscall/syscall.s), and the frame layout
+ * itself, in that port's arch/<arch>/include/vnu/arch/context_defs.h -
+ * which is why this file may name the fields below (it is part of the
+ * arch layer, not the core) but still goes through the accessors in
+ * <vnu/arch/context.h> for everything the core owns. */
 using vnu::arch::TrapFrame;
 
 extern "C" void vnu_return_to_console();
@@ -264,7 +275,7 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
          * fork resumes through the same popad+iretd the preemptive
          * timer path uses, so it lands with the parent's registers and
          * fork()'s return value of 0). */
-        trap.frame = reinterpret_cast<std::uint32_t>(tf);
+        vnu::arch::regs_set_frame(&trap, reinterpret_cast<std::uintptr_t>(tf));
         trap.edi = tf->edi;
         trap.esi = tf->esi;
         trap.ebp = tf->ebp;
@@ -291,8 +302,8 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
             uint32_t new_eip = 0, new_esp = 0;
             bool ok = vnu::wintask::exec_current(
                 reinterpret_cast<const char*>(tf->ebx),
-                reinterpret_cast<char* const*>(tf->ecx),
-                reinterpret_cast<char* const*>(tf->edx), new_eip, new_esp);
+                reinterpret_cast<const void*>(tf->ecx),
+                reinterpret_cast<const void*>(tf->edx), new_eip, new_esp);
             if (!ok)
                 return static_cast<std::uint32_t>(-VNU_ENOENT);
             vnu::arch::request_jump(new_eip, new_esp);
@@ -314,10 +325,15 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
                       gui_path[8] == '\0';
         if (is_gui) {
             /* argv is in ecx (see the VNU_SYS_wintask branch above):
-             * "gui <app>" opens that app's window on startup. */
-            char* const* gui_argv = reinterpret_cast<char* const*>(tf->ecx);
-            const char* open_app =
-                (gui_argv && gui_argv[0] && gui_argv[1]) ? gui_argv[1] : nullptr;
+             * "gui <app>" opens that app's window on startup. The array
+             * is the program's, so its entries come out through
+             * user_ptr_at() and not by subscripting (<vnu/usermem.h>);
+             * the first entry is peeked at before the second is asked
+             * for, so a list that ends there is never read past. */
+            const void* gui_argv = reinterpret_cast<const void*>(tf->ecx);
+            const char* open_app = nullptr;
+            if (gui_argv && vnu::user_ptr_at(gui_argv, 0))
+                open_app = vnu::user_ptr_at(gui_argv, 1);
             vnu::gui::run(open_app);
             bool back = (vnu::proc::current() && vnu::proc::current()->ppid == 0);
             vnu::proc::sys_exit(0);
@@ -350,8 +366,8 @@ static std::uint32_t dispatch_syscall(TrapFrame* tf)
         trap.eip = tf->eip;
         trap.eflags = tf->eflags;
         int rc = vnu::proc::sys_execve(&trap, reinterpret_cast<const char*>(tf->ebx),
-                                       reinterpret_cast<char* const*>(tf->ecx),
-                                       reinterpret_cast<char* const*>(tf->edx));
+                                       reinterpret_cast<const void*>(tf->ecx),
+                                       reinterpret_cast<const void*>(tf->edx));
         if (rc == 0) {
             /* Must not iretd onto user stack — jump cleanly to new entry. */
             vnu::arch::request_jump(trap.eip, trap.esp);
@@ -865,10 +881,11 @@ extern "C" std::uint32_t vnu_syscall_dispatch(TrapFrame* tf)
         /* A windowed task's signals live in its Console, not in the
          * process table, so delivery goes through that door. */
         if (!vnu::arch::jump_pending() &&
-            vnu::proc::deliver_task_pending_signal(task, reinterpret_cast<std::uint32_t>(tf)) != 0)
+            vnu::proc::deliver_task_pending_signal(task, reinterpret_cast<std::uintptr_t>(tf)) !=
+                0)
             rc = static_cast<std::uint32_t>(-VNU_EINTR);
     } else if (!vnu::arch::jump_pending() &&
-               vnu::proc::deliver_pending_signal(reinterpret_cast<std::uint32_t>(tf)) != 0) {
+               vnu::proc::deliver_pending_signal(reinterpret_cast<std::uintptr_t>(tf)) != 0) {
         rc = static_cast<std::uint32_t>(-VNU_EINTR);
     }
     return rc;

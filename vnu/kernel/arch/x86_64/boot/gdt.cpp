@@ -2,9 +2,20 @@
 #include <stdint.h>
 
 /* arch/x86_64/boot/gdt.cpp - the long-mode GDT, the 64-bit counterpart
- * of arch/i386/boot/gdt.cpp. A 64-bit code segment sets L=1 and leaves
- * D=0; base/limit are ignored by the processor in long mode, so the
- * only thing the descriptor has to say is its access rights. */
+ * of arch/i386/boot/gdt.cpp. Five entries:
+ *
+ *   0x08  64-bit code, L=1 D=0: the kernel itself
+ *   0x10  data
+ *   0x18  32-bit code, L=0 D=1: the compat code segment the 32-bit
+ *         userspace runs in (every port's userspace is 32-bit; here it
+ *         executes in long mode's compatibility mode)
+ *   0x20  32-bit data
+ *
+ * Base and limit are ignored by the processor for the 64-bit segments,
+ * but the compat segments are decoded as the protected-mode ones they
+ * are, so they carry a real 4 GiB limit - and every segment stays at
+ * CPL0: VNU has no ring-3 boundary on either port, so a user segment
+ * would only be a distinction without a difference. */
 
 namespace {
 
@@ -22,15 +33,15 @@ struct GdtPtr {
     uint64_t base;
 } __attribute__((packed));
 
-GdtEntry gdt[3];
+GdtEntry gdt[5];
 
-void set_entry(int i, uint8_t access, uint8_t gran)
+void set_entry(int i, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran)
 {
-    gdt[i].limit_lo = 0;
-    gdt[i].base_lo = 0;
-    gdt[i].base_mid = 0;
-    gdt[i].base_hi = 0;
-    gdt[i].gran = gran;
+    gdt[i].limit_lo = static_cast<uint16_t>(limit & 0xFFFF);
+    gdt[i].base_lo = static_cast<uint16_t>(base & 0xFFFF);
+    gdt[i].base_mid = static_cast<uint8_t>((base >> 16) & 0xFF);
+    gdt[i].base_hi = static_cast<uint8_t>((base >> 24) & 0xFF);
+    gdt[i].gran = static_cast<uint8_t>(((limit >> 16) & 0x0F) | (gran & 0xF0));
     gdt[i].access = access;
 }
 
@@ -46,9 +57,11 @@ void vnu::arch::disable_paging()
 
 void vnu::arch::gdt_init()
 {
-    set_entry(0, 0x00, 0x00); /* null */
-    set_entry(1, 0x9A, 0xA0); /* code 0x08: L=1, G=1 */
-    set_entry(2, 0x92, 0xC0); /* data 0x10 */
+    set_entry(0, 0, 0, 0x00, 0x00); /* null */
+    set_entry(1, 0, 0xFFFFF, 0x9A, 0xA0); /* code64 0x08: L=1, G=1 */
+    set_entry(2, 0, 0xFFFFF, 0x92, 0xC0); /* data 0x10 */
+    set_entry(3, 0, 0xFFFFF, 0x9A, 0xCF); /* code32 0x18: L=0, D=1 */
+    set_entry(4, 0, 0xFFFFF, 0x92, 0xCF); /* data32 0x20 */
 
     GdtPtr ptr{};
     ptr.limit = static_cast<uint16_t>(sizeof(gdt) - 1);

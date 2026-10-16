@@ -49,7 +49,7 @@ void preempt(uintptr_t sched_esp, uintptr_t new_pgdir);
 void resume_preempted(uintptr_t* old_esp_out, uintptr_t new_esp, uintptr_t new_pgdir);
 
 /* Start the periodic preemption clock. The port calls back into the core
- * (a plain extern "C" vnu_timer_tick(uint32_t frame_esp) in
+ * (a plain extern "C" vnu_timer_tick(uintptr_t frame_esp) in
  * kernel/proc/process.cpp) on every tick. */
 void timer_init();
 

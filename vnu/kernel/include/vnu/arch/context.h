@@ -41,6 +41,7 @@ void regs_set_return(Registers* r, uint32_t value);
 /* The address of the live frame this snapshot came from, in the
  * process's address space; 0 if it has none. */
 uint32_t regs_frame(const Registers* r);
+void regs_set_frame(Registers* r, uintptr_t value);
 
 /* --- the live trap frame ------------------------------------------ */
 
@@ -84,8 +85,9 @@ void fork_child_return(WordWriter write, void* ctx, uint32_t frame_base, uint32_
 /* Install the words an iret pops to enter a signal handler below the
  * interrupted frame at `frame_base`, and arm the return path to switch
  * to it. `anchor` is the lowest address the fresh frame may use; 0 means
- * this call's own deepest local. */
-void build_signal_frame(uint32_t frame_base, uint32_t anchor,
+ * this call's own deepest local. Both are live frame addresses, so both
+ * are a uintptr_t. */
+void build_signal_frame(uintptr_t frame_base, uintptr_t anchor,
                         uint32_t handler, uint32_t restorer, uint32_t sig);
 
 /* --- entering user mode ------------------------------------------- */

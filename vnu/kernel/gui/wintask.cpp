@@ -5,6 +5,7 @@
 #include <vnu/process.h>
 #include <vnu/paging.h>
 #include <vnu/pmm.h>
+#include <vnu/usermem.h>
 #include <vnu/arch/mmu.h>
 #include <vnu/arch/switch.h>
 #include <vnu/vfs.h>
@@ -955,7 +956,7 @@ void task_exit()
     } /* unreachable: defensive only, switch_stack_pd never returns here */
 }
 
-bool exec_current(const char* path, char* const* argv, char* const* envp,
+bool exec_current(const char* path, const void* argv, const void* envp,
                   uint32_t& out_eip, uint32_t& out_esp)
 {
     uint32_t size = 0;
@@ -1001,18 +1002,22 @@ bool exec_current(const char* path, char* const* argv, char* const* envp,
     }
 
     /* The bound is tested first on purpose. Written the other way round
-     * the subscript is evaluated at the limit, so a caller whose list
-     * stops exactly there has its element past the end read before the
-     * loop notices it is full - and argv[] and envp[] come from the
-     * program being exec'd, so that read is not one the kernel can
-     * vouch for. POSIX says the list is terminated; a program that
-     * gets that wrong is to be refused, not read one entry further. */
+     * the entry at the limit is fetched before the loop notices it is
+     * full - and argv[] and envp[] come from the program being exec'd,
+     * so that read is not one the kernel can vouch for. POSIX says the
+     * list is terminated; a program that gets that wrong is to be
+     * refused, not read one entry further. Each entry is a 32-bit
+     * pointer in the program's memory, so it comes out through
+     * user_ptr_at() (<vnu/usermem.h>). */
     char arg_store[8][128];
     char* arg_ptrs[9];
     int argc = 0;
     if (argv) {
-        while (argc < 8 && argv[argc]) {
-            str_copy(arg_store[argc], argv[argc], sizeof(arg_store[argc]));
+        while (argc < 8) {
+            const char* s = user_ptr_at(argv, argc);
+            if (!s)
+                break;
+            str_copy(arg_store[argc], s, sizeof(arg_store[argc]));
             arg_ptrs[argc] = arg_store[argc];
             ++argc;
         }
@@ -1029,8 +1034,11 @@ bool exec_current(const char* path, char* const* argv, char* const* envp,
     char* env_ptrs[MAX_ENV + 1];
     int envc = 0;
     if (envp) {
-        while (envc < MAX_ENV && envp[envc]) {
-            str_copy(env_store[envc], envp[envc], sizeof(env_store[envc]));
+        while (envc < MAX_ENV) {
+            const char* s = user_ptr_at(envp, envc);
+            if (!s)
+                break;
+            str_copy(env_store[envc], s, sizeof(env_store[envc]));
             env_ptrs[envc] = env_store[envc];
             ++envc;
         }

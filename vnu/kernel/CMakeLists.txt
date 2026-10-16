@@ -99,7 +99,23 @@ set_source_files_properties(
     arch/${VNU_KERNEL_ARCH}/ctxswitch.s
     install/blobs.s
     PROPERTIES LANGUAGE ASM_NASM
+    # The per-arch assembly includes frame.inc (the trap-frame build/
+    # teardown macros); NASM does not search the including file's own
+    # directory, so the arch directory is on its include path.
+    COMPILE_FLAGS "-i${CMAKE_CURRENT_SOURCE_DIR}/arch/${VNU_KERNEL_ARCH}"
 )
+
+# Make the include a dependency of the assembly that uses it: NASM does
+# not emit a depfile, so a change to frame.inc would otherwise not
+# rebuild. Only the x86_64 port has one.
+if(VNU_KERNEL_ARCH STREQUAL "x86_64")
+    foreach(asm_file
+            arch/${VNU_KERNEL_ARCH}/syscall/syscall.s
+            arch/${VNU_KERNEL_ARCH}/ctxswitch.s)
+        set_property(SOURCE ${asm_file} APPEND PROPERTY OBJECT_DEPENDS
+            ${CMAKE_CURRENT_SOURCE_DIR}/arch/${VNU_KERNEL_ARCH}/frame.inc)
+    endforeach()
+endif()
 
 # One file in the kernel is allowed to use the FPU: gui/wallpaper.cpp
 # carries px.h's JPEG decoder, whose IDCT is the only IEEE-float code in
@@ -153,7 +169,11 @@ add_executable(kernel.elf
     arch/${VNU_KERNEL_ARCH}/boot/boot.s
     arch/${VNU_KERNEL_ARCH}/boot/gdt.cpp
     arch/${VNU_KERNEL_ARCH}/syscall/syscall.s
-    arch/${VNU_KERNEL_ARCH}/syscall/syscall.cpp
+    # The syscall dispatcher itself: architecture-independent (it reads
+    # the userspace ABI, which is the 32-bit one on every port), so it is
+    # compiled once for whichever port is being built and gets that port's
+    # TrapFrame layout from its context_defs.h. See arch/README.md.
+    arch/common/syscall_dispatch.cpp
     arch/${VNU_KERNEL_ARCH}/syscall/idt.cpp
     # The PC hardware drivers: the same port owns the CPU and the machine
     # it sits in (8259/PIT are in the arch core above, these are the rest

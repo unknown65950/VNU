@@ -78,7 +78,7 @@ struct Process {
     uint32_t sig_mask;       /* blocked right now */
     uint32_t sig_saved_mask; /* the mask from before the running handler,
                               * put back when that handler is done */
-    uint32_t sig_frame;      /* the base of the interrupted context's
+    uintptr_t sig_frame;    /* the base of the interrupted context's
                               * frame while a handler is running, else 0;
                               * sigreturn puts that context back */
     uint32_t alarm_at;       /* the jiffy SIGALRM is raised at, 0 when no
@@ -114,8 +114,14 @@ Process* current();
  * (the kernel's own pid 0). */
 int session_shell(char* out, int cap);
 int sys_fork(Registers* trap);
-int sys_execve(Registers* trap, const char* path, char* const* argv,
-               char* const* envp);
+/* `argv' and `envp' point into the caller's own memory: each is a
+ * NULL-terminated list of 32-bit pointers whatever the kernel's own
+ * pointers are, so they arrive untyped and are read through
+ * vnu::user_ptr_at() (<vnu/usermem.h>) - never subscripted as the
+ * kernel's own pointer type, which on x86_64 would glue two entries
+ * together and build an address the program never made. */
+int sys_execve(Registers* trap, const char* path, const void* argv,
+               const void* envp);
 void sys_exit(int status);
 int sys_getpid();
 int sys_waitpid(int pid, int* status, int options);
@@ -180,16 +186,16 @@ bool interrupt_pending();
  *               stack, so the C frames of the syscall/ISR path sit
  *               right underneath the interrupted frame; a handler frame
  *               placed there would land in a caller's locals. */
-int deliver_signal_at(Process& p, uint32_t frame_base, uint32_t stack_anchor,
+int deliver_signal_at(Process& p, uintptr_t frame_base, uintptr_t stack_anchor,
                       int sig);
 /* The same, for a windowed task: its five signal fields live in the
  * Console, and this builds the handler frame the same way. */
-int deliver_console_signal(vnu::wintask::Console& c, uint32_t frame_base,
-                           uint32_t stack_anchor, int sig);
+int deliver_console_signal(vnu::wintask::Console& c, uintptr_t frame_base,
+                           uintptr_t stack_anchor, int sig);
 /* The same, for the frame the current process is about to return from
  * a syscall with (the syscall's own pushad frame, which the caller
  * holds). Does nothing for a process the scheduler does not own. */
-int deliver_pending_signal(uint32_t frame_base);
+int deliver_pending_signal(uintptr_t frame_base);
 
 /* --- Signals for windowed tasks (GUI apps) ---
  *
@@ -207,7 +213,7 @@ int deliver_pending_signal(uint32_t frame_base);
  * what its default action does. */
 int signal_task(vnu::wintask::Console* c, int sig);
 int pending_task_delivery(const vnu::wintask::Console* c);
-int deliver_task_pending_signal(vnu::wintask::Console* c, uint32_t frame_base);
+int deliver_task_pending_signal(vnu::wintask::Console* c, uintptr_t frame_base);
 /* True when the calling task has a deliverable signal waiting, which is
  * what makes a blocking read report EINTR instead of going on waiting. */
 bool task_interrupt_pending();

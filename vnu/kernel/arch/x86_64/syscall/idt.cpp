@@ -10,13 +10,17 @@
  * three fields, an IST index (0 - this port runs on the current stack)
  * and the attribute byte.
  *
- * Unlike i386, this port does not yet run the (32-bit) userspace, so a
- * CPU exception is expected: the ELF loader loads an EM_386 image and
- * the port jumps into it in long mode. Rather than the bare `iretq`
- * i386 can afford (nothing faults there in normal use), every exception
- * here reports itself on the serial log and stops, on a private stack,
- * so the failure is visible instead of becoming an infinite fault loop
- * after the faulting stack is already gone. See arch/README.md. */
+ * The port now runs the (32-bit) userspace in long-mode compatibility,
+ * so an unexpected CPU exception is a kernel bug rather than the normal
+ * course of events. Every exception reported here prints itself on the
+ * serial log and stops, on a private stack, so the failure is visible
+ * instead of becoming an infinite fault loop after the faulting stack
+ * is already gone.
+ *
+ * The IRQ stubs live in ctxswitch.s (vnu_ignore_irq, vnu_irq_master_ack,
+ * vnu_irq_slave_ack): long mode lays down the full five-word iret frame
+ * even for a same-CPL interrupt, so they share the frame macros with the
+ * timer ISR and `iretq` straight out of it. See arch/x86_64/frame.inc. */
 
 extern "C" void vnu_syscall_entry();
 extern "C" void vnu_timer_isr();
@@ -56,19 +60,10 @@ void set_gate(int vec, void (*handler)(), uint8_t flags)
     idt[vec].zero = 0;
 }
 
-extern "C" void vnu_ignore_irq();
-__asm__(
-    ".global vnu_ignore_irq\n"
-    ".type vnu_ignore_irq, @function\n"
-    "vnu_ignore_irq:\n"
-    "    iretq\n"
-);
-
-/* CPU exceptions. The port cannot run the 32-bit userspace yet, so the
- * first ELF entry faults; report it and stop. Two entry points because
- * some vectors push an error code and some do not: the no-error one
- * pushes a dummy so the common path always sees [rsp]=error code,
- * [rsp+8]=faulting rip. The report runs on its own stack. */
+/* CPU exceptions. Two entry points because some vectors push an error
+ * code and some do not: the no-error one pushes a dummy so the common
+ * path always sees [rsp]=error code, [rsp+8]=faulting rip. The report
+ * runs on its own stack. */
 extern "C" void vnu_exc_common();
 __asm__(
     ".global vnu_exc_common\n"
@@ -122,7 +117,7 @@ extern "C" void vnu_x64_fault(uint64_t err, uint64_t rip, uint64_t cr2, uint64_t
         b[18] = 0;
         put(b);
     };
-    put("\nx86_64 port: CPU exception (userspace is 32-bit; not run in long mode yet)\n");
+    put("\nx86_64 port: unexpected CPU exception\n");
     put("  err=");
     hex(err);
     put(" rip=");
@@ -136,29 +131,8 @@ extern "C" void vnu_x64_fault(uint64_t err, uint64_t rip, uint64_t cr2, uint64_t
 }
 
 extern "C" void vnu_irq_master_ack();
-__asm__(
-    ".global vnu_irq_master_ack\n"
-    ".type vnu_irq_master_ack, @function\n"
-    "vnu_irq_master_ack:\n"
-    "    push %rax\n"
-    "    mov $0x20, %al\n"
-    "    out %al, $0x20\n"
-    "    pop %rax\n"
-    "    iretq\n"
-);
-
 extern "C" void vnu_irq_slave_ack();
-__asm__(
-    ".global vnu_irq_slave_ack\n"
-    ".type vnu_irq_slave_ack, @function\n"
-    "vnu_irq_slave_ack:\n"
-    "    push %rax\n"
-    "    mov $0x20, %al\n"
-    "    out %al, $0xA0\n"
-    "    out %al, $0x20\n"
-    "    pop %rax\n"
-    "    iretq\n"
-);
+extern "C" void vnu_ignore_irq();
 
 } // namespace
 

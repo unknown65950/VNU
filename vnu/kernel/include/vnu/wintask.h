@@ -138,7 +138,8 @@ struct Console {
     uint32_t sig_mask;
     struct vnu_sigaction sig_action[VNU_NSIG];
     uint32_t sig_saved_mask;
-    uint32_t sig_frame;
+    uintptr_t sig_frame;      /* like Process::sig_frame: a live frame
+                               * address, so a uintptr_t */
 };
 
 // (Re)initialises the multi-slot task table. Must be called once from
@@ -293,7 +294,10 @@ void task_write(const char* buf, uint32_t n);
 char task_getch_blocking();
 [[noreturn]] void task_exit();
 bool exit_respawns_root(uint32_t& out_eip, uint32_t& out_esp);
-bool exec_current(const char* path, char* const* argv, char* const* envp,
+/* `argv' and `envp' are the calling program's lists, so they are untyped
+ * pointers into its memory and are read with vnu::user_ptr_at()
+ * (<vnu/usermem.h>) - see sys_execve() in <vnu/process.h>. */
+bool exec_current(const char* path, const void* argv, const void* envp,
                    uint32_t& out_eip, uint32_t& out_esp);
 
 } // namespace vnu::wintask

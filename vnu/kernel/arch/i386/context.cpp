@@ -65,6 +65,10 @@ void regs_set_flags(Registers* r, uint32_t value) { r->eflags = value; }
 void regs_set_return(Registers* r, uint32_t value) { r->eax = value; }
 
 uint32_t regs_frame(const Registers* r) { return r->frame; }
+void regs_set_frame(Registers* r, uintptr_t value)
+{
+    r->frame = static_cast<uint32_t>(value);
+}
 
 uint32_t frame_return(const TrapFrame* tf) { return tf->eax; }
 
@@ -125,7 +129,7 @@ void fork_child_return(WordWriter write, void* ctx, uint32_t frame_base, uint32_
     write(ctx, frame_base + offsetof(TrapFrame, eax), value);
 }
 
-void build_signal_frame(uint32_t frame_base, uint32_t anchor,
+void build_signal_frame(uintptr_t frame_base, uintptr_t anchor,
                         uint32_t handler, uint32_t restorer, uint32_t sig)
 {
     /* The block goes at the very bottom of what the kernel is using of
@@ -137,8 +141,8 @@ void build_signal_frame(uint32_t frame_base, uint32_t anchor,
      * back in) has no frames on the process's stack to avoid and passes
      * the parked frame instead. */
     volatile char here = 0;
-    uint32_t low = anchor ? anchor : reinterpret_cast<uint32_t>(&here);
-    uint32_t block = (low - SIG_BLOCK_WORDS * 4) & ~0xFu;
+    uintptr_t low = anchor ? anchor : reinterpret_cast<uintptr_t>(&here);
+    uintptr_t block = (low - SIG_BLOCK_WORDS * 4) & ~uintptr_t{0xF};
     uint32_t* w = reinterpret_cast<uint32_t*>(block);
     w[0] = restorer; /* where the handler's `return` lands */
     w[1] = sig;

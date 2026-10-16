@@ -7,6 +7,7 @@
 #include <vnu/arch/switch.h>
 #include <vnu/paging.h>
 #include <vnu/pmm.h>
+#include <vnu/usermem.h>
 #include <vnu/vga_gfx.h>   /* console_tick(): the console on a pixelless display */
 #include <vnu/net.h>       /* service_rx(): reap inbound frames while idle */
 #include <vnu/vfs.h>
@@ -714,15 +715,18 @@ struct ExecSnapshot {
 
 /* Copy argv and envp into `snap`.
  *
- * The bound is tested before the subscript, on purpose. Written the other
- * way round the subscript is evaluated at the limit, so a caller whose
- * list stops exactly there has its element past the end read before the
- * loop notices it is full - and argv[] comes from the program being
+ * Both lists are the program's own memory: NULL-terminated arrays of
+ * 32-bit pointers read with vnu::user_ptr_at() (<vnu/usermem.h>), not
+ * with the kernel's wider pointer type.
+ *
+ * The bound is tested before the entry is read, on purpose. Written the
+ * other way round the entry at the limit is fetched before the loop
+ * notices it is full - and argv[] comes from the program being
  * exec'd, so that read is not one the kernel can vouch for. POSIX says
  * the list is terminated; a program that gets that wrong is to be
  * refused, not read one entry further. */
 static void take_snapshot(ExecSnapshot& snap, const char* path,
-                          char* const* argv, char* const* envp)
+                          const void* argv, const void* envp)
 {
     snap.argc = 0;
     snap.envc = 0;
@@ -736,8 +740,10 @@ static void take_snapshot(ExecSnapshot& snap, const char* path,
     }
 
     if (argv) {
-        while (snap.argc < 8 && argv[snap.argc]) {
-            const char* s = argv[snap.argc];
+        while (snap.argc < 8) {
+            const char* s = user_ptr_at(argv, snap.argc);
+            if (!s)
+                break;
             int j = 0;
             for (; s[j] && j < 95; ++j)
                 snap.arg_store[snap.argc][j] = s[j];
@@ -756,8 +762,10 @@ static void take_snapshot(ExecSnapshot& snap, const char* path,
 
     /* The environment the same way, for the same reason. */
     if (envp) {
-        while (snap.envc < VNU_MAX_ENV && envp[snap.envc]) {
-            const char* s = envp[snap.envc];
+        while (snap.envc < VNU_MAX_ENV) {
+            const char* s = user_ptr_at(envp, snap.envc);
+            if (!s)
+                break;
             int j = 0;
             for (; s[j] && j < 95; ++j)
                 snap.env_store[snap.envc][j] = s[j];
@@ -1007,8 +1015,8 @@ static int exec_prepared(Registers* trap, const char* path,
     return 0;
 }
 
-int sys_execve(Registers* trap, const char* path, char* const* argv,
-               char* const* envp)
+int sys_execve(Registers* trap, const char* path, const void* argv,
+               const void* envp)
 {
     ExecSnapshot snap;
     take_snapshot(snap, path, argv, envp);
@@ -1306,8 +1314,8 @@ bool interrupt_pending()
  * interrupted process's stack and sets the one-shot return flag must not
  * exist twice. Returns the signal delivered, or 0. */
 static int deliver_common(uint32_t* act, uint32_t& pending, uint32_t& mask,
-                          uint32_t& saved_mask, uint32_t& frame_out,
-                          uint32_t frame_base, uint32_t stack_anchor, int sig)
+                          uint32_t& saved_mask, uintptr_t& frame_out,
+                          uintptr_t frame_base, uintptr_t stack_anchor, int sig)
 {
     if (sig == 0)
         return 0;
@@ -1344,20 +1352,20 @@ static int deliver_common(uint32_t* act, uint32_t& pending, uint32_t& mask,
     return sig;
 }
 
-int deliver_signal_at(Process& p, uint32_t frame_base, uint32_t stack_anchor, int sig)
+int deliver_signal_at(Process& p, uintptr_t frame_base, uintptr_t stack_anchor, int sig)
 {
     return deliver_common(reinterpret_cast<uint32_t*>(p.sig_action), p.sig_pending, p.sig_mask,
                           p.sig_saved_mask, p.sig_frame, frame_base, stack_anchor, sig);
 }
 
-int deliver_console_signal(vnu::wintask::Console& c, uint32_t frame_base,
-                           uint32_t stack_anchor, int sig)
+int deliver_console_signal(vnu::wintask::Console& c, uintptr_t frame_base,
+                           uintptr_t stack_anchor, int sig)
 {
     return deliver_common(reinterpret_cast<uint32_t*>(c.sig_action), c.sig_pending, c.sig_mask,
                           c.sig_saved_mask, c.sig_frame, frame_base, stack_anchor, sig);
 }
 
-int deliver_pending_signal(uint32_t frame_base)
+int deliver_pending_signal(uintptr_t frame_base)
 {
     Process& p = table[current_idx];
     if (!p.coro || vnu::arch::stack_switch_pending())
@@ -1432,7 +1440,7 @@ int signal_task(vnu::wintask::Console* c, int sig)
     return 0;
 }
 
-int deliver_task_pending_signal(vnu::wintask::Console* c, uint32_t frame_base)
+int deliver_task_pending_signal(vnu::wintask::Console* c, uintptr_t frame_base)
 {
     if (!c || vnu::arch::stack_switch_pending())
         return 0;
@@ -1501,7 +1509,7 @@ uint32_t sys_rt_sigreturn(TrapFrame* cur)
      * whether the kernel got here for a process or for a windowed task. */
     vnu::wintask::Console* wcon = vnu::wintask::console_of_current();
     uint32_t& saved = wcon ? wcon->sig_saved_mask : table[current_idx].sig_saved_mask;
-    uint32_t& frame = wcon ? wcon->sig_frame : table[current_idx].sig_frame;
+    uintptr_t& frame = wcon ? wcon->sig_frame : table[current_idx].sig_frame;
     uint32_t& mask = wcon ? wcon->sig_mask : table[current_idx].sig_mask;
     if (!frame)
         return 0; /* not from a handler: nothing to go back to */
@@ -2152,7 +2160,7 @@ int sys_sleep(uint32_t ms)
  * run); on a real preemption it parks the CURRENT process — full
  * interrupt frame pointer into coro_esp, preempted=true — and hops to
  * the scheduler coroutine, so the return is never reached. */
-extern "C" uint32_t vnu_timer_tick(uint32_t frame_esp)
+extern "C" uint32_t vnu_timer_tick(uintptr_t frame_esp)
 {
     /* The scheduler clock: every IRQ0 advances jiffies, whether or not
      * this tick preempts anyone (it is what wakes timed sleepers). */

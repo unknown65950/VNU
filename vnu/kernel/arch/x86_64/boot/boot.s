@@ -39,8 +39,10 @@ section .rodata
 align 16
 gdt64:
     dq 0x0000000000000000              ; null
-    dq 0x00AF9A000000FFFF              ; 0x08: 64-bit code (L=1)
+    dq 0x00AF9A000000FFFF              ; 0x08: 64-bit code (L=1, D=0)
     dq 0x00CF92000000FFFF              ; 0x10: data
+    dq 0x00CF9A000000FFFF              ; 0x18: 32-bit code (L=0, D=1)
+    dq 0x00CF92000000FFFF              ; 0x20: 32-bit data
 gdt64_end:
 gdt64_ptr:
     dw gdt64_end - gdt64 - 1
