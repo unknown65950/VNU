@@ -1015,6 +1015,15 @@ bool exit_respawns_root(uint32_t& out_eip, uint32_t& out_esp)
     out_eip = entry;
     out_esp = build_argv_frame(STACK_TOP, 1, nullptr, path_copy, nullptr, 0);
     t.child_running = false;
+    /* The reloaded root is a fresh program with a fresh heap, exactly as
+     * for a scheduled process in exec_prepared(): the break it inherits
+     * belongs to the program that just exited, and carrying it over would
+     * make the root's first malloc() run from the dead program's break.
+     * The pages the old break mapped stay mapped and are simply handed to
+     * the new heap as it grows again. Without this, a windowed shell's
+     * break only ever climbs, one 1 MiB lump per external command, until
+     * brk() hits BRK_MAX — and then `ls /` fails with "cannot open /". */
+    t.brk = vnu::proc::BRK_MIN;
     return true;
 }
 
@@ -1132,7 +1141,13 @@ bool exec_current(const char* path, const void* argv, const void* envp,
     out_eip = entry;
     out_esp = build_argv_frame(STACK_TOP, argc, arg_ptrs, path_copy, env_ptrs,
                                envc);
+    /* A windowed task execs in place, reusing its slot (and its inherited
+     * break) for the new image — the same trap that exec_prepared() fixes
+     * for a scheduled process. The evicted program's allocator had already
+     * grown the break; hand the incoming one a new heap at BRK_MIN so its
+     * first malloc() does not carry on from where that program stopped. */
     cur_task().child_running = true;
+    cur_task().brk = vnu::proc::BRK_MIN;
     return true;
 }
 

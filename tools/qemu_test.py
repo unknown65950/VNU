@@ -1424,6 +1424,82 @@ def run_gui_tui(guest, result, verbose, timeout=60.0):
     return not problems
 
 
+def run_gui_heap(guest, result, verbose, timeout=60.0):
+    """A windowed shell starts every program it runs on a fresh heap.
+
+    `term` is a `vash` that execve()s each command over itself: there is
+    no fork inside a window, so the very same task -- and the very same
+    heap break -- is handed from one program to the next. exec_prepared()
+    resets that break for a scheduled process; the windowed exec path did
+    not, so every command that allocated left the break one 1 MiB lump
+    higher than it found it and `brk()` walked up to BRK_MAX. From then
+    on the window's directory reads failed and the `ls /` that had just
+    worked answered "cannot open /" for good.
+
+    A function rather than a SUITE case, for the reason `man` is one: a
+    window writes pixels, not the serial line, so the shell's own output
+    is invisible to a log check. What does cross the boundary is a file --
+    the window appends one full `ls /` listing to /tmp/brk a dozen times
+    over, and the console then counts the lines. A shell that gets a
+    fresh break per command leaves a file a dozen listings long; one that
+    leaks stops growing as soon as the heap is exhausted.
+    """
+    print("==> gui windowed heap (window -> file)")
+    runs = 12
+    problems = []
+    guest._type("gui\n")
+    time.sleep(3.0)
+    if not esc_to_shell(guest, timeout):
+        problems.append("the desktop did not come up, so there is "
+                        "nothing to run a windowed shell in")
+    else:
+        guest._type("gui term\n")
+        time.sleep(6.0)
+        for _ in range(runs):
+            guest._type("ls / >> /tmp/brk\n")
+            time.sleep(0.5)
+        time.sleep(1.0)
+        # `exit` logs the window's shell out and closes it; the
+        # desktop is then the only thing left, and Esc gives the
+        # console back.
+        guest._type("exit\n")
+        time.sleep(2.0)
+        for _ in range(4):
+            guest._type("<esc>")
+            time.sleep(1.0)
+            if "VNU login:" in guest.tail(0):
+                break
+        else:
+            problems.append("the desktop did not give the console back")
+        guest.login(timeout=timeout)
+
+    if not problems:
+        # One `ls /` at the console is the unit: `ls` prints one entry
+        # per line, so the file's line count is the number of listings
+        # that actually happened.
+        unit = len([l for l in guest.sh("ls /", timeout)[0].splitlines()
+                    if l.strip()])
+        got = len([l for l in guest.sh("cat /tmp/brk", timeout)[0].splitlines()
+                   if l.strip()])
+        if unit < 1:
+            problems.append("`ls /` printed nothing at the console")
+        elif got < (runs - 2) * unit:
+            problems.append(
+                "the window wrote %d lines, not the %d a fresh heap "
+                "per command gives (one / listing is %d lines): the "
+                "windowed shell's break is not reset when it execs"
+                % (got, (runs - 2) * unit, unit))
+
+    for p in problems:
+        print("FAIL %-18s %s" % ("gui-heap", p))
+    if problems:
+        result.failed.append(("gui-heap", "", ["; ".join(problems)]))
+    else:
+        result.passed += 1
+        print("ok   %-18s" % "gui-heap")
+    return not problems
+
+
 def run_man_pager(guest, result, verbose, timeout=60.0):
     """Drive the man pager: the status bar, arrow keys, the help screen.
 
@@ -4368,7 +4444,7 @@ def main():
                    "prefs-wallpaper", "imagine-screen", "gfx-surface",
                    "gfx-resolution", "gfx-damage", "gfx-canvas-resize",
                    "gfx-drag-frame", "occlusion", "system-menu",
-                   "vibecommander", "gui-tui")
+                   "vibecommander", "gui-tui", "gui-heap")
     cases = SUITE
     if args.only:
         cases = [c for c in SUITE
@@ -4411,6 +4487,9 @@ def main():
                 if not args.only or any(sel in "gui-tui"
                                         for sel in args.only):
                     run_gui_tui(guest, result, args.verbose, args.timeout)
+                if not args.only or any(sel in "gui-heap"
+                                        for sel in args.only):
+                    run_gui_heap(guest, result, args.verbose, args.timeout)
                 if not args.only or any(sel in "gfx-surface"
                                         for sel in args.only):
                     run_gfx_surface(guest, result, args.verbose,
