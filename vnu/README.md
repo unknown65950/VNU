@@ -87,8 +87,9 @@ nothing of the host libc/ABI (see the warning at the top of
 3. `kernel_main` brings the machine up in a fixed order — GDT, IDT, PIC
    remap, paging, PMM, heap, console, drivers, VFS, processes — because
    everything after the first `sti` assumes all of it is in place.
-4. The first user process is `/sbin/init` (an alias of `vash`), which
-   prints the login prompt and starts the session.
+4. The first user process is `/sbin/init` (initialD, `vnu/userspace/init`),
+   which runs the `/etc/initialD/*.init` boot scripts and then keeps a
+   `vash` login shell on the console, respawning it when it exits.
 5. The kernel also mirrors its output to COM1 (`0x3F8`), which is how
    `make run-headless` and the test harness see the boot log.
 

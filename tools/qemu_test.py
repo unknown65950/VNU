@@ -461,7 +461,18 @@ SUITE = [
     ("proc-boot", "cat /proc/boot",
      [r"^rootfs\tvfs$", r"^shell\tvash$"], [r"^installed\tata"]),
     ("proc-status", "cat /proc/self/status",
-     [r"^Name:\tvash$", r"^Pid:\t\d+$", r"^PPid:\t\d+$"], []),
+     [r"^Name:\tcat$", r"^Pid:\t\d+$", r"^PPid:\t\d+$"], []),
+    # PID 1 is initialD, not the shell: the login shell runs as init's
+    # child, so the reporter's parent is pid 1 (a vash-as-init shell is
+    # spawned by the scheduler itself and reports PPid 0). The reporter
+    # is the shell execve()d over into cat, so that is the name it sees.
+    ("init-ppid", "cat /proc/self/status",
+     [r"^Name:\tcat$", r"^PPid:\t1$"], []),
+    # The boot scripts ran in lexical order: each appends its own line
+    # to the boot trace, so one ordered pattern proves both ran and in
+    # which order.
+    ("init-scripts", "cat /tmp/.initialD-boot",
+     [r"^00-mount\n10-services$"], []),
     ("proc-cpuinfo", "cat /proc/cpuinfo",
      [r"^processor\t: 0$", r"^vendor_id\t: "], []),
     # /proc/stat exists for the same reason /proc/meminfo does: a monitor

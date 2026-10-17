@@ -1,9 +1,32 @@
 NAME
-    init - the first process (synonym for vash)
+    init - VNU userspace init (initialD), PID 1
 
 SYNOPSIS
-    init
+    /sbin/init
 
 DESCRIPTION
-    /sbin/init is the same binary as vash, the only process the
-    kernel starts at boot. See man vash.
+    The first process the kernel starts at boot, and the last one
+    standing: it never execs over itself and never exits, so PID 1
+    stays valid for the whole boot. Orphans are adopted by it and
+    reaped, and the console keeps a login shell because init keeps
+    one, respawning it whenever it exits.
+
+    At startup init runs the boot scripts /etc/initialD/*.init in
+    lexical order (00-mount.init, 10-services.init), waiting for
+    each in turn. A script that fails does not fail the boot: the
+    status is reported and the next script runs. Scripts are vash
+    scripts and run with the console on stdin/stdout/stderr.
+
+    Afterwards init starts /bin/vash on the console and waits for
+    it. Logging out (exit) ends that shell and init starts a fresh
+    one, which is why a logout returns to the VNU login: prompt.
+
+    init ignores SIGINT and SIGTERM; to restart the machine use the
+    desktop system menu's Reboot item.
+
+FILES
+    /etc/initialD/*.init - boot scripts, lexical order
+    /tmp/.initialD-boot - trace the boot scripts append to
+
+SEE ALSO
+    vash(1), sh(1)

@@ -60,6 +60,12 @@ struct Process {
      * program starts (spawn or exec), so ps-like tools show which
      * command a process actually runs instead of one global string. */
     char name[16];
+    /* Set when this slot runs vash, and not cleared by execve: a shell
+     * execve()s over itself to run every command, so the slot that a
+     * user sits at is running `cat` (and reports that name) while it is
+     * still that user's shell. session_shell() answers from this flag
+     * rather than from the name, which only ever tells what runs now. */
+    bool is_shell;
     /* --- signals (numbers, flags and the action struct live in
      * <vnu/abi.h>) ---------------------------------------------------
      * A set of signals is one word, bit n being signal n. Nothing is
@@ -108,10 +114,11 @@ int current_pid();
 Process* current();
 
 /* Name of the shell that started the session this process belongs to
- * ("vash"): the closest ancestor running one of the shell aliases, as
- * a NUL-terminated string written into `out` (max `cap` bytes).
- * Returns 0 on success, -1 when the caller was not started by a shell
- * (the kernel's own pid 0). */
+ * ("vash"): the slot that ran the shell binary, which does not stop
+ * being that shell when it execve()s over itself for a command. The
+ * result is written into `out` as a NUL-terminated string (max `cap`
+ * bytes). Returns 0 on success, -1 when the caller was not started by a
+ * shell (the kernel's own pid 0). */
 int session_shell(char* out, int cap);
 int sys_fork(Registers* trap);
 /* `argv' and `envp' point into the caller's own memory: each is a

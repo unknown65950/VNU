@@ -1080,6 +1080,32 @@ void init()
     auto* m = add("/etc/motd", false);
     node_set_cstr(*m, "Welcome to VNU\n");
     add("/etc/initialD", true);
+    /* The boot scripts initialD runs in lexical order (see the init(1)
+     * contract). Kept here, next to the other /etc text, because the
+     * rootfs/ tree is not shipped into the image yet. */
+    auto* mnt = add("/etc/initialD/00-mount.init", false);
+    if (mnt) {
+        node_set_cstr(*mnt,
+                      "#!/bin/vash\n"
+                      "# 00-mount.init - filesystems to mount at boot.\n"
+                      "#\n"
+                      "# VNU has no mount(2) yet: /proc, /dev and /tmp are\n"
+                      "# built by the kernel before init runs, so there is\n"
+                      "# nothing to mount. This script stays as the lexical\n"
+                      "# home for mount lines once mounting exists.\n"
+                      "echo 00-mount >> /tmp/.initialD-boot\n");
+    }
+    auto* svc = add("/etc/initialD/10-services.init", false);
+    if (svc) {
+        node_set_cstr(*svc,
+                      "#!/bin/vash\n"
+                      "# 10-services.init - one-shot service setup at boot.\n"
+                      "#\n"
+                      "# No configured services yet. A service that stays up\n"
+                      "# has to return promptly (double-fork if it lingers),\n"
+                      "# or the boot stalls here waiting for it.\n"
+                      "echo 10-services >> /tmp/.initialD-boot\n");
+    }
 
     /* --- the machine's name ---
      * /etc/hostname holds the node name, one line, and is the single
@@ -1182,6 +1208,7 @@ void init()
         grp->perm = 0644u;
     }
     add("/sbin", true);
+    add("/sbin/init", false);
     add("/bin", true);
     add("/bin/vash", false);
     add("/bin/sh", false);

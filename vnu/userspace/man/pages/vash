@@ -22,8 +22,9 @@ DESCRIPTION
     Editor keys: Up/Down history, Ctrl+C cancels a line, Shift
     is used to type symbol characters.
 
-    Also installed as /bin/sh, /sbin/init and as the GUI's
-    'term' app - see man sh, man init, man term.
+    Also installed as /bin/sh and as the GUI's 'term' app - see
+    man sh, man term. /sbin/init used to be the same binary; it is
+    initialD now - see man init.
 
 OPTIONS
     none.

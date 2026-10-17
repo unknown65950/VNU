@@ -850,10 +850,14 @@ int main(int argc, char** argv)
     }
     if (!sh_noexec) {
         /* First time in a boot: login. Later respawns (after an external
-         * command execve()d over us) re-adopt the /tmp/.session identity. */
+         * command execve()d over us) re-adopt the /tmp/.session identity.
+         * A -c string or script file is batch work, not a login session:
+         * with no session it runs as the current user rather than
+         * prompting on the console (which is where initialD's boot
+         * scripts run - before any login exists to adopt). */
         if (access_session_exists())
             adopt_session();
-        else if (do_login() < 0)
+        else if (argc <= argi && do_login() < 0)
             return 0;
     }
     if (argc > argi) {

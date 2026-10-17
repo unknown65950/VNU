@@ -23,9 +23,11 @@ root@vnu:~$ man ls
 - **Monolithic kernel** in ring 0: VFS, processes, syscalls, TTY, keyboard,
   mouse, COM1, GUI — all in a single `kernel.elf`. No microkernel design;
   processes are isolated by address space (userspace at `0x400000`).
-- **Userspace**: cooperative round-robin scheduler, PID 1 is `vash`. When a
-  process exits (including after `execve` of a one-shot utility), the kernel
-  respawns the shell.
+- **Userspace**: cooperative round-robin scheduler, PID 1 is
+  `initialD` (`/sbin/init`). It runs `/etc/initialD/*.init` in lexical
+  order, then keeps a `vash` login shell on the console, respawning it
+  whenever it exits. When a process exits, its parent reaps it with
+  `waitpid`; orphans are adopted by init.
 - **Multi-user**: password login (`root`/`root`, `guest`/`guest`),
   `/etc/passwd` + `/etc/group`, `rwx` permissions with `uid`/`gid` on VFS
   nodes, builtins `id`, `whoami`, `groups`, `useradd`, `passwd`, `su`.
@@ -80,7 +82,8 @@ External `/bin/*` (each a standalone binary):
 | `hello` (and `hello_cxx`) | userspace program examples |
 | `gui` | virtual command → VibeGraphics windowed environment (intercepted by the kernel in `execve`) |
 
-`/bin/sh`, `/bin/init` — aliases of `vash` (reused `argv[0]`).
+`/bin/sh` is an alias of `vash` (reused `argv[0]`); `/sbin/init` is
+initialD, its own binary.
 
 ## Repository layout
 
@@ -253,8 +256,8 @@ MIT — see `LICENSE`.
 
 ## Roadmap
 
-`initialD` (a userspace init, contract `/etc/initialD/*.init`) is declared but
-deferred until proper `fork`/`execve` scenarios; for now PID 1 is vash itself.
-FAT16/ATA exist, and an installed disk keeps user files under `/mnt` across
-reboots, but the rest of the root still lives in RAM-VFS (useful when moving
-to real hardware).
+`initialD` (a userspace init, contract `/etc/initialD/*.init`) runs as
+PID 1: it executes the boot scripts in lexical order and keeps the
+console login shell alive. FAT16/ATA exist, and an installed disk keeps
+user files under `/mnt` across reboots, but the rest of the root still
+lives in RAM-VFS (useful when moving to real hardware).

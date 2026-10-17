@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VCC="$ROOT/tools/vcc"
 OUT="$ROOT/vnu/kernel/proc"
-mkdir -p "$OUT" "$ROOT/sysroot/bin"
+mkdir -p "$OUT" "$ROOT/sysroot/bin" "$ROOT/sysroot/sbin"
 
 embed() {
   python3 - "$1" "$OUT/embedded_$2.h" "$2" <<'PY'
@@ -91,6 +91,10 @@ done
 "$VCC" "$ROOT/vnu/userspace/vnu/vnu.c" -o "$ROOT/sysroot/bin/vnu"
 # the SSH daemon: transport/auth/connection layers plus the entry point.
 "$VCC" "$ROOT/vnu/userspace/vsshd/transport.c" "$ROOT/vnu/userspace/vsshd/auth.c" "$ROOT/vnu/userspace/vsshd/conn.c" "$ROOT/vnu/userspace/vsshd/vsshd.c" -o "$ROOT/sysroot/bin/vsshd"
+# PID 1: the userspace init. Its own binary and its own directory, like
+# every other command; it lands in sbin because that is where the kernel
+# starts it from (/sbin/init).
+"$VCC" "$ROOT/vnu/userspace/init/initialD.c" -o "$ROOT/sysroot/sbin/init"
 # account tools: one separate binary per command. The disk installer is
 # not here any more: it is `vnu install`, part of the vnu binary.
 for c in id whoami groups useradd passwd su sysctl quota; do
@@ -137,6 +141,7 @@ embed "$ROOT/sysroot/bin/vibecommander" vibecommander
 embed "$ROOT/sysroot/bin/vcc" vcc
 embed "$ROOT/sysroot/bin/vnu" vnu
 embed "$ROOT/sysroot/bin/vsshd" vsshd
+embed "$ROOT/sysroot/sbin/init" init
 # the guest compiler's link inputs (mounted as /lib/crt0.o, /lib/libvlibc.a).
 embed "$ROOT/sysroot/lib/crt0.o" lib_crt0
 embed "$ROOT/sysroot/lib/libvlibc.a" lib_vlibc

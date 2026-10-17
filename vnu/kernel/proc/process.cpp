@@ -14,6 +14,7 @@
 #include <vnu/pipe.h>
 #include <vnu/posix.h>
 #include "embedded_vash.h"
+#include "embedded_init.h"
 #include "embedded_hello.h"
 #include "embedded_vedit.h"
 #include "embedded_browser.h"
@@ -83,13 +84,19 @@ vnu::proc::Process table[vnu::proc::MAX_PROCS];
 int current_idx = 0;
 int next_pid = 1;
 bool console_session = false;
+/* The slot the scheduler's init lives in (run_scheduler() below). An
+ * orphan is adopted by whoever holds it, so a daemon that outlives
+ * its parent is reaped by a process that waitpids rather than leaked
+ * onto the scheduler. -1 while no init has been spawned yet. */
+int g_init_slot = -1;
 
 /* Each command is its own embedded ELF. Only vash is re-used under
- * several names (/bin/vash, /sbin/init, /bin/sh) — a login shell by
- * any other name. */
+ * two names (/bin/vash, /bin/sh) — a login shell by any other name.
+ * /sbin/init is initialD, its own binary: PID 1 never execs over
+ * itself, so the pid the scheduler hands it stays valid for the boot. */
 const EmbeddedProg embedded[] = {
     {"/bin/vash", embedded_vash_elf, embedded_vash_elf_size},
-    {"/sbin/init", embedded_vash_elf, embedded_vash_elf_size},
+    {"/sbin/init", embedded_init_elf, embedded_init_elf_size},
     {"/bin/sh", embedded_vash_elf, embedded_vash_elf_size},
     {"/bin/hello", embedded_hello_elf, embedded_hello_elf_size},
     {"/bin/echo", embedded_echo_elf, embedded_echo_elf_size},
@@ -211,10 +218,11 @@ void set_proc_name(vnu::proc::Process& p, const char* path)
     }
 
     /* Prefer the canonical name of the program over the name it was
-     * invoked under: /sbin/init, /bin/sh and /bin/vash are one binary
-     * (one embedded blob, listed under /bin/vash first), and every
-     * user of these names wants to be told "vash", not which alias
-     * happened to be used. */
+     * invoked under: /bin/sh and /bin/vash are one binary (one embedded
+     * blob, listed under /bin/vash first), and every user of these names
+     * wants to be told "vash", not which alias happened to be used.
+     * (/sbin/init used to be in that family; it is initialD now, its own
+     * blob, so it reports "init".) */
     const EmbeddedProg* prog = find_embedded(path);
     if (prog) {
         for (int i = 0; embedded[i].path; ++i) {
@@ -227,6 +235,13 @@ void set_proc_name(vnu::proc::Process& p, const char* path)
                 break;
             }
         }
+        /* A slot that has ever run the shell binary is a session's shell
+         * from then on (session_shell()): vash execve()s over itself for
+         * every command, so the name below changes to `cat` while the
+         * slot is still the shell a user sits at. The flag is set once
+         * and survives execve; nothing clears it. */
+        if (prog->data == embedded_vash_elf)
+            p.is_shell = true;
     }
 
     int i = 0;
@@ -519,8 +534,6 @@ static bool is_shell_name(const char* n)
         return false;
     if (n[0] == 'v' && n[1] == 'a' && n[2] == 's' && n[3] == 'h' && !n[4])
         return true;
-    if (n[0] == 'i' && n[1] == 'n' && n[2] == 'i' && n[3] == 't' && !n[4])
-        return true;
     if (n[0] == 's' && n[1] == 'h' && !n[2])
         return true;
     return false;
@@ -532,7 +545,20 @@ int session_shell(char* out, int cap)
         return -1;
     out[0] = 0;
 
-    /* Walk the parent chain, closest ancestor first. */
+    /* The slot that ran vash is the shell, whatever program it is running
+     * at the moment of the query (it execve()d over itself to get here). */
+    if (current()->is_shell) {
+        const char* n = "vash";
+        int i = 0;
+        for (; n[i] && i < cap - 1; ++i)
+            out[i] = n[i];
+        out[i] = 0;
+        return 0;
+    }
+
+    /* Fallback for a program run by a shell that forked rather than
+     * exec'd over itself (a pipeline stage, a subshell): the closest
+     * ancestor still named a shell alias. */
     Process* p = current();
     for (int guard = 0; p && guard < MAX_PROCS; ++guard) {
         if (is_shell_name(p->name)) {
@@ -1020,8 +1046,16 @@ int sys_execve(Registers* trap, const char* path, const void* argv,
 {
     ExecSnapshot snap;
     take_snapshot(snap, path, argv, envp);
-    return exec_prepared(trap, snap.path_copy, snap.arg_ptrs, snap.argc,
-                         snap.env_ptrs, snap.envc, 0);
+    int rc = exec_prepared(trap, snap.path_copy, snap.arg_ptrs, snap.argc,
+                           snap.env_ptrs, snap.envc, 0);
+    /* A new image is a new program: report its name, not whatever this
+     * slot ran before. A forked child still carries its parent's name
+     * until here, and a shell that execve()s over itself for a command
+     * becomes that command (its session-shell flag, set in
+     * set_proc_name(), stays). */
+    if (rc == 0)
+        set_proc_name(table[current_idx], snap.path_copy);
+    return rc;
 }
 
 /* Hand over the children of a process that is on its way out. Linux does
@@ -1038,17 +1072,17 @@ int sys_execve(Registers* trap, const char* path, const void* argv,
  * and the ppid == 0 adoption below ever destroy an address space, so the
  * leak was pages as well as slots.
  *
- * The adopter is ppid 0, the scheduler, and not init: init is not a
- * stable pid here. execve() runs the new image in the caller's own slot
- * and keeps its pid, so the shell holds pid 1 only until the first
- * external command - forkdemo right after login prints getppid() from
- * pid 1, the next one from pid 3 - and run_scheduler() respawns init
- * with next_pid++, which never hands 1 back. An orphan pointed at pid 1
- * after that points at a name nothing answers to: sys_waitpid() would
- * need a parent of that pid to ask, and there is none, so the slot would
- * leak exactly as it did before.
+ * The adopter is whoever holds the scheduler's init slot, and ppid 0
+ * (the scheduler) only while no live init holds it. PID 1 is stable
+ * now: initialD never execs over itself, so the pid the scheduler
+ * handed it at boot is still a process that waitpids, and an orphan
+ * pointed at it is reaped rather than leaked. (It used to be vash,
+ * which execve()d over itself for every external command: the shell
+ * held pid 1 only until the first command, and run_scheduler()
+ * respawns init with next_pid++, which never hands 1 back, so an
+ * orphan pointed at pid 1 pointed at a name nothing answered to.)
  *
- * ppid 0 is the value the kernel already gives a process it spawns
+ * ppid 0 is still the value the kernel gives a process it spawns
  * itself (run_program_from_memory() sets p.ppid = 0), and it is the one
  * the scheduler's `state == Zombie && ppid == 0' site below looks for —
  * code that was written for exactly this and had no way to be reached,
@@ -1075,13 +1109,24 @@ static void reap_slot(int i)
 
 static void reparent_orphans(int dead_pid)
 {
+    /* Who adopts: the live init, or the scheduler when its slot holds
+     * no live process (early boot, or init itself dying - whose
+     * children must not point back at the corpse). */
+    int adopter = 0;
+    if (g_init_slot > 0 && g_init_slot < MAX_PROCS) {
+        const Process& init = table[g_init_slot];
+        if (init.pid != 0 && init.pid != dead_pid &&
+            (init.state == State::Runnable || init.state == State::Running ||
+             init.state == State::Blocked))
+            adopter = init.pid;
+    }
     for (int i = 1; i < MAX_PROCS; ++i) {
         if (i == current_idx)
             continue;
         Process& c = table[i];
         if (c.state == State::Unused || c.ppid != dead_pid)
             continue;
-        c.ppid = 0;
+        c.ppid = adopter;
         /* It may have died before this process did: a child that
          * finished while its parent was still alive is a corpse waiting
          * for a waitpid() that can never come now, and the scheduler
@@ -2373,6 +2418,9 @@ int run_scheduler(const char* primary, const char* fallback)
             if (rc < 0)
                 return rc;
             init_slot = g_last_slot;
+            /* This slot is who orphans are adopted by (see
+             * reparent_orphans()): whoever runs here waitpids. */
+            g_init_slot = init_slot;
         }
 
         for (int i = 1; i < MAX_PROCS; ++i) {
